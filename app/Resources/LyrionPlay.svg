@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- LyrionPlay's glyph: Material Symbols Rounded "play_arrow" (Apache 2.0) leading into the louder
+     half of Lyrion's waveform (the bars of lms-material's lyrion-icon.svg, MIT). Black on clear:
+     the menu bar uses it as a template image; tools/icon/make-icon renders the app icon from it. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="23.18" height="20" viewBox="0.25 0 7.36 6.35">
+ <rect x="4.1544" y="0.5291" width="0.3538" height="5.2917" rx="0.1769"/>
+ <rect x="4.8794" y="1.3180" width="0.3538" height="3.7140" rx="0.1769"/>
+ <rect x="5.6045" y="2.2708" width="0.3538" height="1.8084" rx="0.1769"/>
+ <rect x="6.3295" y="1.2088" width="0.3538" height="3.9324" rx="0.1769"/>
+ <rect x="7.0546" y="2.7455" width="0.3538" height="0.8590" rx="0.1769"/>
+ <path transform="translate(-2.141 7.062) scale(0.008097)" d="M320-273v-414q0-17 12-28.5t28-11.5q5 0 10.5 1.5T381-721l326 207q9 6 13.5 15t4.5 19q0 10-4.5 19T707-446L381-239q-5 3-10.5 4.5T360-233q-16 0-28-11.5T320-273Z"/>
+</svg>

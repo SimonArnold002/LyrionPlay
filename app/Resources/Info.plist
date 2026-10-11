@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.crystalgipsy.lyrionplay</string>
+	<key>CFBundleName</key>
+	<string>LyrionPlay</string>
+	<key>CFBundleDisplayName</key>
+	<string>LyrionPlay</string>
+	<key>CFBundleExecutable</key>
+	<string>LyrionPlay</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__BUILD__</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>LyrionPlay connects to your Lyrion Music Server on the local network to play music.</string>
+	<!-- The agent talks plain HTTP to the user's own LMS, by whatever name the user types.
+	     NSAllowsLocalNetworking covers only plain names (plex), .local names and IP addresses, so a
+	     name like nas.lan was refused (-1022); and with it present macOS ignores
+	     NSAllowsArbitraryLoads, so it must not come back (measured 2026-10-10, repo ledger). -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSHumanReadableCopyright</key>
+	<string>Player engine: squeezelite (GPLv3). App and agent: MIT.</string>
+</dict>
+</plist>

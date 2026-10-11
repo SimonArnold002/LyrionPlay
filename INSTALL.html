@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installing LyrionPlay</title>
+<style>
+  :root {
+    --brand: #589e81;
+    --brand-dark: #2c5444;
+    --accent: #e3fdc4;
+    --accent-ink: #1f3b30;
+    --ink: #1c1c28;
+    --muted: #5b5b6b;
+    --line: #e4e4ec;
+    --bg: #f7f7fa;
+    --card: #ffffff;
+    --code-bg: #eef3f0;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: #3b7d62; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header.hero {
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
+    color: #fff;
+    padding: 56px 24px 48px;
+    text-align: center;
+  }
+  header.hero h1 { margin: 0 0 10px; font-size: 2.1rem; letter-spacing: -0.01em; }
+  header.hero .logo { width: 96px; height: auto; display: block; margin: 0 auto 14px; }
+  header.hero p.tagline { margin: 0 auto; max-width: 660px; color: #e6f3ec; font-size: 1.08rem; }
+  header.hero p.tagline a { color: var(--accent); }
+  .badges { margin-top: 22px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .badge {
+    display: inline-block; padding: 5px 13px; border-radius: 999px;
+    font-size: 0.82rem; font-weight: 600;
+    background: rgba(255,255,255,0.14); color: #fff; border: 1px solid rgba(255,255,255,0.26);
+  }
+  .badge.accent { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .hero-actions { margin-top: 26px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 11px 22px; border-radius: 8px; font-weight: 600; font-size: 0.95rem; }
+  .btn-primary { background: var(--accent); color: var(--accent-ink); }
+  .btn-primary:hover { text-decoration: none; filter: brightness(1.04); }
+  .btn-ghost { background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.32); }
+  .btn-ghost:hover { text-decoration: none; background: rgba(255,255,255,0.20); }
+
+  main { max-width: 880px; margin: 0 auto; padding: 8px 24px 64px; }
+  section { margin-top: 44px; }
+  h2 {
+    font-size: 1.45rem; margin: 0 0 6px; padding-bottom: 8px;
+    border-bottom: 3px solid var(--brand); display: inline-block;
+  }
+  h3 { font-size: 1.12rem; margin: 26px 0 6px; color: var(--brand-dark); }
+  p { margin: 10px 0; }
+  ul, ol { padding-left: 24px; }
+  li { margin: 5px 0; }
+  li > ul, li > ol { margin-top: 5px; }
+  li > p { margin: 8px 0; }
+
+  table {
+    width: 100%; border-collapse: collapse; margin: 14px 0;
+    background: var(--card); border-radius: 10px; overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06); font-size: 0.95rem;
+  }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--brand-dark); color: #fff; font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: #fafcfb; }
+  td strong { color: var(--brand-dark); }
+
+  code {
+    background: var(--code-bg); padding: 2px 6px; border-radius: 5px;
+    font-family: "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.88em;
+  }
+  pre {
+    background: var(--brand-dark); color: #f1fbf5; padding: 16px 18px;
+    border-radius: 10px; overflow-x: auto; font-size: 0.9rem;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+
+  blockquote {
+    margin: 14px 0; padding: 12px 18px; background: #f1f9f4;
+    border-left: 4px solid var(--brand); border-radius: 0 8px 8px 0; color: var(--muted);
+  }
+  blockquote p { margin: 0; }
+
+  .feature-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  .card h4 { margin: 0 0 6px; font-size: 1rem; color: var(--brand-dark); }
+  .card p { margin: 0; font-size: 0.9rem; color: var(--muted); }
+
+  footer {
+    text-align: center; color: var(--muted); font-size: 0.88rem;
+    padding: 32px 24px 48px; border-top: 1px solid var(--line); margin-top: 48px;
+  }
+  @media (max-width: 600px) {
+    header.hero h1 { font-size: 1.6rem; }
+    main { padding: 8px 16px 48px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <svg class="logo" fill="#fff" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="23.18" height="20" viewBox="0.25 0 7.36 6.35">
+ <rect x="4.1544" y="0.5291" width="0.3538" height="5.2917" rx="0.1769"/>
+ <rect x="4.8794" y="1.3180" width="0.3538" height="3.7140" rx="0.1769"/>
+ <rect x="5.6045" y="2.2708" width="0.3538" height="1.8084" rx="0.1769"/>
+ <rect x="6.3295" y="1.2088" width="0.3538" height="3.9324" rx="0.1769"/>
+ <rect x="7.0546" y="2.7455" width="0.3538" height="0.8590" rx="0.1769"/>
+ <path transform="translate(-2.141 7.062) scale(0.008097)" d="M320-273v-414q0-17 12-28.5t28-11.5q5 0 10.5 1.5T381-721l326 207q9 6 13.5 15t4.5 19q0 10-4.5 19T707-446L381-239q-5 3-10.5 4.5T360-233q-16 0-28-11.5T320-273Z"/>
+</svg>
+  <h1>Installing LyrionPlay</h1>
+  <p class="tagline">LyrionPlay plays music from your Lyrion Music Server (LMS) on your Mac. LMS sees it as an ordinary squeezelite player.</p>
+  <div class="badges">
+    <span class="badge accent">v0.2.10</span>
+    <span class="badge">Apple Silicon</span>
+    <span class="badge">macOS 14+</span>
+    <span class="badge">Bit-perfect</span>
+    <span class="badge">DSD over DoP</span>
+  </div>
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="https://github.com/SimonArnold002/LyrionPlay/releases/latest">Download latest</a>
+    <a class="btn btn-ghost" href="https://github.com/SimonArnold002/LyrionPlay">LyrionPlay on GitHub</a>
+  </div>
+</header>
+
+<main>
+<section class="intro">
+<p>It lives in your menu bar and offers:</p>
+<ul>
+<li><strong>Bit-perfect playback on a DAC.</strong> It switches the DAC to each track's sample rate and takes exclusive use of it while playing.</li>
+<li><strong>DSD</strong>, sent as DoP to DACs that accept it, and converted to PCM for those that don't.</li>
+<li><strong>LMS replay gain.</strong></li>
+<li><strong>Volume both ways:</strong> the LMS slider and your Mac's volume keys move each other.</li>
+</ul>
+</section>
+<section id="what-you-need">
+<h2>What you need</h2>
+<ul>
+<li>A Mac with Apple Silicon (M1 or later) running macOS 14 Sonoma or later.</li>
+<li>Lyrion Music Server on your network.</li>
+<li>An administrator account, to install into Applications. Without one, LyrionPlay installs into the Applications folder in your home folder instead.</li>
+</ul>
+</section>
+<section id="why-you-sign-it-yourself">
+<h2>Why you sign it yourself</h2>
+<p>macOS opens an app without complaint only if it is signed by a developer who pays Apple for a certificate. LyrionPlay isn't, so you sign your own copy instead. That takes one command.</p>
+<p>The installer does it for you:</p>
+<ol>
+<li>It creates a code-signing certificate called <strong>LyrionPlay Signing</strong> in your login keychain. It does this the first time only.</li>
+<li>It signs LyrionPlay with that certificate.</li>
+</ol>
+<p>Some things to know about the certificate:</p>
+<ul>
+<li><strong>Its private key never leaves your Mac</strong>, and nobody else's signature is involved.</li>
+<li><strong>It is used only to sign LyrionPlay</strong>, and it lasts ten years.</li>
+<li><strong>It keeps your permissions across updates.</strong> Each new version is signed with the same certificate, so macOS treats it as the same app and keeps the permissions you gave it, such as Local Network.</li>
+<li><strong>macOS lists it as "not trusted".</strong> That is normal: nothing vouches for it except you.</li>
+</ul>
+</section>
+<section id="install">
+<h2>Install</h2>
+<ol>
+<li><strong>Download</strong> <code>LyrionPlay-&lt;version&gt;.zip</code> and double-click it. Finder unzips it into a folder in your Downloads, containing <code>LyrionPlay.app</code>, <code>install.sh</code>, <code>uninstall.sh</code> and this guide.</li>
+<li><strong>Open Terminal.</strong> It's in Applications → Utilities, or press ⌘Space and type <em>Terminal</em>.</li>
+<li><p><strong>Type <code>sh</code> and a space.</strong> Then drag <code>install.sh</code> from the folder into the Terminal window, and press Return. It should look like this:</p>
+<pre><code>sh ~/Downloads/LyrionPlay-&lt;version&gt;/install.sh</code></pre>
+<p>with your version's number in place of <code>&lt;version&gt;</code>.</p>
+<p>Running it through <code>sh</code> means macOS has no reason to block the script itself.</p></li>
+<li><p><strong>Watch it work through its steps.</strong> It takes a few seconds:</p>
+<ol>
+<li>checks your Mac;</li>
+<li>creates your certificate, the first time only;</li>
+<li>copies the app to Applications;</li>
+<li>removes the "downloaded from the internet" flag, which is what would otherwise make macOS block the app;</li>
+<li>signs the app with your certificate;</li>
+<li>installs it;</li>
+<li>opens it.</li>
+</ol>
+<p>If macOS asks for your login password, or asks whether <code>codesign</code> may use the key "LyrionPlay Signing", enter your password and click <strong>Always Allow</strong>.</p></li>
+<li><strong>Look for the icon:</strong> LyrionPlay's play arrow and waveform appears in the menu bar.</li>
+</ol>
+</section>
+<section id="first-run">
+<h2>First run</h2>
+<ol>
+<li><strong>Switch the player on:</strong> click the menu bar icon and turn on the switch.</li>
+<li><strong>Click Allow twice.</strong> macOS asks whether LyrionPlay may find devices on your local network: once for the player and once for its audio engine. The player can't reach your server without both.</li>
+<li><strong>Play something.</strong> The player appears in LMS (in Material or any other LMS interface) under your Mac's name. Material shows it with an Apple icon.</li>
+<li><strong>Choose your options:</strong> click the icon, then <strong>Settings…</strong>. See the next section.</li>
+</ol>
+<p>Quitting from the menu stops the player as well. Both start again when you log in, or when you open LyrionPlay from Applications. If the menu ever disappears while the player is running, it comes back by itself within a few seconds.</p>
+</section>
+<section id="settings">
+<h2>Settings</h2>
+<p><strong>Output device.</strong> Either follow the macOS sound output, or pick one device. Picking the device is the better choice for a DAC.</p>
+<p><strong>Exclusive mode</strong> is on by default for USB and Thunderbolt DACs. While playing, LyrionPlay:</p>
+<ul>
+<li>takes the DAC for itself, so other apps can't play through it;</li>
+<li>sets the DAC to each track's sample rate;</li>
+<li>sends the samples unchanged.</li>
+</ul>
+<p>It lets go of the DAC 30 seconds after you stop. You can change that time under Advanced.</p>
+<p><strong>DAC accepts DSD over PCM (DoP).</strong> Turn this on only if your DAC supports DoP; macOS cannot detect it.</p>
+<ul>
+<li>With it off, DSD is converted to PCM, so it still plays.</li>
+<li>DoP needs a PCM rate of a sixteenth of the DSD rate: DSD64 needs 176.4 kHz and DSD128 needs 352.8 kHz. DSD faster than your DAC's top PCM rate allows is converted to PCM.</li>
+</ul>
+<p><strong>LMS volume.</strong></p>
+<ul>
+<li><em>Device's own volume</em>: the LMS volume slider and your Mac's volume follow each other. Move the LMS slider and your Mac's volume (built-in speakers, headphones) or the DAC's hardware volume moves with it. Use your Mac's volume keys, or mute, and the LMS slider follows a moment later.</li>
+<li><em>Software</em>: LyrionPlay scales the samples instead.</li>
+</ul>
+<p><strong>Silence on a rate change.</strong> Some DACs mute for a moment after switching rate. If the start of a track gets clipped, add a little silence here.</p>
+<h3 id="for-bit-perfect-playback">For bit-perfect playback</h3>
+<ul>
+<li><strong>Use your DAC's or amplifier's own volume control.</strong> In LMS, go to the player's settings → Audio → Volume Control and choose <strong>Output level is fixed at 100%</strong>.</li>
+<li><strong>Replay gain</strong> is set in LMS, under the player's settings → Audio. LyrionPlay applies it, but it changes the level, so tracks played with replay gain are not bit-perfect.</li>
+</ul>
+</section>
+<section id="updating">
+<h2>Updating</h2>
+<p>Download the new zip and run its <code>install.sh</code> the same way. It:</p>
+<ul>
+<li>finds your existing certificate;</li>
+<li>signs the new version with it;</li>
+<li>swaps it in, restarting the player only if the player itself changed.</li>
+</ul>
+<p>macOS won't ask for any permission again.</p>
+</section>
+<section id="uninstalling">
+<h2>Uninstalling</h2>
+<pre><code>sh ~/Downloads/LyrionPlay-&lt;version&gt;/uninstall.sh</code></pre>
+<p>This stops the player and removes the app, its background service, its settings and its logs. It keeps your certificate, in case you reinstall. To delete the certificate too, add <code>--remove-certificate</code>.</p>
+<p>Two things it can't remove:</p>
+<ul>
+<li><strong>LMS keeps listing the player</strong> until it forgets it.</li>
+<li><strong>System Settings → Privacy &amp; Security → Local Network may still list</strong> <code>lyrionplay-agent</code> and <code>squeezelite</code>. The entries do nothing once the app is gone.</li>
+</ul>
+</section>
+<section id="installing-by-hand-without-the-script">
+<h2>Installing by hand, without the script</h2>
+<ol>
+<li><p><strong>Create the certificate.</strong> Open Keychain Access: press ⌘Space and type <em>Keychain Access</em>. Then, from its menu, choose Keychain Access → Certificate Assistant → <strong>Create a Certificate…</strong> and set:</p>
+<ul>
+<li>Name: <strong>LyrionPlay Signing</strong></li>
+<li>Identity Type: <strong>Self-Signed Root</strong></li>
+<li>Certificate Type: <strong>Code Signing</strong></li>
+</ul>
+<p>Then click Create.</p></li>
+<li><strong>Install the app:</strong> drag <code>LyrionPlay.app</code> into Applications.</li>
+<li><p><strong>Remove the download flag and sign the app.</strong> In Terminal, run these four commands. Signing goes from the inside out: the two helpers first, then the app itself.</p>
+<pre><code>xattr -dr com.apple.quarantine /Applications/LyrionPlay.app
+codesign --force --options runtime -s "LyrionPlay Signing" -i com.crystalgipsy.lyrionplay.squeezelite /Applications/LyrionPlay.app/Contents/MacOS/squeezelite
+codesign --force --options runtime -s "LyrionPlay Signing" -i com.crystalgipsy.lyrionplay.lyrionplay-agent /Applications/LyrionPlay.app/Contents/MacOS/lyrionplay-agent
+codesign --force --options runtime -s "LyrionPlay Signing" /Applications/LyrionPlay.app</code></pre></li>
+<li><strong>Open LyrionPlay</strong> from Applications.</li>
+</ol>
+<p>For an update, quit LyrionPlay from its menu, then repeat steps 2 to 4.</p>
+<h3 id="without-signing-at-all">Without signing at all</h3>
+<p>You can skip signing:</p>
+<ol>
+<li>Drag the app into Applications and open it.</li>
+<li>When macOS refuses to open it, go to System Settings → Privacy &amp; Security and click <strong>Open Anyway</strong>.</li>
+</ol>
+<p>It works, but every update looks like a new app to macOS. You would approve it again, and click Allow on the Local Network prompts again, after each update.</p>
+</section>
+<section id="if-something-goes-wrong">
+<h2>If something goes wrong</h2>
+<ul>
+<li><p><strong>The player doesn't appear in LMS.</strong></p>
+<ul>
+<li>Check System Settings → Privacy &amp; Security → Local Network: <code>lyrionplay-agent</code> and <code>squeezelite</code> must both be switched on.</li>
+<li>If your server is on a different network, enter its address in Settings → Server.</li>
+</ul></li>
+<li><strong>Nothing plays on a DAC another app is using</strong> (Audirvana, Roon or similar, in exclusive mode). <code>engine.log</code> says "device is held exclusively by another process". LyrionPlay keeps trying, and plays within about 5 seconds of the other app letting go.</li>
+<li><strong>The menu's status lags behind LMS.</strong> LyrionPlay asks the server about the player every 5 seconds, and <code>agent.log</code> says when the server is slow: "LMS check of … took N s" means it took over 2 seconds to answer, and "back under 2 s" follows when it recovers. "did not answer" or "no server found" means the server could not be reached: check that it is running, and the address in Settings → Server.</li>
+<li><strong>The menu bar icon has gone.</strong> Open LyrionPlay from Applications.</li>
+<li><p><strong>Logs:</strong> click the icon, then <strong>Logs</strong>. They are in <code>~/Library/Logs/LyrionPlay</code>:</p>
+<ul>
+<li><code>agent.log</code> is the background player;</li>
+<li><code>engine.log</code> is the audio engine;</li>
+<li><code>menu.log</code> is the menu app.</li>
+</ul></li>
+</ul>
+</section>
+<section id="building-from-source">
+<h2>Building from source</h2>
+<p>You need Apple's Command Line Tools: run <code>xcode-select --install</code> in Terminal. Then:</p>
+<ul>
+<li><code>scripts/build.sh --install</code> builds LyrionPlay and installs it with your own certificate, exactly as above. The first build downloads and compiles CMake and the audio codec libraries, which takes a while.</li>
+<li><code>scripts/build.sh --release</code> makes the zip.</li>
+<li>Every build first runs the regression suite, <code>scripts/test.sh</code>, and stops if a test fails.</li>
+</ul>
+</section>
+<section id="licences">
+<h2>Licences</h2>
+<ul>
+<li><strong>Audio engine:</strong> squeezelite by Adrian Smith and Ralph Irving, modified for LyrionPlay, under GPLv3. Its source code, and LyrionPlay's, is at <a href="https://github.com/SimonArnold002/LyrionPlay">github.com/SimonArnold002/LyrionPlay</a>.</li>
+<li><strong>Menu bar app and background service:</strong> MIT licence.</li>
+<li><strong>Third-party notices:</strong> in <code>LyrionPlay.app/Contents/Resources/NOTICES.txt</code>.</li>
+</ul>
+<p>LyrionPlay is not affiliated with the Lyrion Music Server project.</p>
+</section>
+</main>
+
+<footer>
+  <p>LyrionPlay — a player for Lyrion Music Server, built on squeezelite ·
+  <a href="https://github.com/SimonArnold002/LyrionPlay">View on GitHub</a></p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,13 @@
+# Downloaded sources, the locally built CMake and the static libraries
+/deps/src/
+/deps/tools/
+/deps/out/
+
+# Build outputs
+/build/
+.build/
+*.o
+
+.DS_Store
+/deps/*.log
+/dist/

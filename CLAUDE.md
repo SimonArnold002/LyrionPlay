@@ -1,0 +1,1437 @@
+# LyrionPlay — native macOS slimproto player
+
+## Project overview
+A Squeezebox player for the Mac that Lyrion Music Server treats like any other squeezelite.
+It is built for macOS:
+
+- exclusive (hog) access and per-track sample-rate switching on an external DAC, so playback
+  is bit-perfect;
+- DSD as DoP;
+- LMS replay gain;
+- LMS volume drives the Mac's own volume (built-in speakers or headphones) or the DAC's
+  hardware volume.
+
+It runs as a background launchd agent, switched on and off from a menu bar app, signed with
+the hardened runtime.
+
+Three parts in one app bundle:
+
+| part | language | licence | job |
+|---|---|---|---|
+| `engine/` | C | GPLv3 | squeezelite fork plus the new `output_coreaudio.c` |
+| agent (`app/Sources/Agent`) | Swift | MIT | probes devices, builds the engine's arguments, supervises the engine |
+| menu bar app (`app/Sources/App`) | Swift | MIT | On/Off, device picker, status, settings |
+
+The approved plan, with phases and verification, is `~/.claude/plans/whimsical-bouncing-dawn.md`.
+Started 2026-10-09 under a working title. Named **LyrionPlay** by Simon on 2026-10-09 ("change it
+across everything so no refs" to the old one): every name in this file, the code and the paths
+is the new one, including entries written before the rename.
+
+## Layout
+```
+deps/build-cmake.sh   builds CMake 4.4.4 from source into deps/tools (Apple Silicon only)
+deps/build-deps.sh    static arm64 codec libraries into deps/out (Phase 1)
+engine/               squeezelite at a pinned commit (UPSTREAM.md) + output_coreaudio.c
+app/                  SwiftPM package: PlayerCore library, Agent, App, tests
+tools/bitcheck        compares the engine's output tap with a reference decode
+tools/icon            make-icon: renders the app icon from app/Resources/LyrionPlay.svg
+tools/make_readme_html.py   README.md + INSTALL.md -> README.html, INSTALL.html, index.html
+                      (the fleet's generator, adapted; version badge from VERSION)
+VERSION               the one place the version is set (build.sh and the pages read it)
+scripts/bump-version.sh  raises VERSION (patch by default; minor, major) and regenerates the pages
+scripts/build.sh      deps -> engine -> swift build -> regression suite -> icon -> bundle ->
+                      ad-hoc sign -> checks; stops if a test fails;
+                      --install runs install.sh on it, --release makes dist/LyrionPlay-<v>.zip
+scripts/test.sh       the regression suite (REGRESSION SUITE): engine conversion, engine output
+                      against a fake HAL (engine/tests/test_output_coreaudio.c, linked with
+                      upstream's output.c, with the SCENARIO MATRIX), swift test,
+                      install.sh in a sandbox (scripts/tests/test_install.sh). No device, app,
+                      keychain or server is touched
+scripts/install.sh    what every user runs: own certificate, unquarantine, sign, install
+scripts/uninstall.sh  removes the app, agent, settings, logs (--remove-certificate too)
+INSTALL.md            the user-facing install guide, shipped in the release zip
+```
+`deps/src`, `deps/tools`, `deps/out`, `build/`, `.build/` and `dist/` are git-ignored.
+
+## Working rules for this repo
+- **Before any test that makes sound,** ask Simon which output device to use.
+- **Changing the device's or LMS's volume counts as a test that makes sound.** Check the player's
+  mode before EVERY change, never only at the start (2026-10-10: a dB probe ran while Simon had
+  started playing, and briefly set his speakers to several levels, up to 0 dB).
+- **The LMS rig is `http://plex:9000`** (LMS 9.1.2, server name "Simons Music"). Slimproto is `plex:3483`.
+- **Kill only a PID you captured at launch.** Never `pkill` by pattern.
+- **No virtual audio drivers** (BlackHole etc.). Audio tests run on Simon's USB DAC.
+- **No Homebrew.** Tools are built locally for Apple Silicon.
+- **Never commit, push or tag without being asked, and never prompt or offer to.**
+
+## Live test with the output tap (what reached the DAC)
+Used for the 0.2.8, 0.2.9 and 0.2.10 live tests (§C). The suite proves a rule; this shows the
+frames the real device got.
+1. Ask Simon which player and device. Check the player's mode before every LMS command, and note
+   the queue to put back.
+2. `launchctl bootout gui/$(id -u)/com.crystalgipsy.lyrionplay.agent`. The agent stops its engine:
+   check that the PID in `~/Library/Application Support/LyrionPlay/engine.pid` has exited.
+3. Run the INSTALLED engine by hand on the arguments of agent.log's last "engine N started:" line
+   (not `ps`: squeezelite splits `-a 0:1` in place, so `ps` shows it mangled), with a scratch log
+   for `-f` and the PID captured at launch:
+   `sh -c 'echo $$ > DIR/engine.pid; exec env LYRIONPLAY_TAP=DIR/tap /Applications/LyrionPlay.app/Contents/MacOS/squeezelite <args>'`
+4. Drive LMS over JSON-RPC (`playlistcontrol cmd:load track_id:N`, `stop`) and watch the engine
+   log. A command meant to land inside an open goes out on the `device rate N Hz` line: the FiiO's
+   relock leaves ~0.7 s before `opened`. `track start` can be logged before `opened`.
+   Rig tracks: DSD64 827020, DSD256 827002, 44.1k FLAC 816519 (The Roots), 192k 795396.
+5. The tap is one file per open, `DIR/tap-NNN-<rate>Hz.f32`, interleaved Float32 left/right.
+   Classify each frame by its 32-bit word (float x 2^31): 0 is PCM silence; a top byte of 0x05 or
+   0xFA with 0x6969 below it is DoP silence, with anything else below it DoP music; any other value
+   is PCM. `tools/bitcheck` compares a tap with a reference decode for bit-exactness. The tap shows
+   what CoreAudio took, not what the DAC played: on 2026-10-11 the FiiO took every frame of four
+   plays and Simon heard none of them. What is HEARD needs Simon at the DAC, told before each play.
+6. `kill` only the captured PID, then
+   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.crystalgipsy.lyrionplay.agent.plist`.
+   Check agent.log ("agent started", "LMS: using …"), that the player is connected in LMS, and
+   that the queue is as it was.
+
+## Review Ledger — READ THIS BEFORE REPORTING ANY FINDING
+
+The workspace `CLAUDE.md` one level up holds the three fleet-wide gates. This ledger holds what
+is settled for THIS project. Review and fix happen in separate sessions, so a decision, a
+disproven belief or a cleared finding that is not written here will be re-reported as a finding.
+
+### DECLINED / SETTLED INDEX — GREP THIS FIRST, BY SYMBOL
+
+| symbol / subject | verdict | find it with |
+|---|---|---|
+| engine choice: squeezelite fork vs a Swift rewrite | **DECIDED by Simon 2026-10-09**: fork, plus a native CoreAudio output | `THE ENGINE IS A SQUEEZELITE FORK` |
+| signing: self-signed identity, no notarisation; Developer ID / Apple fees; who holds the key | **DECIDED by Simon 2026-10-09**: shared; EACH USER signs their own copy with their own certificate (install.sh). Never re-propose the Developer Program or a shared certificate | `EACH USER SIGNS IT` |
+| app name, icon | **DECIDED by Simon 2026-10-09**: LyrionPlay; icon A (Material play arrow leading into Lyrion's waveform) | `LYRIONPLAY AND ICON A` |
+| run mode: menu bar app plus a launchd agent (SMAppService) | **DECIDED by Simon 2026-10-09** | `MENU BAR PLUS AGENT` |
+| menu app and player lifetimes; `MenuPresence`, `menu.lock`, `ensureMenu`, `LaunchAgent.stop`/`startIfOn` | **DECIDED by Simon 2026-10-09**: tied, separate processes | `THE MENU AND THE PLAYER ARE TIED` |
+| Apple Silicon only, macOS 14+ | **DECIDED by Simon 2026-10-09** | `APPLE SILICON ONLY` |
+| BlackHole or any virtual audio driver for tests | **DECLINED by Simon 2026-10-09** | `NO VIRTUAL AUDIO DRIVERS` |
+| CMake.app (universal) / Homebrew | **DECLINED by Simon 2026-10-09**: CMake built from source | `TOOLS ARE BUILT HERE` |
+| `MaxSampleRate` capped at 384000 (`-Z`) | by design, from the LMS source | `THE 384K CAP` |
+| DoP off by default, per device | by design: macOS cannot report it | `DOP IS A SWITCH` |
+| `CanHTTPS` not advertised, no OpenSSL | by design | `NO HTTPS IN THE ENGINE` |
+| the spike uses the real bundle id and agent label | by design | `THE SPIKE IS THE REAL IDENTITY` |
+| On/Off via SMAppService | **WRONG with a self-signed identity** (§A3); replaced by a classic `~/Library/LaunchAgents` plist plus `launchctl` | `SMAPPSERVICE PINS THE FIRST BUILD` |
+| locating sibling executables from `argv[0]` | **WRONG** under SMAppService (§A3); use `Bundle.main` | `ARGV0 IS BUNDLE-RELATIVE` |
+| "the agent's Local Network approval covers the programs it starts" | **WRONG** (§A3): each executable asks once | `EACH EXECUTABLE ASKS ONCE` |
+| "LMS can be told the DAC's rate list" | **WRONG** (§A3) | `NO RATE LIST` |
+| `set_volume` with LMS fixed volume (`output.volume_fixed`) leaves the device level alone | by design; differs from `output_alsa.c` `-V` | `FIXED VOLUME LEAVES THE DEVICE ALONE` |
+| `ioproc` stops taking frames at a rate-change boundary; `slimproto.c` clears `ca_reopen` BEFORE `_ca_open` | by design; both differ from the PortAudio path | `THE BOUNDARY AND THE REOPEN FLAG` |
+| agent restart leaving a second engine; `stopOrphanedEngine`, `engine.pid` | **FIXED 2026-10-09** (§A3) | `A CRASHED AGENT ORPHANS ITS ENGINE` |
+| SwiftUI `@State` in the menu app | **WRONG with the Command Line Tools** (§A3): state lives in `PlayerModel` | `NO SWIFTUI MACROS WITHOUT XCODE` |
+| menu bar icon gone "when playback started"; no ⌘Q in the menu app; `AppDelegate.quitChosen`, `menu.log` | **FIXED 2026-10-09** (§A3): a shortcut quit it, not playback | `A SHORTCUT QUIT THE MENU` |
+| `build.sh --install` leaving the player running | **BY DESIGN 2026-10-09**: the player restarts only when the agent or engine cdhash changed, so a menu-app fix doesn't stop the music | `A SHORTCUT QUIT THE MENU` |
+| Mac volume -> LMS; `volume_listener`, `vrec`, `lyrionplay:volume`, `deviceVolumeChanged`, `VolumePush`, `LatestValueSender`, `LMSVolume` | **BUILT + MEASURED 2026-10-10** (Phase 5): the engine reports only changes it did not make | `VOLUME BOTH WAYS` |
+| a settle window / read-back record in `apply_volume`; tolerance `VOLUME_MOVED_DB` | by design (§A3): the speakers report a level up to 2 dB from the one set | `READ-BACK IS NOT THE LEVEL SET` |
+| Mac unmute sending `mixer muting 0`, not a level | by design (§A3) | `UNMUTE IS NOT A LEVEL` |
+| version numbers; `VERSION`, `bump-version.sh`, `AppVersion`, CFBundleShortVersionString / CFBundleVersion | **DECIDED 2026-10-10** (Simon: "we should have versioning"): the fleet's yes/no rule | `VERSIONING` |
+| GitHub page; README.html / INSTALL.html / index.html | **BUILT 2026-10-10** at Simon's request ("a html page like our fleet") | `PAGES LIKE THE FLEET` |
+| DSD256 / DSD512 arrive at the FiiO as PCM | **WRONG to call it a bug** (§A3): DoP needs 705.6k, the FiiO's Mac driver stops at 384k | `DSD256 IS PCM ON THE FIIO` |
+| review of the review's fixes, 2026-10-10: `apply_latest`/`apply_lock` (stale level on resume), retry cadence 2/4/5 s + `quiet` logging, `OutputFollow` (follow lost on a restart) | **FOUND IN MY OWN FIXES, FIXED, each with a test that FAILED on the pre-review code** (§C) | `REVIEW OF THE FIXES` |
+| review 2026-10-10: findings 1-10 (hog vs "Follow the macOS output", `vrec.lock` deadlock, retry flood + hog kept, push order, extra `mixer volume ?`, fixed volume before the first audg, `volume_pending`, ATS, install.sh menu race, picker/dead code) | **ALL VERIFIED, ALL FIXED, each pinned by a test that fails on the old code** (§C) | `REVIEW 2026-10-10` |
+| "macOS leaves its default output alone when a process hogs that device"; `resolveDevice(holding:)`, `OutputFollow` (was `followDeferred`), `heldDevice` | **WRONG** (§A3): it moves away in <10 ms and back on release | `HOG MOVES THE DEFAULT OUTPUT` |
+| "AudioObjectRemovePropertyListener returns at once"; `vrec.watch`, `point_listeners` | **WRONG** (§A3): it waits for a call in flight | `REMOVE WAITS FOR THE LISTENER` |
+| `NSAllowsLocalNetworking` / `NSAllowsArbitraryLoads` in Info.plist | **MEASURED** (§A3): local covers plain names only, and its presence voids arbitrary | `ATS LOCAL IS PLAIN NAMES ONLY` |
+| `swift test` failing with "plugin for module 'TestingMacros' not found"; `-load-plugin-library` in `scripts/test.sh` | **A TOOLCHAIN FLAKE** (§A3), not a test failure | `TESTING MACROS BY NAME` |
+| the regression suite: `scripts/test.sh`, `engine/tests/test_output_coreaudio.c` (fake HAL), `scripts/tests/test_install.sh` (shims) | **BUILT 2026-10-10** at Simon's request ("we need a regression suite"); `build.sh` stops on a failure | `REGRESSION SUITE` |
+| inline review after 0.2.2: `apply_latest` with a stale device ID, `_ca_open` from two threads, hog re-taken on each retry, `OutputFollow`, `scripts/test.sh` on a fresh checkout; stale doc refs (`followDeferred`, `pushVolume`, `LyrionPlay-0.1.0` paths) | **CLOSED, NO code findings; doc refs FIXED** (§C) | `INLINE REVIEW AFTER 0.2.2` |
+| player model name; `EngineArguments.modelName`, `-M`, `ModelName`, Material player icon; the model name differing from the app name (`SqueezeLiteMac` vs `LyrionPlay`), "inconsistent branding" | **BY DESIGN, NOT A FINDING — DECIDED + VERIFIED 2026-10-10** (Simon: "Logo works"; "this isnt a bug or an issue its as planned for the logo to work"): `SqueezeLiteMac`, so Material shows its Apple icon; LMS `model` stays `squeezelite`. Never report the mismatch or propose `LyrionPlay` back | `MODEL NAME IS SqueezeLiteMac` |
+| several DACs as several LMS players, each with its own MAC and name | **PARKED 2026-10-10** (Simon's answers logged, not started): not a gap, a scope decision | `ONE PLAYER PER DAC` |
+| "LMS limits DSD to the rates the player takes"; dsf/dff in `convert.conf` | **WRONG** (§A3): passthrough at any rate | `DSD IS PASSTHROUGH AT ANY RATE` |
+| "LMS applies replay gain"; `canDoReplayGain`, `next_replay_gain` | **WRONG** (§A3): the player applies it, from `strm` | `THE PLAYER APPLIES REPLAY GAIN` |
+| "bit-perfect needs volume-code changes"; `_apply_gain`, `FIXED_ONE` | **WRONG** (§A3): squeezelite already skips the gain at unity and for DoP/DSD | `BIT-PERFECT IS ALREADY HANDLED` |
+| "upstream squeezelite already does hog mode / `-V` on macOS"; `output_pa.c` | **WRONG** (§A3): PortAudio only; `-V`/`-X` are ALSA-only | `NO HOG MODE UPSTREAM` |
+| "macOS can say whether a DAC takes DoP" | **WRONG** (§A3): CoreAudio has no DoP property | `NO DOP PROPERTY IN COREAUDIO` |
+| "Local Network approval is lost on every rebuild" | **WRONG** (§A3): it is tied to the certificate leaf | `APPROVAL SURVIVES A REBUILD` |
+| "BSD sockets are blocked under launchd" (Apple FB16131937) | **NOT REPRODUCED** (§A3) on macOS 26.7.1 | `FB16131937 NOT REPRODUCED` |
+| "LMS sends one volume on resume"; `fade_volume`, `_Resume`, `audg` | **WRONG** (§A3): an `audg` every 0.05 s while it fades in | `RESUME IS ONE AUDG` |
+| "LMS sends the volume as soon as a player connects" | **WRONG** (§A3): only at a track start or a `mixer` command | `LMS SENDS VOLUME ON CONNECT` |
+| "a universal binary depends on Rosetta" | **WRONG** (§A3) | `UNIVERSAL IS NOT ROSETTA` |
+| /code-review after 0.2.2 (2026-10-10): `ServerChoice`/`refreshLMS` (a check begun before a server change), `monitor_opening`/`output_close_coreaudio` (close while the monitor opens); `rotate` comment; status.json every 2 s, blocking `LMSDiscovery.find`, `menuLog` duplicating `Log` | **1, 3, 4 VERIFIED + FIXED, each pinned by a test that FAILED on the old code; 1 and 3 VERIFIED LIVE (0.2.5); 7 prose FIXED; 6, 8, 9 CLEARED** (§C); 2 and 5 §A3 | `CODE-REVIEW AFTER 0.2.2` |
+| "LMS mute leaves a `-V` DAC audible at its minimum"; `apply_volume` with no `kAudioDevicePropertyMute` | **NO WRITER** (§A3): every device here with a volume control has a mute | `MUTE HAS A WRITER ONLY WITHOUT A MUTE CONTROL` |
+| "the monitor's 100 ms poll while the output is off costs energy"; `OFF_POLL_US` | **WRONG** (§A3, measured) | `THE OFF POLL COSTS NOTHING MEASURABLE` |
+| play from idle switching the DAC's rate twice (`_ca_open` opens at `current_sample_rate`); `_rate_ok`, `_track_pending`, `TRACK_WAIT_POLLS` | **CONFIRMED in engine.log, FIXED 2026-10-10** (§C, Simon: "build the fix with care"); 0.2.3 opened at the pending rate (live: works when the decoder is first, 2 of 4); the capped WAIT for the decoder DECIDED by Simon, INSTALLED 0.2.4, one switch per play VERIFIED LIVE on the DragonFly and the FiiO (§B) | `TWO RATE SWITCHES AT PLAY` |
+| "Silence on a rate change" (`rateSwitchDelayMs`, `-r …:<ms>`, `output.rate_delay`) STRETCHED on a play from idle by the rate fix; `delay_active` | **FOUND 2026-10-11 in my own fix (0.2.3/0.2.4), FIXED (Simon: "look to fix the silence setting problem"), INSTALLED 0.2.5, VERIFIED LIVE on the FiiO** (§B) | `RATE DELAY STRETCHED AT PLAY` |
+| a STALLED or slow LMS server: any finding that needs LMS to stall or answer late (`refreshLMS`, `ServerChoice`, `lmsCheckRunning`, `lastLMSCheck`, `LMSDiscovery.find`, `LMSClient.call` timeouts, a check outlasting the 2 s tick or the 5 s cadence) | **NOT A FINDING — DECIDED by Simon 2026-10-11** ("as we cant test a stale server note to skip this in reviews as it will be fixed if and when it ever comes up"): skip it in reviews; fixed if it ever happens live. agent.log lines show one (0.2.7) | `A STALLED SERVER IS NOT A FINDING` |
+| the FORMAT of silence (DoP silence or PCM zeros) when stopped, paused, buffering, around an open or at the idle release (`_silence_fmt`, `ca.track_rate`/`ca.track_fmt`, `silencebuf_dsd`, the OFF branch, `_ca_open`); "the DAC flips to PCM / clicks / loses its DSD lock" | **NOT A FINDING — DECIDED by Simon 2026-10-11** ("Ive tested myself swithcing to pretty much most formats no silence its not needed so why we doing this? switch fine. Why are we messing with this silence when stopped or paused?"): skip it in reviews. Its premise, squeezelite's "DSD silence keeps the DAC locked", was never tested on the FiiO. Still a bug: DoP silence at a PCM rate (a buzz: round 1's fix stays) and anything heard on the DAC (§A2) | `SILENCE FORMAT IS NOT A FINDING` |
+| /code-review 2026-10-11 of 0.2.3-0.2.5: DoP silence at a PCM rate (`_silence_fmt`, `outfmt`, `silencebuf_dsd`); the rate delay mark lost on a flush / left set by a stop during the open (`_mark_switch_done`, `delay_active`); a flushed `track_start` read as pending (`_track_pending`, `_buf_used`, `_rate_ok`); `_start_delay` copying output.c; agent: a dropped check waiting 5 s, `playerState` outside `ServerChoice` | **1, 2, 6, 7 VERIFIED + FIXED; 3 VERIFIED in a variant (the reviewer's own path does not occur) + FIXED; 5 pinned in UPSTREAM.md, not a shared helper; each fix pinned by a test that FAILED on the old code; INSTALLED as 0.2.6 2026-10-11 09:39Z (Simon: "bump and install"); DSD<->PCM from idle and finding 3 VERIFIED LIVE on the FiiO; 2 not reachable live there (8-10 ms window)** (§C) | `CODE-REVIEW 2026-10-11` |
+| /code-review 2026-10-11 (2) of 0.2.6-0.2.7: agent.log `took N s` per check for a host that does not answer, no server line at start / after a setting change (`LMSCheckLog`, `refreshLMS`); `_silence_fmt` at the LAST track's rate (play from idle, synced start); the test fake's pause frames and `OUTPUT_START_AT` not written through `write_cb`; a slow+dropped check's two lines; the pending-rate predicate written three times | **ALL 6 VERIFIED + FIXED** (1-4 first, then 5-6 on Simon's "yes"); 1-5 each pinned by a test that FAILED on the old code (1 measured: 6.0 s a check); 6 a refactor (`_at_pending_rate`) pinned by a mutant; also a slow run misattributed after a setting change (my own round-1 code) FIXED; **INSTALLED as 0.2.8** 2026-10-11 14:15Z (agent restart + server line seen live; findings 1+3 LIVE: one line each for a dead server; finding 2's window does not occur with local files, tap: music from frame 0 in 4 of 4 plays) (§C) | `CODE-REVIEW 2026-10-11 (2)` |
+| inline review after CODE-REVIEW 2026-10-11 (2): `LMSCheckLog` threading, `ended`/`settingChanged`, `_silence_fmt` pending-first in every output state, the fake's `OUTPUT_PAUSE_FRAMES`/`OUTPUT_START_AT`, `reopen()` straight after `start()` in a test; the build's `SendableClosureCaptures` warning (`Supervisor` in `refreshLMS`); stale refs (`scripts/test.sh` header, "the way to see one") | **CLEARED; one wording nit FIXED** ("quick again" also ended a run with a quick FAILURE; now "back under 4 s", Simon: "yes"); doc refs FIXED (§C) | `INLINE REVIEW 2026-10-11` |
+| /code-review 2026-10-11 (3) of 0.2.8: `_silence_fmt` after `output_flush` resets `current_sample_rate` (`error_opening`) with `outfmt` still DOP (now `ca.track_rate`/`ca.track_fmt`); the test `flush` lacking that rule (UPSTREAM.md); `LMSCheckLog.timed` run ended by a quick check of another target, a plain 4 s timeout on the `> 4` line (now the server's answer over 2 s, `slowAnswer`), the control `eachChangeOfServerOnce` at took 4.0; `refreshLMS` timing with wall-clock `Date()` (now `SuspendingClock` in the task); `End.kept(server:)` + `found` redundant (now `kept(answered:)`) | **ALL 6 VERIFIED + FIXED 2026-10-11** (Simon: "verify and fix … we need to be more thorough here"); the engine suite now links upstream's `output.c` and runs a ~25,700-scenario matrix (`SCENARIO MATRIX`); **INSTALLED as 0.2.9** 2026-10-11 15:53Z; finding 1 VERIFIED LIVE 17:13 (tap: PCM zeros after a stop inside the 44.1k open after DSD64; §C); the live test's own find, `THE IDLE RELEASE'S LAST CALL WAS ZERO`, FIXED + INSTALLED as 0.2.10 18:33Z, VERIFIED LIVE 19:36 (tap: DoP silence to the close); one belief CLEARED there (a synced start goes OFF -> `OUTPUT_START_AT`) | `CODE-REVIEW 2026-10-11 (3)` |
+| the engine suite's scenario matrix (`matrix` in `tests/test_output_coreaudio.c`, `check_invariants`, `run_scenario`, `MATRIX_ONE`/`MATRIX_FIND`/`MATRIX_ALL`); upstream `output.c`/`buffer.c`/`output_pack.c`/`dop.c` linked into the suite instead of hand copies | **BUILT 2026-10-11** in CODE-REVIEW 2026-10-11 (3) (Simon: "we seem to be getting repeated regressions with the rate change and silence, we need to be more thorough"); catches every silence/rate bug the reviews found, on the engine that had it, and 10 of 10 mutants (§C); since the 0.2.9 live test also the idle release's last call (`THE IDLE RELEASE'S LAST CALL WAS ZERO`: `boundary_pad` no longer covers an OFF call) | `SCENARIO MATRIX` |
+| /code-review 2026-10-11 (4) of 0.2.9-0.2.10: `ca.track_rate`/`ca.track_fmt` outliving the idle release (DoP silence after a PCM play stopped at a released DoP track's rate); `dsd_format track_fmt` outside `#if DSD`; the `Duration.seconds` extension; `ended(_:found:answer:took:)` taking both times; the OFF-branch comment ("the last call", "what played") | **ALL 5 VERIFIED; 2-5 FIXED; 1 fixed, then REVERTED 2026-10-11 on Simon's decision** (`SILENCE FORMAT IS NOT A FINDING`): the engine plays frame for frame as 0.2.10 (`MATRIX_SIG` diff, 25,690 scenarios, 0 differ). DAC test on the FiiO: Simon heard none of the scenario plays though the FiiO took every frame; the FiiO dropped off USB at 21:21:27 (not investigated, Simon: "leave investigating this"). NOT installed. CLEARED: the OFF branch's `_output_frames` is no use-after-free; the track-start record sees a rate delay's second half; `.kept(answered:)`/`checked` pairing and a run carried across servers (§C) | `CODE-REVIEW 2026-10-11 (4)` |
+| /code-review 2026-10-11 (5) of the tree after round 4 (test tooling only; NO engine/agent finding): `matrix()` counting a failed `fork()` (pid -1 slot, `waitpid` ECHILD, unset `status`); `scripts/test.sh` reporting a failed conversion suite as "died first" (`^conversion:`); `write_sig` silent on `fopen` failure, `MATRIX_ONE` writing none; the signature without the track or the samples ("frame for frame") | **ALL 4 VERIFIED + FIXED 2026-10-11** (Simon: "fix the toolings"), each anti-run against a copy of the old tooling; the engine is 0.2.10's machine code (`otool -tV`: only log `__LINE__` constants differ). DROPPED at the gates: the OFF comment naming `_silence_fmt` in a non-DSD build (no writer: the Makefile always sets DSD; `SILENCE FORMAT IS NOT A FINDING`), stalled-server log lines (§C) | `CODE-REVIEW 2026-10-11 (5)` |
+| "the matrix is frame-deterministic" (diffing `MATRIX_SIG` output between builds) | **NARROWER** (§A3): synced starts (170 scenarios) slip a call under the parallel load, and some even run alone; every other scenario is exact | `THE MATRIX IS FRAME-EXACT BUT ONE` |
+| "the agent.log `took N s` line (0.2.7-0.2.8, whole check over 4 s) shows a stalled server" | **WRONG** (§A3): only a request with no answer could cross it | `THE 4 S LINE SAW ONLY TIMEOUTS` |
+| "a stop inside the open leaves the delay mark for a later album" (CODE-REVIEW 2026-10-11 finding 3's path) | **NARROWER** (§A3): the next album's own strm q clears it, unless the output went off between | `A NEW ALBUM'S FLUSH CLEARS THE MARK` |
+| "the engine starts with its device absent and waits for it" (`volume_pending`, REVIEW 2026-10-10 finding 7) | **ONLY WITH -r** (§A3): without a rate delay, `output_init_common` exits on `test_open` | `AN ABSENT DEVICE AT START EXITS THE ENGINE` |
+
+### HOW TO LOG A VERDICT so the next round finds it
+Every new decision goes in §A2 (declined or by design), §A3 (a belief a measurement killed), §B
+(open, accepted, parked or unverified) or §C (closed).
+- Write it as a bullet (§A3: a table row) whose FIRST LINE names the symbols a future review
+  would grep for, then the verdict, the date and who decided. A §A3 row opens with a CAPS name.
+- Add a row to the index in the same edit, ending with a phrase that greps to the entry. Every
+  §A3 row gets one: a review reads the index, not §A3, and re-derives an unindexed belief.
+- State the reason as a fact that can be DISPROVEN.
+- A finding cleared on evidence during a review is logged in the same session; "checked and
+  cleared" in a review's prose is lost when the round ends.
+
+Closing a round is not a suppression: a fix records that one defect, as described, was fixed. A
+finding about behaviour the fix introduced is new.
+
+### A. NOT FINDINGS — deliberate, fleet-wide
+The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
+- The local folder is not a git repository (the GitHub repo is the public copy): there is no diff
+  and nothing is "uncommitted". Never prompt to commit, push, tag or ship.
+- A `dist/` release zip older than `VERSION`: it is made only by `build.sh --release`.
+- An entry §B marks UNVERIFIED, not yet live-tested or PARKED: known, not missed.
+- A threshold or interval §A2 or §C says was chosen (retry cadence, volume tolerance): a tuning
+  call, not a finding.
+
+### A2. NOT FINDINGS — LyrionPlay decisions
+
+- **THE ENGINE IS A SQUEEZELITE FORK — Simon, 2026-10-09.**
+  - Protocol, decoders, sync groups, gapless, DSD/DoP and resample-only-when-needed come from
+    ralph-irving/squeezelite.
+  - The new code is the macOS output, because squeezelite's only Mac output is PortAudio: no hog
+    mode, and `-V` hardware volume exists only on ALSA (`main.c` help text, `output_pa.c`).
+  - A Swift rewrite was offered and declined: several times the work, and the edge cases
+    squeezelite already solved would need rebuilding.
+  - The engine is therefore GPLv3; the Swift parts stay MIT, as a separate program in the same bundle.
+- **EACH USER SIGNS IT — Simon, 2026-10-09** (the earlier "personal use only" decision is
+  superseded).
+  - **Shared, but no Apple fees:** "it will be shared but I am not paying apples fees". No
+    Developer ID and no notarisation, ever, unless he says otherwise. Never re-propose the
+    Developer Program.
+  - **Every user signs with their own certificate:** "all users self sign it so its up to them
+    not me to keep the key". Never propose a shared release certificate.
+  - **The build is signed ad-hoc only.** Apple Silicon runs nothing unsigned.
+  - **`scripts/install.sh`**, which the user runs with `sh`:
+    - creates "LyrionPlay Signing" in their login keychain the first time, with LibreSSL plus
+      `security import -T /usr/bin/codesign`;
+    - copies the app to a staging bundle beside the installed one, strips
+      `com.apple.quarantine`, signs inside-out with the hardened runtime, and swaps it in;
+    - restarts the player only when the agent or engine cdhash changed.
+  - **Why approvals survive updates:** the designated requirement is
+    `identifier + certificate leaf`, so each user's Local Network approval survives their
+    updates. Their key never leaves their Mac.
+  - **Signing by name** (`codesign -s "LyrionPlay Signing"`) works for an untrusted
+    self-signed identity, so INSTALL.md's by-hand route uses the name.
+  - **Measured 2026-10-09 with a throwaway keychain and folder:**
+    - a copy with 16 quarantined files was installed with 0 quarantine left;
+    - all three executables were signed `Authority=LyrionPlay Test`, `flags=0x10000(runtime)`,
+      with the DR `certificate leaf = H"…"`;
+    - a second run reused the certificate;
+    - no keychain prompt appeared.
+  - **Trap:** codesign finds no identity in a keychain outside the user search list, even with
+    `--keychain`. The login keychain is always in the list, so only tests hit this.
+- **LYRIONPLAY AND ICON A — Simon, 2026-10-09.**
+  - **The icon:** the Material Symbols Rounded `play_arrow` (Apache 2.0) takes the place of the
+    quiet first five bars of Lyrion's waveform, drawn from lms-material `lyrion-icon.svg` (MIT).
+  - **One source, `app/Resources/LyrionPlay.svg`:** the menu bar loads it as a template image
+    (`MenuBarIcon`, 16 pt high, alpha 0.4 when the player is off). `tools/icon/make-icon.swift`
+    (compiled by build.sh into `build/tools/make-icon`) renders the app icon from it: Lyrion green `#589e81` on Apple's 824/1024 grid, glyph white
+    at 62 % width.
+  - **Rendering:** macOS 14+ loads SVG natively (`_NSSVGImageRep`, transparent background), so
+    no converter is needed.
+  - **The four ideas Simon chose from:** A play into the wave, B play beside the wave, C play
+    inside the wave, D play button and wave. He said D, then "actually make it A".
+- **MENU BAR PLUS AGENT — Simon, 2026-10-09; mechanism CHANGED the same day by the Phase 0 spike.**
+  - On = the app writes `~/Library/LaunchAgents/com.crystalgipsy.lyrionplay.agent.plist`
+    (`Program` = the agent's absolute path in the installed bundle) and runs
+    `launchctl bootstrap gui/$UID <plist>`. Off = `launchctl bootout gui/$UID/<label>` and
+    remove the plist. The plist being present is what starts the agent at login.
+  - SMAppService was the plan but cannot survive a rebuild with our signature; see
+    `SMAPPSERVICE PINS THE FIRST BUILD`.
+  - launchd restarts the agent on a crash (`KeepAlive{SuccessfulExit=false}`).
+    `ProcessType=Interactive`, so audio is never throttled.
+  - **THE MENU AND THE PLAYER ARE TIED — Simon, 2026-10-09** ("they should be tied to one
+    another surely?"). They stay separate processes, so a menu crash never cuts the music.
+    - **Quit** in the menu boots the agent out before the app exits, and keeps the plist. Any
+      orderly quit does this except logout, restart or shutdown (`kAEQuitReason`), when the
+      session takes the player down anyway.
+    - **Opening the menu** runs `LaunchAgent.startIfOn`.
+    - **The agent** opens the menu at login and reopens it if it goes, with backoff from 5 s up
+      to 5 min, unless `menu-session-ending` is under a minute old.
+    - **Presence:** the menu holds an exclusive `flock` on `menu.lock` for its whole life
+      (`MenuPresence`), never a name or path match. A second copy calls `exit(0)` before any UI.
+    - **`build.sh --install`** replaces a running menu with SIGKILL, never a quit, because a quit
+      stops the player.
+    - **Measured 2026-10-09:**
+      - the new agent opened the menu 2 s after it started;
+      - `kill -9` of the menu: reopened in 1 s, agent and engine PIDs unchanged;
+      - `MenuLock` suite: a SIGKILLed holder releases the lock.
+    - **Restart VERIFIED 2026-10-10** (Simon rebooted on 0.2.1: "it all restarts on a reboot"):
+      menu.log "the session is ending (reason 1919251316)" = `'rest'` at 09:02:25, agent SIGTERM
+      1 s later with no menu reopened in between; after boot (10:03 local) the agent started at
+      +40 s, the engine on the DragonFly, the menu opened by the agent 3 s later, connected.
+    - **UNVERIFIED:** Quit from the panel stopping the player (needs a click); a plain logout
+      (same code path, reason `'logo'`/`'rlgo'`, not seen yet).
+- **VOLUME BOTH WAYS — Simon reported "volume doesnt appear to be bidirectional", 2026-10-10;
+  built the same day.**
+  - **Why the engine decides:** only the engine knows which device changes it made itself. A
+    watcher in the agent would mistake LMS's mute fades and volume changes for the user's.
+  - **Engine (`output_coreaudio.c`):**
+    - `vrec` holds the level last applied or reported, in 1/100 dB, plus the mute state;
+    - `volume_listener` listens to `VolumeScalar` (main element, or channels 1/2) and `Mute`;
+    - it prints `lyrionplay:volume <dB> <muted> <lms>` to stdout only when the device is more than
+      `VOLUME_MOVED_DB` (0.6) from the record, or its mute differs. `<lms>` (`vrec.lms`, since
+      `REVIEW 2026-10-10`) is LMS's last audg: 1 a level, 0 silence (muted or volume 0), -1 none
+      yet;
+    - nothing is reported while LMS volume is fixed, or in -X (linear) mode;
+    - watching starts at init, from the device's current level, because LMS sends a volume
+      only when a track starts.
+  - **Agent:**
+    - `deviceVolumeChanged` hands each report to a `LatestValueSender`: one push in flight at a
+      time, at most one start per 150 ms, the latest level winning (it used to start a detached
+      task per push, which could overlap and land out of order);
+    - `VolumePush.command` sends `mixer volume LMSVolume.volume(forDB:)`, `mixer muting 1`, or
+      `mixer muting 0` when LMS is muted. It asks `mixer volume ?` only when `<lms>` is not 1,
+      and `playerpref digitalVolumeControl ?` (0 = fixed, audg's adjust byte) only when it is -1,
+      sending nothing to a fixed player;
+    - `LMSVolume` is the SqueezePlay curve from the LMS 9.1 source: −74 dB at 0, −37 dB at 25,
+      0 dB at 100.
+  - **Measured 2026-10-10 on the MacBook Pro speakers, nothing playing:**
+    - LMS 50 and LMS 62 stayed put, with 0 reports;
+    - Mac 30% gave −28.72 dB → LMS 42, with 1 report;
+    - Mac mute → LMS −42 (muted); Mac unmute → LMS 42 and the Mac back at 29%;
+    - Simon, playing: "it seems to work ok", with a slight lag that he calls normal (150 ms
+      throttle plus Material's redraw).
+- **VERSIONING — Simon, 2026-10-10** ("we should have versioning I guess for our builds").
+  - **`VERSION` is the only place the version is set,** as x.y.z. `scripts/build.sh` writes it
+    into `CFBundleShortVersionString` and the release zip's name. `CFBundleVersion` is the
+    build's timestamp, `date +%Y%m%d%H%M`.
+  - **`tools/make_readme_html.py`** puts it in the pages' version badge.
+  - **`scripts/bump-version.sh [patch|minor|major]`** raises it and regenerates the pages. It
+    refuses a malformed VERSION or an unknown argument (tested).
+  - **The fleet's rule, from memory `build-and-release-process`:** before every build that is
+    handed over or installed, ASK Simon "version up? (yes/no)". Never bump silently, and never
+    reuse a number silently. One change out the door = one new number. A fix is a patch, a
+    feature is a minor.
+  - **Where the version is shown:**
+    - the menu panel's footer, "Version x.y.z", with the build in its tooltip (`AppVersion`);
+    - the agent's first log line, "agent started: LyrionPlay x.y.z (build)";
+    - install.sh, which prints "installing LyrionPlay x.y.z" and "installed … version x.y.z
+      (was …)".
+  - **The engine's own firmware string** (squeezelite 2.0.0-1609, sent to LMS) is left
+    untouched: LMS parses it, for example for its pCP check.
+  - **CHANGELOG.md is written at the first release** (the merge to main), per the fleet. Dev
+    versions are recorded here.
+  - **History:**
+    - 0.1.0: every build up to 2026-10-10, covering Simon's first install and the
+      volume-both-ways builds.
+    - **0.2.0** (Simon: "Yes, 0.2.0", 2026-10-10): volume both ways, the pages and the version
+      display. INSTALLED (install.sh: "version 0.2.0 (was 0.1.0)"; agent.log "LyrionPlay 0.2.0
+      (202610100038)"). The release is `dist/LyrionPlay-0.2.0.zip`; the old 0.1.0 zip was deleted.
+    - **0.2.1** (Simon: "version up", 2026-10-10): the `REVIEW 2026-10-10` fixes and the
+      regression suite. INSTALLED 2026-10-10 10:01 (install.sh: "version 0.2.1 (was 0.2.0)",
+      player restarted as the agent/engine changed; agent.log "LyrionPlay 0.2.1 (202610101000)";
+      connected; one menu, the new copy; no marker left). Simon had moved the player to the
+      AudioQuest DragonFly Black v1.5 (USB, with a volume control: `-V`, exclusive) at 09:53.
+    - **0.2.2** (Simon: "lets bump the current version as it stands and install it",
+      2026-10-10): the three `REVIEW OF THE FIXES` fixes and the model name `SqueezeLiteMac`.
+      Suite PASS inside build.sh (engine output 16/16, swift 38 tests, install.sh 3/3).
+      INSTALLED 2026-10-10 10:42 (install.sh: "version 0.2.2 (was 0.2.1)"; agent.log "LyrionPlay
+      0.2.2 (202610101042)", engine started with `-M SqueezeLiteMac`). LMS `players`: prodmac46
+      `96:57:54:14:bd:87`, model `squeezelite`, modelname `SqueezeLiteMac`, connected.
+- **APPLE SILICON ONLY — Simon, 2026-10-09.** arm64 only, macOS 14+. No universal builds.
+- **NO VIRTUAL AUDIO DRIVERS — Simon, 2026-10-09.**
+  - Simon: "we dont need blackhole it messes up things last time i installed it and was hard to
+    remove all traces we wil use a dac when you need it".
+  - Bit-exactness is proven by the engine's own output tap compared with an independent
+    reference decode (`tools/bitcheck`), plus the DAC's DoP lock for the last hop.
+- **TOOLS ARE BUILT HERE — Simon, 2026-10-09.**
+  - He asked for an Apple-Silicon alternative to the universal CMake.app.
+  - CMake 4.4.4 is built from source with the Command Line Tools (`deps/build-cmake.sh`,
+    SHA-256 pinned). It lands in `deps/tools`, nothing system-wide.
+  - No Homebrew: its `/opt/homebrew` dylibs must never reach the engine's link. `otool -L`
+    must list system frameworks only.
+- **THE 384K CAP — by design, 2026-10-09.**
+  - The engine reports `MaxSampleRate` = min(device max, 384000) via `-Z`.
+  - Why: LMS's pcm rate-code table (`SqueezePlay.pm` `pcm_sample_rates`, LMS 9.1) stops at
+    384000 (`'>'`), and an unknown rate returns `'3'` = 44.1 kHz. A 705.6k/768k WAV streamed
+    as pcm would therefore play at the wrong speed.
+  - FLAC carries its rate in-band, so the cap only costs LMS a downsample of >384k files.
+- **DOP IS A SWITCH — by design, 2026-10-09.**
+  - Per device, keyed by UID, off by default. CoreAudio exposes no DoP capability; a DoP DAC
+    just sees 24-bit PCM.
+  - With the switch off, squeezelite converts DSD to PCM and resamples (`dsd.c:811`), so DSD
+    still plays everywhere.
+- **NO HTTPS IN THE ENGINE — by design, 2026-10-09.**
+  - `CanHTTPS` is not advertised and no OpenSSL is bundled. LMS then proxies HTTPS streams
+    (Qobuz, TIDAL) itself.
+  - Smaller attack surface for the network-facing C code, and one fewer library to build and sign.
+  - Re-raise only with a stream that LMS cannot proxy.
+- **FIXED VOLUME LEAVES THE DEVICE ALONE — by design, 2026-10-09.**
+  - With `-V` (device volume) and LMS "Output level fixed at 100%" (`audg adjust = 0`,
+    `output.volume_fixed`), `set_volume` keeps digital gain at unity and does NOT touch the
+    device's level.
+  - `output_alsa.c`'s `-V` instead sets its mixer to 0 dB in that case (`set_volume(FIXED_ONE)` →
+    `set_mixer(.., 0dB)`). On a headphone DAC whose volume control is the only one, that is full
+    volume.
+  - Fixed means "the player does no volume", so the listener's level stays where it was.
+- **THE BOUNDARY AND THE REOPEN FLAG — by design, 2026-10-09.** Two places where the CoreAudio
+  path deliberately differs from `output_pa.c`:
+  - **The boundary.** `pa_callback` keeps calling `_output_frames` after a track start that
+    changed `output.current_sample_rate`, so up to one buffer of the new track plays at the old
+    rate before the stream reopens. `ioproc` breaks as soon as the rate differs and pads with
+    silence.
+  - **The flag.** `slimproto.c` clears `output.ca_reopen` BEFORE `_ca_open()`. `_ca_open` runs
+    device calls unlocked, and the new IOProc may raise the flag again meanwhile; clearing after
+    the call, as the PortAudio block does, would lose that request.
+  - Also in `ioproc`: one 0 from `_output_frames` (a boundary at the very start of a call) gets
+    one retry, so a same-rate gapless boundary never pads a buffer with silence.
+- **THE SPIKE IS THE REAL IDENTITY — by design, 2026-10-09.**
+  - The Phase 0 agent spike uses the real bundle id `com.crystalgipsy.lyrionplay` and agent
+    label `com.crystalgipsy.lyrionplay.agent`.
+  - The Local Network approval Simon gives during the spike then carries to the real app, and no
+    "Spike" entries are left behind in System Settings.
+- **MODEL NAME IS SqueezeLiteMac — Simon, 2026-10-10** ("change the players model to be
+  SqueezeLiteMac this will then use materials Apple icon for the player by default").
+  - **NOT A FINDING: the model name is MEANT to differ from the app name.** Simon, 2026-10-10:
+    "mode name is meant to be different to the app name this isnt a bug or an issue its as
+    planned for the logo to work. Don't want it flagged in reviews as an issue as it isn't."
+    `SqueezeLiteMac` where the app, bundle, executables and pages say `LyrionPlay` is not
+    inconsistent branding and not a leftover. Do not report it, and do not propose a
+    `LyrionPlay` model name or a new Material icon entry as a fix: the name exists to match
+    Material's existing `SqueezeLiteMac` key.
+  - The agent passes `-M SqueezeLiteMac` (`EngineArguments.modelName`); it was `LyrionPlay`, which
+    Material has no icon for, so the player showed its generic speaker.
+  - LMS's `model` stays `squeezelite` (BASE_CAP in `engine/slimproto.c`). Material's
+    `mapPlayerIcon` looks up `player-icons.json` by model, then by modelname, and
+    `squeezelite` → `SqueezeLiteMac` is `{"svg":"apple"}` (checked on the rig's Material,
+    2026-10-10).
+  - The rules checked before modelname can't match: firmware ends `-pCP` (ours is
+    `2.0.0-1609`), and playerid begins `b8:27:eb:` or `dc:a6:32:` (our MAC always has the 0x02
+    locally-administered bit set, and `b8` and `dc` have it clear). A per-player icon the user
+    picks in Material still wins.
+  - Trade-off accepted: LMS shows "SqueezeLiteMac" as the player's model name, not "LyrionPlay".
+  - Test `modelNameGivesMaterialsAppleIcon` (it failed with `LyrionPlay` in place).
+  - INSTALLED in 0.2.2 (2026-10-10 10:42); LMS reports modelname `SqueezeLiteMac`. VERIFIED by
+    Simon in Material the same day: "Logo works".
+
+- **SILENCE FORMAT IS NOT A FINDING — Simon, 2026-10-11** ("Ive tested myself swithcing to pretty much most
+  formats no silence its not needed so why we doing this? switch fine. Why are we messing with this
+  silence when stopped or paused?"; then "Yes" to keeping the engine as 0.2.10).
+  - **Do not report** which format the silence takes (DoP silence or PCM zeros) when stopped, paused,
+    buffering, waiting for a synced start, around an open, at a rate change or at the idle release
+    (`_silence_fmt`, `ca.track_rate`/`ca.track_fmt`, `silencebuf_dsd`, the OFF branch, `_ca_open`), nor
+    claims that the DAC "flips to PCM", "clicks" or "loses its DSD lock" there.
+  - **Why:** every such finding rests on squeezelite's "DSD silence keeps the DAC locked", which was
+    never tested on Simon's DAC. The only data: up to 0.2.9 every idle release after DSD ended in
+    ~2.9 ms of PCM zeros and Simon heard nothing wrong; his own switching between most formats is
+    fine. Rounds 2, 3 and 4 and the 0.2.10 change each refined the rule on paper and opened the next
+    finding (Simon: "We are going round and round the same thing every review").
+  - **Live evidence, Simon on the FiiO, 2026-10-11 (after the decision):** a DSD128 file (DoP 352.8k)
+    paused, then DSD256 (352.8k PCM on the FiiO), then back to DSD128: every switch played as it
+    should. That is finding 1's own same-rate pair (`CODE-REVIEW 2026-10-11 (4)`), so it is not a
+    problem in use either. The library does hold DSD128 (the round's "none" was wrong). 176.4k is a
+    DoP rate only: PCM is not sold at 176.4k, and Simon expects it to switch as the higher pair does.
+  - **Still a bug:** DoP silence at a rate no DoP track plays at, which the DAC plays as PCM noise (a
+    square wave at Nyquist, ~-27 dBFS; round 1's fix, `_silence_fmt`'s rate check, stays); and anything
+    Simon hears on the DAC, reported live.
+  - **The engine stays as 0.2.10,** including 0.2.10's DoP silence to the close, which rests on the
+    same untested premise and is not reopened either. `MATRIX_SIG` diffs any change against it,
+    frame by frame.
+- **A STALLED SERVER IS NOT A FINDING — Simon, 2026-10-11** ("as we cant test a stale server note
+  to skip this in reviews as it will be fixed if and when it ever comes up. We would need a way to
+  debug this though").
+  - **Do not report** any finding whose writer is LMS stalling or answering late: a check that
+    outlasts the agent's 2 s tick or 5 s cadence, a reply landing after a server change, discovery
+    or `LMSClient.call` timeouts (2 s / 4 s), the menu or the volume keys lagging behind a server
+    change. Two rounds found such races (`CODE-REVIEW AFTER 0.2.2` 1, `CODE-REVIEW 2026-10-11` 6);
+    both are fixed and pinned in `ServerChoosing`. LMS answers `players` in ~30 ms on the rig, and a
+    stall can only be staged with a stand-in server, so further rounds cost a lot to prove a case no
+    one has seen.
+  - **Re-raise only with a stall seen live,** from the agent.log lines below, named by time.
+  - **The way to see one (agent.log, added 2026-10-11, `refreshLMS`; rules in `LMSCheckLog` since
+    `CODE-REVIEW 2026-10-11 (2)`, suite `ServerCheckLogging`):** never a line per check, only
+    - `LMS check of <name> (<host>:<port>) took N s`: the FIRST check of a run in which the server
+      took over 2 s (`LMSCheckLog.slowAnswer`, the agent's tick) to answer the players and status
+      requests, timed in the check's task with `SuspendingClock` (since CODE-REVIEW 2026-10-11 (3);
+      before, the whole check, discovery included, against 4 s: `THE 4 S LINE SAW ONLY TIMEOUTS`). A
+      request no one answers times out at 4 s, so a server that has gone is "took 4.0 s" once, then
+      "did not answer" (0.2.7 wrote a line every ~6 s for a typed host that does not answer);
+    - `LMS checks of … back under 2 s (N s), after K slower, the slowest M s`: the run's end (a
+      quick failure ends one too, so not "answering"); a run is one server's: a server setting
+      change, or a check of another server or of none, ends it unsaid;
+    - `LMS check of … dropped after N s: begun with server setting "X", now "Y"`: the whole line for
+      such a check, slow or not, and no part of a run;
+    - `LMS: using <name> (<host>:<port>)` / `LMS: no server found` / `LMS: <name> … did not answer`:
+      each change of the server the agent uses, and the first check after the agent starts or the
+      server setting changes, whatever it finds (0.2.7 wrote nothing when that was no server).
+    The engine's own link to LMS is slimproto (`-s`), logged in engine.log as ever.
+  - **INSTALLED as 0.2.7, 2026-10-11 13:46Z** (Simon: "yes" to version up and install; player stopped
+    first; suite PASS in build.sh). agent.log: "agent started: LyrionPlay 0.2.7 (202610111446)", then
+    "LMS: using Simons Music (192.168.1.234:9000)" 2 s later, and no further LMS line while checks
+    ran normally. Player connected again ~10 s after the restart.
+
+### A3. DISPROVEN — beliefs the code suggests that measurement killed
+
+Not defects and not decisions: beliefs the code plausibly suggests, killed by a measurement or the
+LMS source. A review re-derives them from scratch every time. Re-raise one only by disproving the
+evidence it cites.
+
+| Belief | Verdict | The evidence |
+|---|---|---|
+| NO RATE LIST: a player can tell LMS which sample rates its DAC supports, and LMS will transcode around the gaps | **WRONG** (LMS 9.1 source, 2026-10-09) | `SqueezePlay.pm` `%CapabilitiesMap` reads only `MaxSampleRate`, plus bare codec tokens matching `^[a-z][a-z0-9]{1,4}$`. `CapabilitiesHelper::samplerateLimit` downsamples only when the track rate is ABOVE that maximum, and keeps the family (`maxRate % 12000 == 0 && srate % 11025 == 0` → `maxRate * 11025/12000`). A gap BELOW the maximum (say 88.2k on a 44.1/48/96/192 DAC) must be resampled in the player: squeezelite `-R` with the `E` flag, "resample only if native rate not supported". |
+| DSD IS PASSTHROUGH AT ANY RATE: LMS limits DSD to rates the player can take | **WRONG** | `convert.conf:389-395`: `dsf dsf * *` and `dff dff * *` with `# IFD`. The `D` capability is satisfied by the passthrough itself, so a player that lists dsf/dff gets raw DSD at ANY rate. squeezelite handles it: DoP when `DSD rate/16` fits the device's top rate, else DSD→PCM (`dsd.c:811`). |
+| THE PLAYER APPLIES REPLAY GAIN: LMS applies replay gain (or transcodes to apply it) | **WRONG** | The player applies it. `Squeezebox::stream_s` packs `canDoReplayGain` into `strm` as a 16.16 multiplier; squeezelite stores it as `output.next_replay_gain` (`slimproto.c:384`) and multiplies it into the gain (`output.c:54`). Fleet memory `lms-streaming-http` records that there is no gain stage in LMS's transcode path. |
+| BIT-PERFECT IS ALREADY HANDLED: Bit-perfect needs special handling of the volume code | **WRONG** — squeezelite already does it | `_write_frames` skips `_apply_gain` when both gains are exactly `FIXED_ONE` (`output_pa.c:464`), and `_output_frames` forces `FIXED_ONE` for any non-PCM (DoP/DSD) output (`output.c:173`). LMS "fixed at 100%" sends `audg` with `adjust=0`, which squeezelite maps to `FIXED_ONE` (`slimproto.c:447`). |
+| NO HOG MODE UPSTREAM: squeezelite on macOS already does exclusive mode and hardware volume | **WRONG** | The macOS build uses `output_pa.c` (PortAudio). Its only exclusive option is WASAPI on Windows (`-a <latency>:1`). `-V`/`-X` (hardware mixer) are inside `#if ALSA` in `main.c`. No `kAudioDevicePropertyHogMode` anywhere in the tree. |
+| NO DOP PROPERTY IN COREAUDIO: macOS can tell us whether a DAC accepts DoP | **WRONG** | CoreAudio has no DoP or DSD format or property. A DoP DAC presents ordinary LPCM formats (`kAudioStreamPropertyAvailablePhysicalFormats`). The DAC itself decides from the DoP marker bytes. |
+| SMAPPSERVICE PINS THE FIRST BUILD: an agent registered with `SMAppService.agent(plistName:)` keeps working after a rebuild if the app is signed with the same self-signed identity | **WRONG** (measured on macOS 26.7.1, 2026-10-09) | The first build launched ("Successfully spawned ... because speculative"). After a rebuild, every launch died: kernel `AMFI: Launch Constraint Violation (enforcing) ... (Constraint not matched)`, launchd `OS_REASON_CODESIGNING`, job `properties = ... needs LWCR update \| has LWCR`. amfid: "signed by an unknown certificate chain", i.e. no Team ID, so the launch constraint can only pin the build's code hash. NOT cleared by `unregister()` + `register()`, by `lsregister -f` on the rebuilt bundle, or by bumping `CFBundleVersion` (launchd showed `parent bundle version = 2`, still refused). A classic `~/Library/LaunchAgents` plist loaded with `launchctl bootstrap` has no such constraint, and ran rebuilt code fine. Re-raise only with a Team ID (Developer ID or Apple Development certificate). |
+| ARGV0 IS BUNDLE-RELATIVE: an agent can find its sibling executables from `CommandLine.arguments[0]` | **WRONG under SMAppService** (2026-10-09) | With `BundleProgram`, `argv[0]` was `/Contents/MacOS/spike-agent`, so `Process` looked for `/Contents/MacOS/spike-net` and got "doesn't exist". A classic agent's `argv[0]` is the full `Program` path, but `Bundle.main.bundleURL` is right in both cases; always use it. |
+| EACH EXECUTABLE ASKS ONCE: the agent's Local Network approval covers the programs it starts | **WRONG** (2026-10-09) | With the agent approved (its URLSession reached `plex:9000`), its child, a separately signed executable using BSD sockets, got `connect ... No route to host (errno 65)` and no discovery reply, until a second prompt was approved. Then: PASS. Expect one prompt for the agent and one for `squeezelite` on first use. |
+| APPROVAL SURVIVES A REBUILD: Local Network approval is lost on every rebuild | **WRONG with a stable identity** (2026-10-09) | The child was rebuilt with a new code hash (`a7a4fe76...` → `be6c836a...`, build-stamped), and its FIRST run passed TCP, discovery and HTTP with no new prompt. Its designated requirement is `identifier ... and certificate leaf = H"bb27c270..."`, which a rebuild does not change. |
+| FB16131937 NOT REPRODUCED: BSD sockets are blocked under launchd regardless (Apple FB16131937) | **NOT REPRODUCED** on macOS 26.7.1 (2026-10-09) | Once approved, plain BSD-socket TCP and UDP broadcast from a launchd agent's child succeeded on every run. The failure that looked like that bug (EHOSTUNREACH) was only the approval still pending. |
+| DSD256 IS PCM ON THE FIIO: the FiiO M11 Plus plays DSD256 natively, so the player should send it as DSD | **WRONG on a Mac** (measured 2026-10-09) | DoP carries DSD at rate/16 in 24-bit PCM words, so DSD256 needs a 705.6 kHz PCM link. The FiiO's macOS driver offers at most 384 kHz (`kAudioDevicePropertyAvailableNominalSampleRates`), so its DoP ceiling is DSD128. macOS has no native-DSD path (no ASIO; CoreAudio has no DSD format). squeezelite therefore converts DSD256/512 to PCM and resamples to 352.8 kHz (`dsd.c:811`, `resample_newstream`). Simon saw "PCM" on the FiiO for both, and DSD for DSD64. A DSD-to-DSD128 remodulator (as HQPlayer has) is the only way to keep it DSD, and squeezelite has none. |
+| A CRASHED AGENT ORPHANS ITS ENGINE: launchd takes the engine down with the agent when the agent dies | **WRONG** (measured 2026-10-09) | `kill -9` of the agent left its engine running with parent PID 1, and the restarted agent started a second engine with the same player identity. Foundation's `Process` starts children in their own process group, which launchd's process-group kill on job exit does not cover. Fix: the agent writes `engine.pid`; at start, `stopOrphanedEngine` stops that PID only if it is alive AND `proc_pidpath` equals our engine binary. Re-measured: "stopping engine 84464, left running by a previous agent", then exactly one engine. Never match engines by name. |
+| NO SWIFTUI MACROS WITHOUT XCODE: SwiftUI builds fine with the Command Line Tools | **PARTLY WRONG** (2026-10-09) | `@State` failed: "plugin for module 'SwiftUIMacros' not found". The CLT plugin folder (`/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins`) holds only `libObservationMacros`, `libSwiftMacros` and `testing`. `@Observable` and `@Bindable` work; `@State` (a macro in the macOS 26 SDK) does not. The app keeps all state in an `@Observable` `PlayerModel.shared`. Installing Xcode would lift this; it is not needed. |
+| A SHORTCUT QUIT THE MENU: playback made the menu bar icon disappear | **WRONG** (measured 2026-10-09) | Simon: the icon went "when I started to play". The unified log shows the menu app's panel opened at 22:47:20 over VS Code and kept the keyboard (WindowServer "outbound to keyThief") while VS Code was in front. At 22:48:51 a modifier plus a key reached it, AppKit ran `performKeyEquivalent:`, and launchservicesd logged `QUITTING` 50 ms later: an orderly quit, with no crash report. The first track started 16 s after that, at 22:49:07. The agent and engine never stopped. Only ⌘Q terminates a default SwiftUI app, so the key was almost certainly ⌘Q, though the log does not name it. Fix: `CommandGroup(replacing: .appTermination) {}` removes ⌘Q, and `applicationShouldTerminateAfterLastWindowClosed` returns false. Any quit not from Quit Menu is logged with its event to `~/Library/Logs/LyrionPlay/menu.log` and is never refused, since logout needs it. The ⌘Q removal is UNVERIFIED by keypress (no Accessibility access to send one). |
+| READ-BACK IS NOT THE LEVEL SET: a device reports the dB the engine just set, so comparing with the requested level tells the user's changes from ours | **WRONG** (measured 2026-10-10) | The MacBook Pro speakers move in coarse steps. With the record set to the REQUESTED dB, `mixer volume 50` produced 4 reports (−22.73, −21.85, −21.07, −20.37 dB), and LMS crept to 57: each read-back was mistaken for a user change and pushed back. Fix: `apply_volume` records the read-back after setting, and opens a 500 ms window (`VOLUME_SETTLE_NS`) in which the listener only records. Re-measured: 50 stayed 50, 62 stayed 62, 0 reports. (A clean set-versus-read-back table was NOT obtained: the probe ran with sync live, so the engine overwrote its readings.) |
+| UNMUTE IS NOT A LEVEL: when the Mac unmutes, sending LMS the device's level restores the volume | **WRONG** (measured 2026-10-10) | For squeezelite, LMS fades the level down over 0.3125 s (`SUPER::fade_volume`; `SqueezePlay::fade_volume` skips the fade only for baby/fab4), then mutes with gain 0. The engine then holds the device at its minimum, −63.5 dB. Unmuting sent `mixer volume 7`. Fix: `pushVolume` reads `mixer volume ?` (LMS stores a muted volume as negative), and sends `mixer muting 0` when it is negative. Re-measured: back to 42. |
+| RESUME IS ONE AUDG: LMS sends a single volume when playback resumes | **WRONG** (LMS 9.1 source, 2026-10-10) | `StreamingController::_Resume` calls `fade_volume(fadeIn or FADEVOLUME)`; `SqueezePlay::fade_volume` skips the fade only for baby/fab4, so squeezelite gets `Player::fade_volume`: an `audg` every 0.05 s from 0 up to the volume. After a pause longer than `-C` (30 s) the device is closed, so these arrive while the monitor is opening it. |
+| LMS SENDS VOLUME ON CONNECT: the player gets LMS's volume as soon as it connects | **WRONG** (LMS 9.1 source, 2026-10-10) | `Squeezebox::play` re-sends it ("make sure volume is set") when each track starts, and `mixer` commands send it. A freshly connected player has no `audg` until then, hence the engine watches from init. |
+| UNIVERSAL IS NOT ROSETTA: A "universal" binary depends on Rosetta | **WRONG** (raised 2026-10-09) | A universal Mach-O carries a full native arm64 slice; Rosetta translates only x86_64-only code. Moot here anyway: tools are built from source as arm64-only (`TOOLS ARE BUILT HERE`). |
+| MUTE HAS A WRITER ONLY WITHOUT A MUTE CONTROL: with `-V`, an LMS mute (gain 0, which is how LMS mutes, `Squeezebox2::volume`) leaves the DAC playing at its minimum dB, because `set_volume` keeps the samples at `FIXED_ONE` | **NO WRITER** (measured 2026-10-10, `squeezelite -l`) | `apply_volume` sets `kAudioDevicePropertyMute` whenever the device has one. DragonFly Black v1.5: `{"control":"main","db_min":-64.0,"db_max":0.0,"mute":true}`; MacBook Pro Speakers: `-63.5..0, mute true`; the FiiO has NO volume control, so it gets software gain and gain 0 is digital silence. Only a DAC with a volume control and no mute control would sit at its minimum, and upstream `output_alsa.c` `-V` does exactly that for every device (it never uses the playback switch except to unmute at init, line 891). Re-raise only with a named DAC whose `-l` shows `"mute":false` with a volume control. |
+| THE OFF POLL COSTS NOTHING MEASURABLE: the monitor waking every 100 ms (`OFF_POLL_US`) while the output is off (the idle state with `-C 30`) costs energy | **WRONG** (measured 2026-10-10) | Engine PID 5610, idle 28 min (`mode stop`, output off, so the monitor polling): `top -l 3 -s 5 -stats cpu,idlew` gave 0.0% CPU and idle wakeups 793 → 796 in 5 s, about 0.6/s for the whole process (macOS coalesces the timers). |
+| HOG MOVES THE DEFAULT OUTPUT: taking exclusive access to the macOS default output leaves it the default | **WRONG** (measured on macOS 26.7.1, 2026-10-10, silent probe: speakers idle, `DeviceIsRunningSomewhere` 0) | Hogging the MacBook Pro speakers made the FiiO the default 7-9 ms later; releasing put the speakers back 5-8 ms later, each with a `DefaultOutputDevice` notification (3 rounds). So with "Follow the macOS output" and exclusive mode (the default on a USB DAC), the engine's own hog at the first track moved the default, the agent's `AudioDeviceWatcher` restarted the engine on the speakers, the release moved it back, and so on. Fix: `Settings.resolveDevice(in:holding:)` stays on the device the engine holds (`heldDevice()`: `hogOwner == engine PID`); `followDeferred` plus `tick` follow a different output chosen meanwhile once the engine lets go. |
+| REMOVE WAITS FOR THE LISTENER: `AudioObjectRemovePropertyListener` returns at once | **WRONG** (measured 2026-10-10, silent probe on the hog-mode property) | Called while a listener call that sleeps 1 s was running, it took 1001 ms and returned after the call ended. `watch_volume`/`unwatch_volume` held `vrec.lock` across it, and `volume_listener` takes `vrec.lock`: a volume key at engine exit or at a device switch deadlocked. Fix: `vrec.watch` serialises the add/remove calls and the listener never takes it; `vrec.lock` is held only to copy `dev`/`ctl`. The fake HAL in `engine/tests/test_output_coreaudio.c` models this wait. |
+| ATS LOCAL IS PLAIN NAMES ONLY: `NSAllowsLocalNetworking` lets the agent reach any LAN server name | **WRONG** (measured 2026-10-10 with a helper in a scratch bundle on the real Info.plist; the agent's `Bundle.main` is the app, so ATS applies to it) | `plex` and `192.168.1.234` loaded; `lms.lan`, `plex.home.arpa` and `example.com` failed -1022 before any DNS. With `NSAllowsArbitraryLoads` alone they passed ATS (-1003, no such host). With BOTH keys: -1022 again, because the local key voids the arbitrary one. The same binary outside a bundle had no ATS. Fix: `NSAllowsArbitraryLoads` only; `TransportSecurity` test forbids the local key coming back. The agent's only HTTP peer is the user's own LMS, over plain HTTP by necessity. |
+| TESTING MACROS BY NAME: `swift test` under the Command Line Tools is deterministic | **WRONG with CLT 27.0 / Swift 6.4** (measured 2026-10-10) | About half of all test compiles failed with "plugin for module 'TestingMacros' not found" (repo: 5/6 then 3/8 serial with `-j 1`; a one-test scratch package 5/8, and 2/8 outside the tool sandbox), with `-plugin-path …/host/plugins/testing` on the command line. `-Xswiftc -load-plugin-library -Xswiftc …/plugins/testing/libTestingMacros.dylib`: scratch 12/12, repo 10/10. `build.sh` had piped `swift test` into `grep … \|\| true`, which hid both this and any real failure. |
+| THE 4 S LINE SAW ONLY TIMEOUTS: agent.log's `took N s` line (0.2.7-0.2.8: the whole check timed against 4 s) shows a stalled server | **WRONG** (CODE-REVIEW 2026-10-11 (3), finding 2) | 4 s is the `players` request's own timeout (`URLRequest(timeoutInterval: 4)`), and a known server's check is that request plus `status`: only a request with no answer (4.00x s), or two slow ones, could cross it. A late answer (2-4 s, outlasting the 2 s tick: the stall rule's own case) wrote nothing; anti-run of 0.2.8's `LMSCheckLog`: answers of 2.6 and 3.4 s gave only "LMS: using …". And a run ended by the discovery after a timeout was written as "LMS checks of no server back under 4 s …, the slowest 4.0 s". Fixed: the server's answer time, over 2 s, one server per run. |
+| A NEW ALBUM'S FLUSH CLEARS THE MARK: the delay mark a stop inside the open left set (CODE-REVIEW 2026-10-11 finding 3) reaches the next album | **NARROWER than logged** (scenario matrix on the 0.2.5 copy, 2026-10-11) | LMS starts every album with strm q, and `output_flush` clears `delay_active` unless the output is OFF. A stop, then another album, cleared it: no such scenario lost the first half on 0.2.5. Only with the idle release between the stop and the next album (strm q while OFF) did the mark survive to a later gapless rate change, which then lost its first half: 84 matrix failures on 0.2.5, all 84 with the idle release between. The 2026-10-11 named test skipped the album's strm q; its fix stands. |
+| THE MATRIX IS FRAME-EXACT BUT ONE: the scenario matrix gives the same frames run to run, so a `MATRIX_SIG` diff between two builds is the change | **NARROWER** (CODE-REVIEW 2026-10-11 (4), 2026-10-11) | 3 parallel runs of one build: identical in all 26,250 scenarios. 0.2.10's first run differed from its next two in ONE: 7869, a synced start of DSD64 after a 48k device with a 200 ms rate delay, its music one IOProc call later (99 vs 100 segments, same music frames); serially (`MATRIX_ONE=7869`) 8 of 8 runs alike on both builds. A difference in a synced start: rerun before reading it as the build's. **NARROWER STILL (CODE-REVIEW 2026-10-11 (5)):** with the signature hashing every sample, two parallel runs of ONE build differed in 34 scenarios, and that build against 0.2.10 (the same machine code) in 37; all 51 are synced starts (of 170), every difference in the segment structure (none hash-only, so the hash adds no noise). Replayed serially, 3 runs each: 0.2.10 differed from itself in 13 of the 51. So a synced start can slip a call even alone, more under load. A difference there is the build's only if MATRIX_ONE reruns of both builds never give the same output; no other scenario has ever differed run to run. |
+| AN ABSENT DEVICE AT START EXITS THE ENGINE: the engine starts while its device is away and waits for it (REVIEW 2026-10-10 finding 7, `volume_pending`) | **ONLY WITH -r** (upstream `output.c`, read 2026-10-11 while linking it into the suite) | `output_init_common` calls `test_open` unless `user_rates`, and `exit(1)`s when the device is absent. `-r` sets `user_rates`, and the agent passes `-r` only with a rate delay (`EngineArguments`). So with the default settings an engine started in the probe-to-start window exits at once and the agent starts it again; the absent-at-init path (and its tests, which now pass `-r`'s rates) needs a rate delay. Finding 7's fix stays; no writer changes. |
+
+### B. KNOWN-OPEN AND ACCEPTED — do not re-report as new
+
+- **ONE PLAYER PER DAC — PARKED 2026-10-10, not started** (Simon: "is it possible that multiple
+  dacs connected could be seen as multiple players each with their own mac address and have unique
+  name based on the dacs connected?"). Feasible: one engine per device, each with its own `-o`,
+  `-m`, `-N` and `-f`; the engine needs no change. Simon's answers:
+  - today's player stays exactly as it is, and a "More players" list adds one per device (on/off
+    plus a name), off by default;
+  - the default name is the DAC's name only;
+  - when the main player follows the macOS output and that output is a DAC with its own player,
+    the main player uses the built-in output.
+
+  Identity per player is keyed by device UID. Measured 2026-10-10: the DragonFly's UID carries its
+  USB serial (`AQDFBL0100009556`), not its port (locationID 0x1100000), so a port change keeps the
+  player; the FiiO's (`…:3fa90f5:1`) is unchecked. The design keeps the rules in PlayerCore as
+  pure functions:
+  - `mainDevice`;
+  - `extraAssignments`;
+  - `EnginePlan`, with stops before starts;
+  - a per-player volume sender, because the one `LatestValueSender` would drop another player's
+    push.
+
+  The agent holds one `EngineSlot` per player. Until built, "only one player per Mac" is not a
+  finding.
+
+- **Simon installed LyrionPlay himself with install.sh** (2026-10-09). This was the first real run
+  on a login keychain, and the first run of INSTALL.md. It worked: "LyrionPlay Signing" was
+  created in his keychain with no prompt reported, the player connected as "prodmac46" on the
+  MacBook Pro speakers, and later `build.sh --install` updates reused the certificate.
+- **Not yet confirmed on the new install:**
+  - the Settings window: USED by Simon (agent.log 2026-10-10 08:53:49Z "settings changed:
+    restarting the engine for AudioQuest DragonFly Black v1.5", his move to the DragonFly), so it
+    opens and saves; its other controls are unseen;
+  - ⌘Q with the panel open (`A SHORTCUT QUIT THE MENU`);
+  - Quit stopping the player;
+  - the icon in a real menu bar.
+- **A fresh install means a new MAC address, so a new LMS player** named after the Mac. That
+  player needs "Output level is fixed at 100%" again, for the FiiO.
+- **GitHub:** Simon created https://github.com/SimonArnold002/LyrionPlay (public, 2026-10-09).
+  The local folder is not a git repository. README.md (credits squeezelite's Adrian Smith and
+  Ralph Irving, as Simon asked), LICENSE (MIT, CrystalGipsy, excluding engine/), INSTALL.md,
+  NOTICES and UPSTREAM.md name the repo as the source.
+  - GitHub API, 2026-10-10: the repo holds one file, `README.md` (pushed 2026-10-09 23:36Z), and
+    has no releases; Pages is switched on (`has_pages: true`).
+  - So README's "latest release" link and INSTALL's "its source code … is at github.com/…" line
+    describe the state at the first release. Known, not a finding: no binary has been
+    distributed.
+- **Built but UNVERIFIED:** the App Translocation guard in `setOn` (refuses On from an
+  `/AppTranslocation/` path).
+- **Not yet measured:** a plain logout/login (a restart is VERIFIED, `THE MENU AND THE PLAYER ARE
+  TIED`); `pmset -g assertions` during playback; whether a
+  rename made in the app's Settings reaches LMS (the name file is rewritten and the engine
+  restarted).
+- **Review after 0.2.2 fixes (findings 1, 3 and 4): INSTALLED as 0.2.3** (Simon: "install and test on
+  my dacs", version up yes, 2026-10-10 10:28Z; agent.log "LyrionPlay 0.2.3 (202610101128)", connected).
+  1 and 4 VERIFIED LIVE on 0.2.5, below.
+  - **4 MEASURED LIVE, FiiO, 2026-10-11 10:06:41 local** (Simon: "do it"; LMS 27, PCM; the stop came
+    from the agent's own path, a log-level change, toggled back to info after: settings JSON-identical):
+    `slimproto stop` 41.415 → monitor `output on` 41.485, exclusive taken, `device rate 44100` 41.499 →
+    `close output` 41.639, WHILE the monitor was starting the device → `opened FiiO M11 Plus at 44100`
+    42.235 → close then stopped it, `exclusive mode released` 42.274 → new engine `init output` 42.343.
+    The monitor had passed its `running` check, so its "start nothing" branch did not fire; close's
+    wait for `monitor_opening` did: 0.6 s, then a clean stop and release BEFORE the buffer was freed.
+    No crash report (DiagnosticReports: 0 squeezelite before and after), no SIGKILL by the agent.
+    That later moment was not in the suite: added "close while the monitor starts the device stops it"
+    (hook `during_next_start` in the fake AudioDeviceStart); FAILED on the old close ("the device runs
+    after close (0 at return, 1 after)"), passes now; engine output 26/26, all suites PASS. Test-only
+    change: the installed 0.2.5 engine is the code that was verified.
+  - **How to time it, for a rerun:** the agent re-probes devices (`squeezelite -l`) before it stops the
+    engine, so the stop signal lands ~0.6 s after the tick and `close output` ~0.8 s after; the tick
+    is visible as status.json being rewritten every 2 s. Write the setting before the tick, play AT
+    the tick. The play must be from idle (wait for status `exclusive` false): after an engine restart
+    LMS restarts the stream on the new engine, so the device is open again until the idle release.
+    (5 earlier attempts missed on these two points; the script was a session scratch file, not kept.)
+  - **1 MEASURED LIVE, 2026-10-11 09:00 UTC** (Simon: "yes" to the plan). LMS answers in ~30 ms, so the
+    race was staged: a stand-in LMS on 127.0.0.1:9000 only (a session scratch script, not kept; stopped
+    by its captured PID) held each `players` reply 3 s. Server set to `127.0.0.1` → status adopted it
+    (9.4 s). The next check of it ARRIVED at 15.27 s; the server was set back to automatic at 15.29 s;
+    the agent's tick saw it at 17.58 s (status serverName None); the held reply landed at 18.28 s,
+    AFTER the change: the race. It was dropped: status stayed None, then "Simons Music" at 23.43 s, and
+    the stand-in got NO further request in the 22 s that followed (the old code would have readopted
+    it at 18.28 s and checked it every ~6 s for good). settings.json identical to before (JSON compare);
+    LMS: prodmac46 connected again. No sound; the player was off the real LMS for ~16 s.
+  - **3 MEASURED LIVE on the DragonFly, 2026-10-10 11:29-11:32 local** (Simon chose the DACs and LMS
+    volume 27; local FLACs: The Roots "!!!!!!!" 44.1k, track 816519; Johanna Warren ":/" 48k, track
+    798330; each ~7 s, then 40 s idle so the DAC was released; player checked stopped before each):
+    - decoder first, 44.1k → 48k (11:32:02): ONE `device rate 48000`, one `opened … at 48000 Hz`, 0.74 s
+      after `output on`. The fix works.
+    - monitor first by 72 ms (11:30:28, 44.1k → 48k) and by 10 ms (11:31:15, 48k → 44.1k): opened at the
+      last rate, then reopened, as before the fix: +0.73 to +0.77 s.
+    - the cost is the DragonFly relocking inside the open after a rate change (~0.73 s; `set_rate`
+      itself reports 10 ms); an open with no rate change took 0.13 s (11:29:41).
+    - so the decoder is first in about half the plays (2 of 4 here; 4 of 4 in the morning's log).
+- **RATE DELAY STRETCHED AT PLAY — FOUND 2026-10-11 in my own TWO RATE SWITCHES fix; FIXED the same day,
+  INSTALLED as 0.2.5 (Simon: "build and install it then test", version up yes; 08:54Z) and VERIFIED LIVE**
+  (Simon asked what the fix would cause for a listener). Default and Simon's setting are 0 ms (FiiO
+  `rateSwitchDelayMs: 0`, the DragonFly unset), so NO effect on the rig as configured.
+  - With "Silence on a rate change" N ms (Settings stepper, 0-2000), output.c plays N/2 BEFORE the switch,
+    counted as `current_sample_rate * N / 2000` frames, and N/2 after. The fix now opens the device at
+    the NEW rate first, so that first half is counted at the old rate but played at the new one: it
+    lasts N/2 x old/new. A play from idle after a higher-rate track is stretched: 96k -> 44.1k x2.2,
+    192k -> 44.1k x4.4, 384k -> 44.1k x8.7 (N = 2000: ~8.7 s of silence before the music, where 0.2.2
+    took ~2.8 s in all). Going up (old < new) it shrinks, and the silence after the real switch stays
+    >= N/2, as before. The DSD delay (`dsd_delay`) is the same mechanism but the agent passes `-D`
+    with no value, so it is 0.
+  - Fix: when `_ca_open` opens at a pending track's rate that differs from `current_sample_rate` and a
+    delay will apply (`_start_delay()`, which mirrors output.c: the rate delay on a rate change, the
+    DSD delay on a format change), it sets `output.delay_active = true` ("the first half is done: the
+    switch happened in the open"). The track start then plays only the second half, N/2 counted at the
+    new rate: the old code's silence after the switch, with no stretched first half.
+  - `delay_active`'s other users: output.c's track start consumes it (the pending track's, the one
+    `_start_delay` was computed for); `output_flush` clears it on a stop or a new stream while the
+    device is open. A same-rate open (no switch) never sets it, so a DSD format change at one rate keeps
+    both halves.
+  - Tests: the fake `_output_frames` now carries output.c's delay rule (output.c:129-150) and counts
+    the silence in seconds at the device's rate. "the rate delay is not stretched on a play from idle"
+    (96k -> 44.1k, 2000 ms: 1.00 s; FAILED without the fix at 3.18 s) and control "the rate delay at a
+    gapless boundary is both halves" (1 s before the switch, 1 s after; passes on both). Engine output
+    25/25, full suite PASS.
+  - **MEASURED LIVE on the FiiO, 0.2.5, 2026-10-11 09:55-09:56 local** (Simon agreed: the FiiO's
+    "Silence on a rate change" set to 2000 ms for the test, engine `-r …:2000`, then put back to 0;
+    settings.json byte-for-byte the same as before by JSON compare; LMS 27, PCM only): George Harrison
+    "It's Johnny's Birthday" 192k (track 795396) from idle after 44.1k: rate found after 90 ms, one
+    switch, then only `pause 192000 frames` (1.0 s at 192k) after "track start", no first half. The
+    Roots 44.1k (816519) from idle after 192k: one switch, then only `pause 44100 frames` (1.0 s). 0.2.4
+    would have played `pause 192000 frames` at 44.1k first: 4.35 s more.
+- **TWO RATE SWITCHES AT PLAY, THE WAIT — DECIDED by Simon 2026-10-10 ("Add the wait"), INSTALLED as
+  0.2.4 2026-10-11 08:25Z, MEASURED LIVE (below).** The decoder sleeps up to 100 ms between runs (`decode.c:116`) and the off poll is 100 ms,
+  so which sees a play first is timing: the live test showed the monitor first in 2 of 4 plays. My
+  first build (0.2.3) opened at once when the rate was not yet known (no added time); Simon chose a
+  capped wait instead, with the numbers in front of him: saves ~0.7 s when the rate differs, costs up
+  to ~0.1 s when it does not.
+  - `monitor`, after its loop, on every path to an open: while the output is `OUTPUT_BUFFER` (a play)
+    and `_track_pending()` is false, it looks every `TRACK_WAIT_US` (10 ms) up to `TRACK_WAIT_POLLS`
+    (15, so 150 ms), logging "track rate found/not found after N ms". A resume (`'u'`, straight to
+    running) does not wait. First placed inside the off branch, where a monitor already on its
+    device-available path skipped it (the new test caught it).
+  - Tests "a play waits for the decoder and switches the rate once", "a play the decoder is slow for
+    opens after 150 ms, as before" (both FAILED with the wait disabled, at 44100 Hz, as live), control
+    "a resume does not wait". Suite: engine output 23/23 (four runs), all suites PASS.
+  - After close the loop exits on `running` before touching the buffer (`outputbuf` is a static
+    struct, `output.c:30`), as the off poll already did.
+  - **MEASURED LIVE on the DragonFly, 0.2.4, 2026-10-11 09:26-09:29 local** (same test as 0.2.3: Simon
+    chose the DragonFly in Settings, volume 27, alternating 44.1k / 48k from idle): the monitor saw the
+    play first in ALL 4; it waited 10, 50, 10, 50 ms, logged "track rate found", and each play had ONE
+    `device rate` and ONE `opened` line. `output on` to open: 0.76, 0.83, 0.78, 0.80 s.
+  - **CORRECTION to the saving quoted to Simon ("~0.7 s when the rate differs"):** it holds only when
+    the DAC is at NEITHER the last track's rate nor the new one: the first play after the engine starts
+    (`current_sample_rate` is the 44.1k default, the DAC wherever macOS or another app left it: the
+    morning log's FiiO and DragonFly plays were both right after an engine restart), or after another
+    app changed the DAC's rate while it was released. Then the old code relocked twice (+0.73 s; if
+    the DAC was already at the track's rate, +~1.4 s against none). In steady state the DAC sits at the
+    last track's rate, so the old code's first open was cheap (0.08 s, no relock) and its reopen the
+    one relock: 0.2.3's monitor-first plays took 0.86 s from `output on` to the reopen, against 0.80-0.83
+    s here. So steady state gains ~0.03-0.06 s, and a same-rate play the monitor sees first pays the
+    wait (10-50 ms measured, 150 ms cap) with nothing to gain. Told Simon; his call whether the wait stays.
+  - **MEASURED LIVE on the FiiO M11 Plus, 0.2.4, 2026-10-11 09:34-09:37 local** (Simon: "fiio is ready";
+    engine restarted for it at 08:34Z, so `current_sample_rate` was the 44.1k default and the FiiO sat at
+    48k; LMS 27 as software gain, the FiiO has no Mac volume control): 48k FIRST, the after-restart case:
+    NO rate change at all, opened at 48000 Hz 0.10 s after `output on` (0.2.2/0.2.3 would have relocked to
+    44.1k and back, as the 09:53:07 FiiO play on 2026-10-10 did: 1.49 s). Then 44.1k, 48k, 44.1k: ONE
+    `device rate` and ONE `opened` each, 0.76, 0.77, 0.77 s. The monitor was first in all 4 (waits 20,
+    20, 30, 30 ms); 8 of 8 across both DACs on 0.2.4.
+  - **DSD MEASURED LIVE on the FiiO, 0.2.4, 2026-10-11 09:45-09:48 local** (Simon: "test for DSD"; FiiO knob
+    turned down first, since DoP plays at full scale and ignores LMS volume): DSD64 "Factory Girl"
+    (track 827020) from idle after 44.1k: "DSD64 stream, format: DOP, rate: 176400Hz", track rate found
+    after 70 ms, ONE `device rate 176400`, one open; Simon: the FiiO "showed dsd" (DoP lock VERIFIED). DSD256 Carmina Burana "Dulcissime" (827002): "DSD
+    sample rate too high for device - converting to PCM", "resampling from 1411200 -> 352800", found
+    after 30 ms, ONE `device rate 352800`, one open: the pending rate is the resampler's output, as it
+    must be.
+- **`REVIEW 2026-10-10` fixes: INSTALLED as 0.2.1 (2026-10-10), plus the `REVIEW OF THE FIXES` fixes in 0.2.2; not yet live-tested.** Proven by the suite against fakes, plus the HAL probes in §A3. Still to see on
+  the real thing, each needing Simon (sound, or his settings):
+  - "Follow the macOS output" with the FiiO as the macOS output and exclusive on: the first track
+    stays on the FiiO (agent.log "staying on it until it lets go"), and choosing the speakers
+    while it plays moves the player only after the idle release;
+  - a server typed as a qualified name reaching LMS from the real agent;
+  - a menu-only `install.sh` update leaving the NEW menu running;
+  - a DAC held by Audirvana/Roon: engine.log says why on tries 1-3, then every 5 minutes; play
+    starts within 5 s of the other app letting go;
+  - resume after a pause longer than 30 s on a `-V` device (the DragonFly): the level is LMS's;
+  - Mac volume keys before the first track on a fixed-volume player: agent.log "not sent".
+
+### C. CLOSED FINDINGS
+
+Each entry records that a defect, as described, was fixed. It does not cover the code written to
+fix it (see HOW TO LOG).
+
+- **CODE-REVIEW 2026-10-11 (5) — /code-review of the tree after round 4** (Simon: "lets do a code
+  review of LyrionPlayer", then "fix the toolings"; scope by file times, diffed against session
+  copies of 0.2.8-0.2.10). NO finding in the engine or the agent: round 4's `#if DSD` guard compiles
+  under `-Wall` either way, the reverted finding 1 left nothing behind, the `End` cases pair with
+  `ServerChoice.checked`. Four in the test tooling, ALL VERIFIED + FIXED, each anti-run against a
+  copy of the old file. After: `scripts/test.sh` PASS. Test-only: NOT built, NOT installed (the
+  installed app is 0.2.10, and so is the engine source, `#if DSD` aside).
+  1. **`matrix()` counted a scenario whose `fork()` failed** — VERIFIED with every 100th fork failing
+     EAGAIN (a scratch copy each): the old runner lost 256 scenarios (25,434 signatures of 25,690),
+     judged on a `status` `waitpid` never set (ECHILD matched the pid -1 slot); here they read as
+     failed, but a 0 there passes them. FIX: a failed fork closes its pipe and is not counted (retried
+     when a child exits); `waitpid` <= 0 waits 100 ms and loops. Fixed copy: 25,690 of 25,690, 0 failed.
+  2. **`scripts/test.sh` called a failed conversion suite "died first"** — VERIFIED with a stand-in
+     suite printing the conversion summary and `result: FAIL`: old "no summary line: it died first",
+     now the `conversion: …` line. FIX: `^conversion:` in both patterns.
+  3. **`write_sig` silent on a failure; `MATRIX_ONE` wrote none** — VERIFIED: `MATRIX_SIG` naming a
+     missing directory, the old suite PASSED with no file written; `MATRIX_ONE` wrote nothing. FIX:
+     `sig_dir_ok` fails the matrix first; a file that cannot be written (or a path too long, a write
+     error at `fclose`) fails its scenario with "signature not written: <path>: <reason>" (tested with
+     a directory in the file's place); `MATRIX_ONE` writes its signature.
+  4. **The signature could not show a changed frame** — it held run, rate, kind, length, tail and off
+     per segment. FIX: the track (`#N`) for music and an FNV-1a hash of every sample's bits
+     (`seg.hash`, kept by `record`). Run on the current engine and on 0.2.10: every difference was a
+     synced start's timing (`THE MATRIX IS FRAME-EXACT BUT ONE`, corrected), none hash-only; and the
+     two compile to the same 4,480 instructions (`otool -tV`, `-DDSD -O2`), differing only in log
+     `__LINE__` constants moved by round 4's comments. Round 4's "frame for frame" CORRECTED there.
+  - **Dropped at the gates:** the file header and OFF comment say silence "in `_silence_fmt`'s
+    format", which exists only under `#if DSD` (no writer: `Makefile.coreaudio` always sets `-DDSD`;
+    and `SILENCE FORMAT IS NOT A FINDING`); LMS-check log lines that differ only with a late answer
+    (`A STALLED SERVER IS NOT A FINDING`).
+
+- **CODE-REVIEW 2026-10-11 (4) — /code-review of 0.2.9-0.2.10** (Simon: "lest code review lyrionPlayer";
+  not a git repo: scope by file times, diffed against session copies of 0.2.8 and 0.2.9). Five findings,
+  then Simon: "verify all, test 1 is an issue then fix and test". ALL 5 VERIFIED; 2-5 FIXED; 1 fixed,
+  then REVERTED on Simon's decision (`SILENCE FORMAT IS NOT A FINDING`). Gates: none in the index, §A3
+  or §C; none version-dependent. After the revert the engine differs from 0.2.10 only by finding 2's
+  guard and finding 5's comments, and plays frame for frame as 0.2.10 (`MATRIX_SIG` diff against a
+  0.2.10 copy: 25,690 scenarios, 0 differ) [CORRECTED by `CODE-REVIEW 2026-10-11 (5)`: that signature
+  held each segment's run, rate, kind and length, not its track or samples, so it proved the same
+  segments, not the same frames. The claim stands on other evidence: the compiled engine is 0.2.10's
+  instruction for instruction]; `scripts/test.sh` PASS (engine output 41/41 with the
+  matrix; swift 55 tests in 15 suites; install.sh 3/3); compiles with and without DSD under `-Wall`.
+  NOT built, NOT installed: the installed app is 0.2.10.
+  1. **`ca.track_rate`/`ca.track_fmt` outlived the idle release** (engine) — VERIFIED in the fake HAL
+     only. After DSD64 and the idle release, a 176.4k PCM album from idle stopped inside the open or
+     while it buffered got DoP silence after the stop (the first a 0.2.9 change, the second older).
+     On the rig it needs a 176.4k PCM stream after DSD64 (not sold), or DSD128 then DSD256, and a stop
+     in that window; the effect is DSD silence while nothing plays. Two fixes were built: (a) the
+     record started afresh at an open of a closed device, (b) set by a track due at the device's
+     rate. (a) alone changed 88 scenarios for the worse, found only by a frame diff of every scenario
+     against 0.2.10 (`MATRIX_SIG`, added for it, kept). Then Simon: "look at the DSD playback
+     properly. Test in all scenarios via the DAC to see if they really are a problem", the DAC test
+     below, his own test ("Ive tested myself swithcing to pretty much most formats no silence its not
+     needed"), and the decision: REVERTED; its tests, matrix invariants 9-10 and `I_PAUSE_IDLE`
+     removed.
+     - **DAC TEST, installed 0.2.10 run by hand with `LYRIONPLAY_TAP`, FiiO, 2026-10-11 21:10-21:29
+       local** (Simon: FiiO, installed 0.2.10). Run 1, A1-A4 (DSD64, idle release, then 44.1k; 44.1k
+       stopped in the open; DSD256 as 352.8k PCM; DSD256 stopped in the open): every open as expected;
+       the tap held music from frame 0 at the right rates, DoP silence to each close after DSD, zeros
+       after the PCM stops (A2 is round 3's case: zeros, PASS). Simon heard NONE of it, though the
+       FiiO took every frame (the HAL clocked the IOProc throughout); his own DSD256 play at 21:17
+       through the same engine was heard. Run 2: the FiiO dropped off USB at 21:21:27, 2.4 s into
+       44.1k after DSD64 and an idle release (macOS: USB-C CC detach, "FiiO M11 Plus: hardware
+       connection lost"; no USB error before it; coreaudiod and usbaudiod kept their PIDs) and came
+       back at 21:23:26; Simon: not unplugged. It dropped the same way at 17:22:37, after the 0.2.9
+       live test. NOT INVESTIGATED (Simon: "can we just get on and test the dac leave investigating
+       this"). The hand-run engine does not notice a device that vanishes while open (no IOProc, still
+       "open"); the agent does (`AudioDeviceWatcher` stops the engine, starts one when it is back).
+  2. **`dsd_format track_fmt` outside `#if DSD`** (engine) — VERIFIED: 0.2.10 without `-DDSD` stops
+     at "unknown type name 'dsd_format'". FIX: the field under `#if DSD`, its writes `IF_DSD`; the
+     file compiles with and without DSD, no warning under `-Wall`. Only `Makefile.coreaudio` builds
+     the engine (it always sets DSD), so no shipped build was affected.
+  3. **`Duration.seconds` extension** (PlayerCore) — VERIFIED: the standard library's
+     `Duration / .seconds(1)` gives the same 2.6 and 4.003. FIX: the extension and its test
+     `durationsAreSeconds` removed; `refreshLMS` divides.
+  4. **`ended(_:found:answer:took:)` took both times** (PlayerCore) — VERIFIED: a kept check read
+     only `answer`, a dropped one only `took`. FIX: each `End` case carries its own
+     (`.kept(answered:answer:)`, `.dropped(began:now:took:)`); `ended(_:found:)`.
+  5. **The OFF-branch comment** (engine) — VERIFIED: OFF lasts until slimproto acts on the reopen
+     (one IOProc call or more), and `aude` (power off) sets OFF while a track buffers, so the silence
+     can be a pending track's. FIX: the OFF comment and the file header.
+
+- **CODE-REVIEW 2026-10-11 (3) — /code-review of 0.2.8** (Simon: "lets do another /code-review";
+  scope by file times since the 0.2.7 install, diffed against a session copy of 0.2.7). Six findings.
+  Then Simon: "verify and fix, we seem to be gettig repeated regessions with the rate change and
+  silence, we need to be more thorough here". ALL 6 VERIFIED + FIXED. Gates: none in the index or §A3, none version-dependent; 2-4 are about the
+  agent.log lines (the round (2) class), not a stalled server: their writers are a server that has
+  gone (4 s timeout) and Mac sleep. After: `scripts/test.sh` PASS (engine output 40/40 with the
+  matrix, 3 runs; swift 56 tests in 15 suites; install.sh 3/3); the agent builds (its one warning is
+  the known `SendableClosureCaptures`).
+  - **INSTALLED as 0.2.9, 2026-10-11 15:53Z** (Simon: "yes" to version up and install; 0.2.8 -> 0.2.9
+    with `bump-version.sh patch`; `build.sh --install`, suite PASS inside it; `prodmac46` checked
+    connected and stopped first). install.sh: "version 0.2.9 (was 0.2.8)"; agent.log "agent started:
+    LyrionPlay 0.2.9 (202610111653)", the engine restarted on the FiiO (`output_init_coreaudio:1309`,
+    the new source's line; 0.2.8's was 1295), then ONE "LMS: using Simons Music (192.168.1.234:9000)";
+    LMS: prodmac46 connected. NOT live-tested: a late LMS answer (needs a stalled server: not staged,
+    as decided).
+  - **Finding 1 VERIFIED LIVE on the FiiO, 0.2.9, 2026-10-11 17:12-17:13 local** (Simon: "test it",
+    player prodmac46 on the FiiO). The agent booted out; the INSTALLED engine run by hand on its
+    agent.log arguments plus `LYRIONPLAY_TAP`; playback by a session script over LMS JSON-RPC (mode
+    checked before each command); the agent re-bootstrapped after, engine on its normal arguments,
+    prodmac46 connected, the queue (The Roots 816519) as before. DSD64 (827020) played 29 s and was
+    stopped; the idle release 30.5 s later ("output off", `err = true`, so `error_opening` set);
+    then 44.1k (816519) from idle, with `stop` sent on the `device rate 44100` line: flush at
+    22.534, INSIDE the open (device rate 22.517 -> opened 23.223), no track start. That flush reset
+    `current_sample_rate` to 44100 (the FiiO's default: `output_init_common` prefers 44100) with
+    `outfmt` still DOP, which is 0.2.8's DoP-silence case exactly. TAP at 44.1k: 624,640 of 624,640
+    frames PCM zero. PASS. (No live anti-run: a 0.2.8 binary would be a new executable, and Local
+    Network approval is per executable. The suite's test is the anti-run: it fails on 0.2.8.)
+    The DSD64 tap: DoP from frame 0, DoP silence (0x69) from the stop to the release.
+    - **THE IDLE RELEASE'S LAST CALL WAS ZERO — seen there, FIXED 2026-10-11 (Simon: "fix it"),
+      INSTALLED as 0.2.10 2026-10-11 18:33Z** (Simon: "yes" to version up and install; prodmac46
+      checked stopped first; `build.sh --install` suite PASS inside it, "version 0.2.10 (was
+      0.2.9)"; agent.log "agent started: LyrionPlay 0.2.10 (202610111933)", engine restarted on the
+      FiiO at `output_init_coreaudio:1318`, the new source's line (0.2.9: 1309), ONE "LMS: using
+      Simons Music"; prodmac46 connected). **VERIFIED LIVE on the FiiO, 0.2.10, 2026-10-11
+      19:35-19:36 local** (Simon: "live test", player prodmac46 on the FiiO; the same rig as the 0.2.9
+      test: agent booted out, the installed engine by hand with `LYRIONPLAY_TAP`, mode checked before
+      each command, the agent re-bootstrapped after, prodmac46 connected, queue The Roots as before).
+      DSD64 (827020) 10 s, stop, idle release: the 176.4k tap holds NO zero frame (1,772,025 DoP
+      music, 5,328,903 DoP silence), its last frames DoP silence (05/FA over 0x6969) to the close
+      (0.2.9: the last 512 zero). Then 44.1k (816519) from idle, `stop` on `device rate 44100`: flush
+      at 56.106 inside the open (56.082 -> opened 56.778), and the 44.1k tap 1,324,544 of 1,324,544
+      frames zero to the second release: finding 1 again, and the PCM half (zeros to the close). PASS.
+      Before the fix: the LAST IOProc buffer before the idle release
+      (512 frames, 2.9 ms at 176.4k) was PCM ZEROS after DoP silence. At `OUTPUT_OFF` the IOProc
+      skipped `_output_frames` and left its zeroed buffer, then asked for the close. Upstream's
+      PortAudio callback still calls `_output_frames` at OFF (`output.state <= OUTPUT_BUFFER` gives
+      silence, in `outfmt`: DoP silence), then `paComplete`. So a DoP DAC got 2.9 ms of markerless
+      data at the very end of every idle release after DSD (and an LMS power-off after DSD). Not a
+      regression: the OFF guard predates the reviews. The matrix exempted it through `boundary_pad`
+      (a call that asks for a reopen may pad its tail with zeros), written for the rate-change pad,
+      where upstream pads zeros too. Simon heard nothing wrong in the 0.2.6 DSD tests, each of which
+      went through this release.
+      FIX: at OFF the IOProc calls `_output_frames` (off, it plays only silence: no track start, no
+      fade, no frames played; output.c read through), so the silence is `_silence_fmt`'s: DoP
+      silence after DoP at its rate, zeros after PCM. The rate-change pad stays zeros (upstream's
+      too). Carriers checked: the reopen trigger below it unchanged; the tap records what is sent; an
+      LMS power-off with music buffered (`aude`) gets silence, not the music, as before (zeros) and as
+      upstream; gain is not applied to silence. UPSTREAM.md "Updating" lists the OFF rule to re-read.
+      Tests: "the idle release keeps the silence of what played to the close" (DoP half FAILED on the
+      unchanged engine with 512 of 512 zero, the tap's own count; PCM half: control); the matrix
+      records each call's OFF state (`tickinfo.off`) and `boundary_pad` no longer covers an OFF call:
+      unchanged engine 16,784 of 25,690 scenarios FAIL ("zeros after track N (DoP)"), fixed 0.
+      Mutant (OFF always DoP silence): the test's PCM half and 18,400 scenarios FAIL ("DoP silence
+      at a rate no DoP track plays at"). After: `scripts/test.sh` PASS (engine output 41/41, swift
+      56, install.sh 3/3).
+  1. **`_silence_fmt` after a flush from idle** (engine) — VERIFIED by test through upstream's real
+     `output_flush`: after DSD64 and the idle release (`error_opening`), a stop inside the open, or
+     before the monitor's look, left the device at 44.1 kHz with `current_sample_rate` reset to the
+     default and `outfmt` still DOP: 512 of 512 frames DoP silence (tests "a stop inside / before the
+     open after DoP leaves PCM silence"; they also fail on 0.2.5 and 0.2.7: older than round 1's fix).
+     Writer: a stop, next or new album inside ~100-250 ms of a play from idle after a DSD track. FIX:
+     the IOProc records the rate and format of each track start output.c takes (`ca.track_rate`,
+     `ca.track_fmt`; `track_start` going NULL inside the locked `_output_frames` call) and
+     `_silence_fmt`'s second rule reads that, not `current_sample_rate`/`outfmt`. No other reader of
+     the pair changed (`_write_frames`' music, `_start_delay`, `_rate_ok`, `_mark_switch_done` keep
+     output.c's own state, as upstream).
+     - **Seen while there, not changed (upstream's own, as PortAudio):** with a rate delay set, the
+       same reset makes output.c see no rate change for that album, so it gets no delay silence
+       although the DAC switched at the open. Writer: "Silence on a rate change" > 0 (off by default
+       and on the rig) plus that ~250 ms window.
+  2. **A run ended by another target; the 4 s line** (agent) — VERIFIED (anti-run of 0.2.8's
+     `LMSCheckLog`, the new tests' sequences): see `THE 4 S LINE SAW ONLY TIMEOUTS`. FIX: the time is
+     the server's answer to the players and status requests (not discovery's 2 s wait), slow over 2 s
+     (`slowAnswer`, the tick); a run belongs to one server (another, or none, ends it unsaid, as a
+     setting change does); "back under 2 s". Tests `aLateAnswerIsLogged`,
+     `aServerGoneIsItsSlowLineAndDidNotAnswer`, `aRunEndsUnsaidWhenAnotherServerIsChecked` (all three
+     differ on 0.2.8). A typed host that does not answer is now "took 4.0 s" (the request), not 6.0.
+  3. **Sleep and a busy main queue counted as LMS time** (agent) — VERIFIED in part by a probe: a
+     50 ms check finishing while the main queue was busy 3 s measured 3.01 s the old way (Date after
+     the hop), 0.06 s the new (`SuspendingClock` in the task). The sleep half rests on
+     `SuspendingClock`'s documented behaviour (it stops while the Mac sleeps), not measured (no sleep
+     of Simon's Mac). Structure keeps the agent on it (the timing is in `refreshLMS`'s task); test
+     `durationsAreSeconds` pins only the conversion. [Removed in CODE-REVIEW 2026-10-11 (4): the
+     standard library's `Duration / .seconds(1)` does it.]
+  4. **The control at took 4.0** — VERIFIED: with 4.003 (what a 4 s timeout takes) 0.2.8 wrote the
+     false "checks of no server back under 4 s" line the control hid. All tests now use 4.003.
+  5. **The test `flush` without the `error_opening` rule** — VERIFIED, and the root of 1 slipping
+     through, with round (2) finding 4 (another rule missing from the hand-made `_output_frames`).
+     FIX, for the class: the suite links upstream's `output.c`, `buffer.c`, `output_pack.c` and
+     `dop.c` unchanged; the hand copies are gone (fakes left: `dsd_silence_frames`, `dsd_invert`,
+     `next_param`, the clock and log). The staged tests that set `outfmt`/`current_sample_rate` by hand
+     now PLAY the last track through the real path (`play_track`, `idle_release`). All 37 earlier
+     tests pass on the real `output.c`. UPSTREAM.md "Updating" rewritten (run the suite; the rules
+     to re-read, `error_opening` and strm f's `track_start` among them).
+  6. **`End.kept(server:)` + `found`, `named: LMSServer??`** — FIX: `.kept(answered:)`, a `Said` enum,
+     a `Run` struct.
+  - **SCENARIO MATRIX** (the "more thorough" part): `./test_output_coreaudio matrix`, run by the
+    suite. 25,690 scenarios: last track (none, 44.1k, 96k, 176.4k PCM, DSD64, DSD128 as DoP) x the
+    device kept, let go, or let go and moved to 48 kHz by another app x next track x the decoder
+    before the monitor's look, during its wait, or after the open x a stop, a new album, a stop then
+    a new album (with or without the idle release between), a pause, a synced start, at the points
+    before the look / in the wait / inside the open / buffering / playing x rate delay 0 or 200 ms x
+    a gapless follower x a slow stream. Driven by `strm` q/s/p/u as slimproto.c runs them, the
+    monitor gated so an event lands at an exact point. Each frame the device gets carries its track
+    and position; invariants (`check_invariants`), none of which restates the engine's rule: no DoP
+    silence at a rate no DoP track plays at; each track's music only at its rate, in its format, in
+    order, all of it unless stopped; inside a track, after it (to the idle release's close, since
+    the 0.2.9 live test) and before it (once due) its own silence; the delay never longer than set, and both halves between gapless tracks; one rate
+    switch when the decoder was in time; no reopen to a rate nothing then uses. ~10 s on 8 cores.
+    - **It catches every silence/rate bug the reviews found, on the engine that had it:** 0.2.5
+      copy 5,992 failures (round 1's DoP silence at a PCM rate, stretched delay after a flush, the
+      lost first half, the flushed track read as pending; round (2)'s format at the last rate);
+      0.2.7 copy 2,840 (round (2)'s); 0.2.8 1,552, all finding 1 here; fixed: 0. (Counted with the
+      matrix of that day; the idle-release check added after the 0.2.9 live test fails 16,784 on
+      0.2.9 itself, so older copies now fail more.)
+    - **Mutants** (each one rule of the fix or of earlier fixes broken, `OCA_SOURCE`): 10 of 10 fail the
+      matrix on its own (pending first; the lock; the lock by `current_sample_rate`; the delay mark;
+      `_track_pending` without frames; `_rate_ok`'s empty clause; the open at the pending rate; the
+      decoder wait; the IOProc's break at a rate change; and, with the idle-release fix, OFF always
+      DoP silence: 18,400). Three only after adding the moved-DAC gap
+      and the wasted-reopen check, which is why those exist.
+    - **Matrix bugs found and fixed while building it** (none in the engine): a 2 s stall per
+      scenario (the gate waited on a condition no one signalled), a delay bound counted across a
+      flush, a wait-scenario that never decoded its track (now check 0), a reopen check that took the
+      monitor's open after an idle close for a switch.
+  - **Checked and CLEARED (do not re-derive):** *a synced start passes through `OUTPUT_BUFFER`:*
+    no. autostart 0 sets `_sendSTMl`, never `_start_output` (slimproto.c:676-684), and only
+    `_start_output` moves STOPPED/OFF to BUFFER (slimproto.c:723); `strm u` then goes straight to
+    `OUTPUT_START_AT`. The synced-start test's comment is right.
+
+- **INLINE REVIEW 2026-10-11 — after CODE-REVIEW 2026-10-11 (2)** (Simon: "lets do an inline review").
+  Scope: everything that round changed (agent `refreshLMS`/`tick`, `LMSCheckLog`, `_silence_fmt`,
+  `_at_pending_rate`, the test fake, the new tests) plus the docs.
+  - **Stale refs, FIXED:** `scripts/test.sh`'s header did not list the server choice or the log-line
+    suites (`ServerChoosing` was missing since 0.2.5); "the way to see one" lacked round 2's rules
+    (a dropped check is one line and no part of a run; a setting change ends a run unsaid).
+  - **One wording nit, FIXED (my own round-1 text; Simon: "yes"):** "LMS checks of X quick again
+    (N s) …" also ended a run with a quick FAILURE (a stall, then LMS restarting: connection refused
+    in ms), so it read as "answering again" next to the "did not answer" line under it. Now "LMS
+    checks of X back under 4 s (N s), after K slower, the slowest M s". Test
+    `aStallEndingInAQuickFailureSaysUnder4sNotAnswering` (failed on the old text; renamed
+    `…Under2s…` with the 2 s line in CODE-REVIEW 2026-10-11 (3)).
+  - **Checked and CLEARED (do not re-derive):**
+    - *`checkLog` from two threads:* no. The tick timer is on `.main` (`makeTimerSource(queue:
+      .main)`) and a check's completion hops to `DispatchQueue.main`; `settingChanged` and `ended`
+      run on one thread.
+    - *A setting changed and changed back during a check:* `update` calls `settingChanged` twice;
+      the check (begun with the setting in force again) is KEPT, and its line is written because
+      `named` is unset. Correct: it is the first check after a change.
+    - *`_silence_fmt` pending-first while paused or waiting:* `_track_pending` needs `readp ==
+      track_start` AND frames in the buffer. A pause mid-track is not pending, so a DoP track's
+      pause keeps DoP silence (upstream's lock). A pause (`strm p`, with or without an interval)
+      exactly AT a same-rate format boundary now plays the new format's silence: silence either
+      way, and the DAC relocks before the music. An underrun cannot be pending (empty buffer).
+    - *A fallback server (`LMSServer(host:, 9000, nil)`) after a discovered one (name set):* not
+      equal, so one "LMS: using plex (plex:9000)" line on such a flap. It IS a change of what the
+      agent uses, written once; accepted.
+    - *`reopen()` right after `start(…, idle 0)` in "the rate delay between DoP tracks is DoP
+      silence":* `output_init_coreaudio` opens synchronously under the lock with idle 0 (state
+      STOPPED), no monitor, so the two opens cannot overlap.
+    - *The fake's pause frames go to RUNNING in the same call; output.c on the next:* the next call
+      takes the start either way; same frames, same halves (the 2.00 s controls pass).
+    - *The build's one Swift warning, `main.swift:397` "capture of 'self' with non-Sendable type
+      'Supervisor?' in a '@Sendable' closure" [SendableClosureCaptures]:* HARMLESS, and older than
+      this round (0.2.7 has the same `Task.detached { [weak self] … DispatchQueue.main.async { guard
+      let self`). The detached task only carries the weak reference; every `Supervisor` read and
+      write is on the main queue (above). A warning because the package is Swift 5 mode
+      (`swiftLanguageModes: [.v5]`); Swift 6 mode would make it an error. The real fix is
+      `Supervisor` as `@MainActor` (touches the signal handlers, device watcher, volume sender);
+      `@unchecked Sendable` would only silence it. Neither built; not a defect.
+
+- **CODE-REVIEW 2026-10-11 (2) — /code-review of 0.2.6-0.2.7** (the 0.2.6 engine fixes, `ServerChoice`,
+  0.2.7's agent.log lines; scope by file times, no git). Six findings; Simon: "fix 1-4 first verify
+  first before changing code". Gates: none in the index. 1 and 3 are about 0.2.7's log lines, code
+  a fix introduced, not a stalled server (`A STALLED SERVER IS NOT A FINDING` stays as it is).
+  Each fix is pinned by a test that FAILED on the old code (agent: anti-run with 0.2.7's rules
+  copied into `LMSCheckLog`; engine: the unchanged `output_coreaudio.c`). After: engine output
+  36/36 (3 runs), swift 49, `scripts/test.sh` PASS, the engine links.
+  - **INSTALLED as 0.2.8, 2026-10-11 14:15Z** (Simon: "install it", "yes" to version up; 0.2.7 -> 0.2.8
+    with `bump-version.sh patch`; `build.sh --install`, suite PASS inside it; the player `prodmac46`
+    was connected and stopped first). With this round's 5-6 and the inline review's wording fix.
+    agent.log: "agent started: LyrionPlay 0.2.8 (202610111515)", engine restarted on the FiiO
+    (`output_init_coreaudio:1316`, was 1310: the new binary), then ONE "LMS: using Simons Music
+    (192.168.1.234:9000)" at the first check and no further LMS line while checks ran. NOT seen live:
+    a slow server (not staged, as decided).
+  - **LIVE TEST of 0.2.8, 2026-10-11 15:22-15:31 local** (Simon: "test the build", "all of what was
+    changed", "use prodmac dont worry about the queue clear it"; FiiO knob down):
+    - **Findings 1 + 3, VERIFIED LIVE:** settings.json backed up, server set to 192.0.2.1 (TEST-NET)
+      at 14:22:11Z. agent.log in the next 72 s (~11 checks of 6 s): ONE "LMS check of 192.0.2.1
+      (192.0.2.1:9000) took 6.0 s" and ONE "LMS: 192.0.2.1 (192.0.2.1:9000) did not answer" (0.2.7:
+      ~11 "took" lines and no server line). Restored byte-identical (`cmp`): ONE "LMS: using Simons
+      Music (192.168.1.234:9000)" and NO run-end line (a setting change ends the run unsaid,
+      VERIFIED). Player connected again. Side note, not from this round: the engine pointed at
+      192.0.2.1 did not stop on SIGTERM in 3 s and the agent SIGKILLed it (by design, its connect).
+    - **Finding 2, NOT REACHABLE on this rig:** no 176.4k PCM exists in the library (Simon: 176.4k
+      is not a PCM recording rate; 44.1/48/88.2/96/192 are) and no DSD128. Staged instead as a 192k
+      DAC: the INSTALLED engine by hand as prodmac46 on the FiiO, `-r 192000,176400,96000,88200,48000,
+      44100 -Z 192000`, `LYRIONPLAY_TAP`. DSD64 -> DoP 176.4k; DSD256 -> "DSD to PCM output",
+      "resampling from 1411200 -> 176400" (resample.c: the first rate dividing 1411200): the
+      review's same-rate pair, from real albums. Four plays from idle, each after `output off`:
+      DSD64 (827020) after 44.1k; DSD256 (827002) after DSD64 [finding 2]; DSD64 after it [reversed];
+      44.1k (816519) after DSD64 [0.2.6 finding 1]. Each ONE open at the expected rate, decoder
+      first. TAP: music from frame 0 in ALL FOUR (DoP markers with a varying payload, or PCM data;
+      checked raw, not only by the classifier): no buffering silence reached the device, so the
+      silence format did not matter. The window needs buffering to outlast the open: a slow stream
+      or a synced start's wait, neither stageable here with DSD. The fix stands on its tests;
+      no regression in the four from-idle paths. The rig restored after: agent re-bootstrapped,
+      engine on its normal arguments, LMS connected; the queue holds the last test track.
+  1. **A line per check for a server that does not answer** (agent) — VERIFIED by MEASUREMENT: the
+     agent's own `LMSDiscovery.find` + `playerState`, compiled in a session probe, against
+     192.0.2.1 (TEST-NET, nothing answers): 2.00 s discovery + 4 s timeout = 6.0 s, three of three
+     checks; the rig's LMS 0.01-0.04 s. Over the 4 s line every time, and the next check starts at
+     once (began > 5 s ago), so one line every ~6 s until a restart (rotation only at start). FIX:
+     `LMSCheckLog.timed`: the first slow check of a run, and one line when the run ends (count,
+     slowest). Tests `aServerThatDoesNotAnswerIsLoggedOnceNotPerCheck`,
+     `aStallIsLoggedWhereItBeginsAndWhereItEnds`.
+  2. **`_silence_fmt` at the last track's rate** (engine) — VERIFIED by test: `outfmt` was taken
+     whenever the device was at `current_sample_rate`, so a play from idle at the LAST track's rate
+     in the other format waited in the last track's: DoP silence (1024 of 1024 samples) before a
+     176.4k PCM album after DSD64, PCM zeros before DSD64 after 176.4k PCM. The same on a synced
+     start (autostart 0, `strm u`: `OUTPUT_START_AT`, never `OUTPUT_BUFFER`). FIX: the pending track
+     first. Gapless: differs from output.c only inside a DSD delay, whose first half then plays in
+     the new format; NO WRITER (the app passes a bare `-D`, `dsd_delay` 0), so no state gate or DSD
+     delay mark was built. Tests "a play from idle after DoP at its rate buffers in PCM silence",
+     "a play from idle into DoP at the last rate buffers in DoP silence", "a synced start waits in
+     the pending track's format".
+  3. **No server line at start or after a setting change** (agent) — VERIFIED from the code:
+     `self.lms.server != before`, and both the agent's start and `update()` leave the server nil,
+     so a check that found none compared nil with nil. FIX: `LMSCheckLog.uses` compares with the
+     last server it NAMED, unset at start and by `settingChanged()` (called where `update` returns
+     true). Tests `noServerAtStartIsLogged`, `aChangedSettingThatDoesNotAnswerIsLogged`; control
+     `eachChangeOfServerOnce` (passed on both).
+  4. **The fake wrote no pause or start-wait silence** (tests) — VERIFIED: with the old fake the
+     DoP rate delay test read 345 + 690 calls of zeros, and the synced-start test PASSED on the
+     unfixed engine because the fake wrote nothing for `OUTPUT_START_AT`. FIX: the fake sends pause
+     frames (capped at `MAX_SILENCE_FRAMES`, as output.c) and `OUTPUT_START_AT` through `write_cb`;
+     an underrun while running is still not modelled (said in the fake's comment). Test "the rate
+     delay between DoP tracks is DoP silence" (DSD64 -> DSD128, gapless, 2000 ms: both halves DoP;
+     passes on the unfixed engine: it was only the fake). UPSTREAM.md "Updating" lists both.
+  Then Simon: "yes" to 5 and 6 (the same session, verified first again). After: engine output 37/37
+  (3 runs), swift 51, `scripts/test.sh` PASS, the engine links.
+  5. **A slow AND dropped check wrote two lines** (`took`, then `dropped after`) — VERIFIED from the
+     code (round 1 kept it: `timed` ran before the drop was known). FIX: `LMSCheckLog.ended(_:took:
+     found:)` decides all the lines of a check; a dropped check is ONE line with its time and is no
+     part of a run (it checked a setting no longer in force); `timed`/`uses` are private.
+     `refreshLMS` asks `lms.checked` first, then logs. Test `aSlowDroppedCheckIsOneLine` (failed on
+     round 1's flow, copied into `ended` for the anti-run).
+     - **Found while there, in round 1's own code:** `settingChanged()` left a slow run going, so the
+       new server's first quick check wrote "LMS checks of <NEW> quick again … after K" for checks of
+       the OLD one. FIX: a setting change ends the run unsaid (the "LMS: using" line follows). Test
+       `aSettingChangeEndsTheRunUnsaid` (failed on round 1's rules).
+  6. **The pending-rate predicate written three times** — VERIFIED (lines 793, 854, 866). FIX:
+     `_at_pending_rate()` beside `_track_pending` (moved up, the forward declaration gone), used by
+     `_silence_fmt`, `_rate_ok`, `_mark_switch_done`. No behaviour change: 36/36 before and after.
+     The suggested saving of repeated `_track_pending`/`_buf_used` calls was NOT built: they are a
+     few compares, and caching across `_output_frames` (which moves the state) would be a risk for
+     nothing. MUTANT (rate clause dropped, `OCA_SOURCE`): only ONE test failed, and none pinned the
+     silence format while the device is NOT at the pending rate. Test added: "a slow decoder into
+     DoP buffers in PCM at the last rate" (decoder past the 150 ms wait, device opened at 44.1k, DSD64
+     pending: DoP silence there is noise); the mutant now fails two.
+
+- **CODE-REVIEW 2026-10-11 — /code-review of 0.2.3-0.2.5** (the pending-rate open, the 150 ms wait, the
+  `delay_active` fix, `ServerChoice`; Simon: "verify them first then fix and test"). Seven findings.
+  Each fix is pinned by a test that FAILED on the pre-fix `output_coreaudio.c` (anti-run with
+  `OCA_SOURCE`, a session copy) and passes now: engine output 32/32 (5 runs), swift 44 tests, all
+  suites PASS; the full engine links. **INSTALLED as 0.2.6, 2026-10-11 09:39Z** (Simon: "bump and install";
+  player was stopped, FiiO not held; agent.log "LyrionPlay 0.2.6 (202610111038)", LMS connected).
+  1. **DoP silence at a PCM rate** — VERIFIED by test: after a DoP track, a play from idle opened at
+     the PCM track's rate while `outfmt` was still DOP (it changes at the track start, output.c:159;
+     `output_flush` leaves it), so `_write_frames` played `silencebuf_dsd` + markers as PCM for the
+     whole buffering: 0x05/0xFA over 0x6969 = a square wave at Nyquist, about ±0.043 FS (-27 dBFS).
+     1024 of 1024 samples non-zero on the old code. Default settings; DSD->PCM from idle was never
+     tested live (only PCM->DSD). FIX `_silence_fmt`: the format of what plays at the device's rate
+     (`outfmt` at `current_sample_rate`, `next_fmt` at the pending track's, else PCM). Tests "a play
+     from idle after DoP buffers in PCM silence"; "a play from idle into DoP buffers in DoP silence"
+     (the pending DoP track's silence locks the DAC before the music: a choice, zeros on the old
+     code); control "DoP silence at the DoP rate is kept" (upstream's lock, passes on both).
+  2. **The rate delay mark lost on a flush** — VERIFIED by test: the mark was set once in `_ca_open`;
+     a new album picked while the first buffered (strm q: `output_flush` clears `delay_active`) kept
+     the device at the new rate (`buf_flush` puts `readp` back at the start, where the flushed
+     `track_start` still pointed, so `_rate_ok` held), and the next start stretched the first half
+     again: 3.18 s, not 1.00 (96k -> 44.1k, 2000 ms). Only with "Silence on a rate change" > 0.
+  3. **The mark left set with nothing to take it** — the reviewer's path (a track at the OLD rate
+     picked during the open) does NOT occur: `_start_delay()` is evaluated under the relock, live, and
+     is 0 then. The real one: a STOP during the open (no new track yet) leaves `track_start == readp`
+     and the stopped track's rate, so `_start_delay()` was non-zero and the mark was set; the next
+     album at the last rate took no delay, and a later gapless rate change got 0.00 s of silence
+     before the switch, not 1.00. VERIFIED by test in that form.
+     ROOT of 2 and 3, and of the old "stale `track_start` costs one reopen": a flushed `track_start`
+     read as pending. FIX: `_track_pending` also needs frames in the buffer (every decoder sets
+     `track_start` and the rate before writing the first frames; a flush empties the buffer);
+     `_rate_ok` lets a stopped/buffering output with an EMPTY buffer play silence at any rate (else
+     the flush in 2 would now force a reopen); the mark moved to the IOProc, `_mark_switch_done`,
+     set from live state before each `_output_frames` call, so a flush is followed. Tests "the rate
+     delay is not stretched after a flush while buffering", "a stop during the open leaves no rate
+     delay mark", "a play after a stop while buffering opens at its own rate" (the monitor's wait
+     took the flushed track as found and opened at its rate at once).
+  4. Test gaps — the five tests above. The fake `_output_frames` now writes buffering silence through
+     `write_cb`, models the DSD delay clause and the `outfmt` switch; the fake DAC takes 176.4k.
+  5. **`_start_delay` copies output.c's rule (and the fake a third time)** — true; the suggested shared
+     helper in output.c was NOT built: it edits an upstream file the fork keeps untouched, and the
+     suite does not link output.c, so the fake keeps its copy anyway. Pinned instead in UPSTREAM.md
+     "Updating": re-check `_start_delay`, the fake, `flush`, `_silence_fmt` against a new output.c.
+  6. **A dropped check waited out the 5 s cadence** (agent) — VERIFIED from §B's live run of the
+     2026-10-10 finding 1: stale reply dropped at 18.28 s, next check 23.43 s. A setting change also
+     waited for the cadence. FIX: `update` returns whether the setting changed and `checked` false
+     when dropped; either sets `lastLMSCheck = .distantPast` (the next 2 s tick checks). No added
+     requests: the same check, sooner.
+  7. **`playerState` cleared outside `ServerChoice`** — FIX: `ServerChoice.playerState`, cleared by
+     `update` on a change, set by `checked(…, state:)`, `forgetPlayer()` at shutdown. Tests
+     "aServerChangeForgetsWhatTheOldServerSaid", "aChangeAndADroppedCheckSaySo" (both new API: they
+     do not compile on the old code).
+  - **VERIFIED LIVE on the FiiO, 0.2.6, 2026-10-11 10:46-10:52 local** (Simon ran it: "ive done the dsd
+    test all good"; engine.log read after). Four plays, each from idle with the FiiO released first
+    (`output off` + `exclusive mode released` before every `output on`): DSD64 DoP (176.4k) after
+    44.1k: rate found after 40 ms; 44.1k PCM after DSD64: found after 60 ms; DSD64 again: decoder
+    first, no wait; 48k PCM after DSD64: decoder first. Every play ONE `device rate` and ONE `opened`
+    line, no reopen. The two PCM-after-DoP plays are finding 1's case, and Simon heard nothing wrong.
+    [CORRECTED by the 0.2.8 LIVE TEST, 2026-10-11 (`CODE-REVIEW 2026-10-11 (2)`): that proves no
+    regression, NOT finding 1. With local files NO buffering silence reaches the device: the
+    output tap held music from frame 0 in 4 of 4 plays from idle, incl. 44.1k after DSD64 (this
+    case). The buffer fills during the open (~50 ms same rate, ~0.7 s with a FiiO rate switch), so
+    the first IOProc call is already running. Finding 1 stands on its test.]
+    The stricter pending did not delay the find: 40/60 ms against 0.2.4's 70 ms for DSD64.
+  - **Findings 2 and 3 LIVE on the FiiO, 0.2.6, 2026-10-11 14:37-14:38 local** (Simon: "do it"; FiiO
+    "Silence on a rate change" set to 2000 ms for the test, engine `-r …:2000`, then back to 0:
+    settings.json JSON-identical to the backup, engine restarted with no `-r`; LMS volume left at
+    Simon's 100, his knob; playback by a session script over LMS JSON-RPC, not kept):
+    - **3, the stop during the open:** fresh engine (last rate 44.1k), George Harrison 192k (795396)
+      from idle; `stop` sent on the `device rate 192000` line: flush at 15.790, INSIDE the open
+      (15.731 -> opened 16.453), the exact 0.2.5 leak window. Then The Roots 44.1k (816519) + 795396
+      gapless: the 44.1k start took no delay (same rate, correct); at the boundary `pause 44100
+      frames` 53.012 -> 54.011 (1.0 s BEFORE the switch, at 44.1k), track start 192000, then `pause
+      192000 frames` at 192k. 0.2.5 would have had no first half there. PASS.
+    - **2, a flush after the open, before the start: NOT REACHABLE on the FiiO.** The window between
+      `opened` and `track start` was 8 ms (local FLAC) and 9.5 ms (Qobuz `qobuz://13274.flac`, 44.1k,
+      from idle after 192k): the stream fills the buffer during the FiiO's ~0.7 s relock. An LMS
+      command cannot land in 10 ms. It needs a DAC with a fast relock AND a slow stream; the suite
+      covers it. The same Qobuz play: one switch, then only `pause 44100 frames` (1.0 s): 0.2.5's
+      fix still holds.
+    - 6 (a stalled server) was not run live; the suite covers it.
+
+- **CODE-REVIEW AFTER 0.2.2 — /code-review of the whole repo, 2026-10-10** (Simon: "Verify these before
+  fixing … Then check all code for where changes may hit"). Nine findings; each verified by a
+  measurement, the log, or a test that failed on the old code.
+  1. **A check begun before a server change brought the old server back** (agent) — VERIFIED by the
+     code; narrow writer: the check must outlast one 2 s tick and then answer (LMS answers `players`
+     in ~30 ms on the rig, so it takes an LMS stall). Once back, a server that answers was reused for
+     good (`known` skips discovery; `playerState` is non-nil even when this player is not listed),
+     so the menu and the Mac's volume keys went to the old server while the engine (`-s`) played on
+     the new one. Fix `ServerChoice` (PlayerCore): the check carries the setting it began with and
+     `checked` drops it if the setting changed; a server change also clears `playerState`. Tests
+     `ServerChoosing` (anti-run: `aCheckBegunBeforeAServerChangeIsDropped` fails with the guard
+     removed). Structure, not a test, keeps the agent on it, as with `OutputFollow`.
+  2. **Mute on a DAC with no mute control** — NO WRITER, see `MUTE HAS A WRITER ONLY WITHOUT A MUTE CONTROL`.
+  3. **TWO RATE SWITCHES AT PLAY** (engine) — CONFIRMED in engine.log (FiiO 09:53:07, DragonFly 09:53:58):
+     the decoder logged `setting track_start` (48 kHz) 39-46 ms before `output on`; `_ca_open` opened at
+     `current_sample_rate` (44.1 kHz, the engine default, `output.c:409`; the review's "the device's
+     TOP rate" was wrong) and `set_rate` logged `device rate 44100 Hz after 10 ms`, which it does only
+     when it CHANGED the rate. So the engine, not macOS, moved the DAC to 44.1k, and the track start
+     reopened at 48k: ~0.73 s later than one open. Simon doubted it ("the OS will set it to its base
+     rate"); the log answered it, and he asked for the fix "with care".
+     - Fix: `_ca_open` opens at `next_sample_rate` when a track start is the next frame
+       (`output.track_start == outputbuf->readp`, `pending`); `ioproc` takes frames while
+       `_rate_ok()`: `ca.rate` is the current rate, or that pending track's. Without the second half
+       the IOProc would stall and reopen at the old rate at once (anti-run below).
+     - Tests: "a play from idle switches the rate once" (FAILED on the old code: "opened at 44100 Hz,
+       not the track's 48000"; and on the open rule alone: "the IOProc took nothing while the track
+       buffered", "reopen asked"); controls "a play before the decoder opens at the last rate, as
+       before" (pins no waiting) and "a gapless track at another rate reopens" (pass on all three).
+       The fake `_output_frames` now models output.c's track-start rule.
+     - Carriers checked: `_rate_ok`'s second clause is true only when `_ca_open` chose the pending
+       rate (at a gapless boundary the device is at the OLD rate, so `ca.rate != next`). In
+       `_output_frames` while it holds: buffering threshold uses `next_sample_rate`; the rate delay
+       (`-r …:<ms>`) plays its first half counted at the old rate but AT the new one, so the silence
+       after the real switch is delay/2 x (1 + old/new), never less than the old code's delay/2; the
+       DSD delay is the same mechanism, `outfmt` still changes at the track start; `OUTPUT_START_AT`
+       (sync) counts silence at the old rate but recomputes it from the clock each call, so it is
+       off by at most part of one IOProc buffer (the old code reopened for ~0.7 s there); crossfade
+       (`output.c:328`) compares rates the open does not change. `_ca_open`'s other callers: init
+       (no track start), slimproto's gapless reopen (the start already taken, `track_start` NULL or
+       later), a resume after the idle release (the next start lies ahead of `readp`). A stale
+       `track_start` left by `output_flush` (it does not clear it) can only cost one reopen, as
+       [CORRECTED by `CODE-REVIEW 2026-10-11`: from 0.2.5 it also set the rate delay mark; it is no
+       longer read as pending at all]
+       before. slimproto's STAT elapsed is 0 until the track start. `tools/bitcheck` aligns on the
+       first non-zero frame, so the buffering silence now in the new rate's tap file is fine.
+  4. **Close while the monitor opens** (engine) — VERIFIED by test: on the old code an IOProc was
+     started after `output_close_coreaudio` returned (`main.c` then frees the output buffer and exits).
+     Fix: the monitor marks `ca.monitor_opening` around its `_ca_open`; close waits for it on
+     `monitor_done` (bounded, 5 s); `_ca_open` starts nothing once `running` is false (destroys the
+     IOProc, gives exclusive access back). A monitor only waiting to retry (up to 5 s) is NOT waited
+     for: the agent SIGKILLs an engine not stopped in 3 s. Tests "close while the monitor opens leaves
+     nothing running" (failed on the old code: "an IOProc is running after close (0 at return, 1
+     after)") and "close does not wait for a monitor between retries" (anti-run against a close that
+     waits for any monitor: 5002 ms). Carriers: `_ca_open`'s other callers are init (before any
+     monitor) and `slimproto.c:720`, which runs on the main thread that later calls close; `running`
+     goes false only in close.
+  5. **The 100 ms off poll** — WRONG when measured, see `THE OFF POLL COSTS NOTHING MEASURABLE`.
+  6. **status.json rewritten every 2 s** — CLEARED: it is the heartbeat. The menu's `agentAlive`
+     is `updated` < 10 s old, and the file carries the device's live rate and format, so a
+     write-on-change still needs a periodic write. No measured cost.
+  7. **`rotate` "a log never grows without bound"** — the comment was the defect (rotation runs only
+     when the agent or engine starts); comment FIXED. The engine holds engine.log open (append), so
+     rotating it by rename mid-run would not bound it anyway.
+  8. **`LMSDiscovery.find` blocks a cooperative-pool thread up to 2 s** — CLEARED: only while no
+     server is known, one thread every ~6 s, and the pool has a thread per core; nothing else in the
+     agent waits on it.
+  9. **`menuLog` duplicates the agent's `Log`; menu.log never rotated** — CLEARED: menu.log gets one
+     line per quit (86 bytes on Simon's Mac); the copy is ten lines.
+  - Suite: engine output 21/21, swift 42 tests in 14 suites, install.sh 3/3; `swift build` (agent)
+    and the engine build clean.
+- **INLINE REVIEW AFTER 0.2.2 — 2026-10-10, CLOSED, NO code findings** (Simon: "check for any
+  stale refs and bad documentation. then do another inline review"). Scope: the code changed since
+  `REVIEW OF THE FIXES` (`apply_latest`/`apply_lock`, the retry cadence and `quiet`, `OutputFollow`
+  and the agent's use of it, the "no server" throttle, `EngineArguments.modelName`) plus the docs.
+  - **Stale refs, FIXED:**
+    - the index named `followDeferred` and `pushVolume`, which no longer exist (now
+      `OutputFollow`; `VolumePush` + `LatestValueSender`);
+    - `tools/icon/make-icon` is a `.swift` source compiled into `build/tools/make-icon`;
+    - INSTALL's examples said `LyrionPlay-0.1.0`, and nothing rewrites them at a bump, so they are
+      now `<version>`;
+    - §B said the GitHub repo was empty and Pages off; the API shows a README only, no releases,
+      Pages on;
+    - memory still listed Phase 5 as open.
+
+    Added: README/INSTALL now name `scripts/test.sh`, INSTALL covers a DAC held by another app,
+    and the Working rules carry "never prompt or offer to" commit. The check was mechanical: every
+    backticked name and path in the docs grepped against the sources; misses were external (LMS,
+    Apple, Material) or the parked design.
+  - **Checked and CLEARED (do not re-derive):**
+    - *`apply_latest` on a stale device ID:* `set_volume` copies `ca.dev`, then applies unlocked. A
+      device replugged meanwhile has a new ID, but `apply_volume` returns at `find_volume`'s
+      `v.n == 0` for a dead ID, BEFORE `watch_volume`, so the listener is never pointed at it.
+      Lock order: `apply_latest` is entered with no lock held from all three callers;
+      `_ca_open` unlocks before it.
+    - *`_ca_open` from the slimproto thread and the monitor at once:* cannot happen. Only the IOProc
+      raises `ca_reopen` (`ioproc`, the one writer), and the monitor runs only while nothing is
+      open, so no IOProc runs.
+    - *Retry log gating:* `_ca_open`'s `quiet` and the monitor's "retrying" line agree: tries 1-3
+      and every 60th (5 minutes at 5 s). Suite: 4 reason lines, 3 "retrying" lines in ~70 tries.
+    - *Hog re-taken on every retry:* a device that takes hog but then fails `_configure` (refuses
+      a rate it listed, no 32-bit float, IOProc create/start fails) is hogged and released every
+      ≤5 s, and macOS moves its default output away and back each time (`HOG MOVES THE DEFAULT
+      OUTPUT`). NO WRITER: the FiiO, the DragonFly and the speakers never fail after the hog, and
+      a DAC still relocking past 3 s heals on the next try. Re-raise only with a named device
+      that fails this way.
+    - *`scripts/test.sh` "on its own":* MEASURED. Both engine suites compile and link against an
+      empty deps folder, so a fresh checkout runs the suite before any build.
+
+- **REVIEW 2026-10-10 — /code-review of the whole repo (no git, so no diff), then Simon: "verify
+  all then fix test fixes and that all carriers and callers are checked … We need a regression
+  suite."** Every finding verified (measured where the HAL or ATS decides, else by the code path
+  and the LMS 9.1 source), fixed, and pinned by a test that FAILED on the pre-fix copy (anti-run:
+  engine suite 7 of 14 failed on the old `output_coreaudio.c`, exactly the 7 new tests; install
+  suite failed on the old install.sh; the 7 pins passed on both).
+  1. **Hog vs "Follow the macOS output"** (agent) — CONFIRMED, `HOG MOVES THE DEFAULT OUTPUT`.
+     Fix `resolveDevice(in:holding:)`, `heldDevice`, `followDeferred`; status shows `engineDevice`;
+     the Settings window resolves with `PlayerModel.heldDevice`. Tests `FollowSystem`.
+     (`followDeferred` became PlayerCore's `OutputFollow` in `REVIEW OF THE FIXES`.)
+  2. **`vrec.lock` held across Add/RemovePropertyListener** (engine) — CONFIRMED,
+     `REMOVE WAITS FOR THE LISTENER`. Fix `vrec.watch` + `point_listeners` (old listeners removed,
+     then the record, then `dev`/`ctl`, then the new ones); the listener ignores a device it is no
+     longer on. Tests: "listener removed at exit…", "listener moved to a new device…".
+  3. **Retry flood, hog kept after a failed open** (engine) — CONFIRMED in part: upstream
+     `output_pa.c` also retries for ever (every 5 s), so the endless retry is inherited; ours was
+     every 2 s and kept the DAC hogged after `set_rate` failed. Fix: `configure` gives exclusive
+     access back on any failure (also `AudioDeviceStart`), `ca.open_failures` + `retry_wait`.
+     The first cadence (2, 4, 8, 16, then 30 s) was itself a regression, see `REVIEW OF THE
+     FIXES`: now 2, 4, then 5 s, the reason logged on tries 1-3 and every 60th. A missing device
+     stays 2 s. Tests: "refused rate…", "busy device…" (two), control "missing device…".
+  4. **Pushes out of order** (agent) — CONFIRMED by the code (a detached task per push, two HTTP
+     calls each). Fix `LatestValueSender`. Tests `PushOrdering`, with a control showing the old
+     pattern overlaps.
+  5. **`mixer volume ?` before every push** — CONFIRMED, 27 ms median per push when LMS is idle.
+     NOT replaced (it is the measured mechanism, `UNMUTE IS NOT A LEVEL`); only skipped when the
+     engine's `<lms>` says LMS has a level, which cannot be a muted LMS (LMS sends gain 0 for
+     volume <= 0, `Squeezebox2::volume`). Tests `VolumePushDecision`.
+  6. **Mac volume reported to a fixed-volume player before the first audg** — CONFIRMED (the
+     ledger's "nothing is reported while fixed" did not hold before the first track). The engine
+     cannot know (no audg yet), and must keep reporting (`LMS SENDS VOLUME ON CONNECT` is wrong),
+     so the AGENT asks `playerpref digitalVolumeControl ?` when `<lms>` is -1. Tests
+     "reports carry…", `beforeAnyAudgAFixedPlayerGetsNothing`.
+  7. **`volume_pending`** (engine) — CONFIRMED in code, but REACHABLE ONLY IN A RACE: the agent
+     starts the engine only when the device is present and stops it within ~1 s of the device
+     going, so "absent at init" is the probe-to-start window. Fixed anyway (pending set under the
+     lock whenever no device is open with -V, claimed under the lock in `_ca_open`; a device that
+     opens without a level to put on it is watched from its current level). Tests: "LMS level
+     reaches a device absent at init", "device absent at init is watched once open".
+  8. **ATS** — CONFIRMED, `ATS LOCAL IS PLAIN NAMES ONLY`. Test `TransportSecurity`.
+  9. **install.sh menu race** — CONFIRMED by the code; the window is the `rm -rf`/`mv` after the
+     kill, against the agent's 2 s tick. Fix: install.sh touches `menu-session-ending` before it
+     looks for the menu (the agent already honours it for a minute; the new menu removes it).
+     `MenuPresence.holdsOff` now holds the agent's half. Tests `test_install.sh` (the old script
+     fails "marker at enumeration: no"), `MenuHoldOff`. `uninstall.sh` boots the agent out first,
+     so it has no such race.
+  10. **Picker v/h/m vs comment v/h/m/l/q; dead `PlayerIdentity.currentName`,
+      `LaunchAgent.restart`** — CONFIRMED. No writer of l/q but a hand edit, so the comment is
+      the defect: it now says the app offers v/h/m. Both helpers removed (no caller).
+  - **Carriers checked:** every caller of `watch_volume`/`unwatch_volume` is unlocked (never under
+    the output LOCK); lock order is `vrec.watch` → `vrec.lock`, the listener takes only the latter;
+    the agent is the only reader of the report line (old 3-field lines parse as `<lms>` -1);
+    `resolveDevice` callers are reconcile, writeStatus and the Settings window; nothing parses
+    engine.log's changed "retrying" line; the marker's other writers/readers (menu at logout,
+    agent and menu at start) are unchanged. One regression found in my own change and fixed:
+    "no server is known" logged per report instead of per push, now at most every 5 s.
+  - **Found on the way:** `build.sh` ignored test results (`swift test | grep … || true`), and
+    `swift test` itself is flaky under CLT 27.0 (`TESTING MACROS BY NAME`). Both fixed in
+    `scripts/test.sh`, which build.sh now runs and stops on.
+- **REVIEW OF THE FIXES — 2026-10-10** (Simon: "lets do an inline review of latest code changes",
+  then "yes given you made regression suite how did it miss these"). Three faults in my own
+  `REVIEW 2026-10-10` code; each fixed and pinned by a test that FAILED on the pre-review engine
+  (anti-run: exactly the 3 new engine tests failed: ended at the stale -30 dB; waits of 8, 16,
+  30 s; the reason logged 55 times in 55 tries).
+  1. **Stale level after a resume** (engine): `volume_pending` raised at every play from idle let
+     the monitor's `_ca_open` apply a level while `set_volume` applied newer ones; LMS fades in on
+     resume (`RESUME IS ONE AUDG`), so an older step could land last and stay until the next
+     track. Fix `apply_latest`: one apply at a time under `apply_lock`, reading LMS's latest level
+     inside (lock order `apply_lock` → output LOCK briefly → `vrec.watch` → `vrec.lock`; both
+     callers take it unlocked). Test "a newer level wins over one being applied": the fake HAL's
+     `during_next_level_change` hook lands a newer audg mid-apply.
+  2. **Up to 30 s of silence after another app lets go** (engine): the backoff cured the log size
+     by slowing pickup. Fix: retries 2, 4, then 5 s (upstream's cadence), `quiet` threaded into
+     `hog`/`set_rate`/`configure` so a failure says why on tries 1-3 and every 60th
+     (`RETRY_LOG_EVERY`). Tests "busy device plays within 5 s of being let go", "busy device says
+     why at first, then every 5 minutes".
+  3. **A follow lost on a restart** (agent): `stopEngine` cleared `followDeferred`, so after a
+     restart on the held device an output chosen meanwhile was never followed. Fix `OutputFollow`
+     (PlayerCore): only `resolve` changes it, the agent has nothing to clear. Tests
+     `OutputFollowing`. Guarded by structure (no reset API), not by a test that runs the agent:
+     a `follow = OutputFollow()` in main.swift would bring it back.
+  - **Why the suite missed them, and what changed in how tests are written here:** (a) every
+    engine test called the code on one thread, so no interleaving could happen; the fake HAL can
+    now land an event inside a call. (b) The backoff test asserted the constants chosen, with time
+    500x faster, so a 30 s wait passed as 60 ms; tests now assert the requirement (opens within one
+    wait of at most 5 s; log lines counted). (c) The agent's state lived in the untestable
+    executable; state that matters goes in PlayerCore. (d) The tests were written from the same
+    reasoning as the fixes, so they confirmed the intent; a review of each fix round before it is
+    called closed is what found these.
+- **REGRESSION SUITE — 2026-10-10.** `sh scripts/test.sh` (also run by `build.sh`): engine
+  conversion (2^24 values), engine output (16 tests: `output_coreaudio.c` compiled against a fake
+  HAL with its clock, sleeps, stdout and threads redirected; each test in a forked child with a
+  hang timeout; its header gives the command that builds it against an older copy, into another
+  file, for an anti-run), swift (37 tests in 13 suites), install.sh (3 tests: sandboxed HOME and folder,
+  shims for launchctl/open/lsof/ps/codesign/security/xattr, and it refuses to run if a shim would
+  be bypassed). Each suite is judged by its summary line and its exit code. About 15 s.
+
+- **PAGES LIKE THE FLEET — 2026-10-10.**
+  - `tools/make_readme_html.py` is LMS-Listening-History's generator, in Lyrion green:
+    - hero with the inline app glyph, the version badge from `VERSION`, and Download/Installation
+      buttons;
+    - feature cards from the README's Features table.
+  - **Additions over the fleet's version:**
+    - list items can wrap and hold code blocks and paragraphs; ordered lists keep one `<ol>`
+      across blank lines;
+    - content between the tagline and the first `##` renders as an intro, where the fleet
+      generator dropped it;
+    - links to INSTALL.md/README.md go to the pages, and other relative links go to GitHub.
+  - `build.sh --release` regenerates the pages and ships INSTALL.html in the zip.
+  - Checked: well-formed, 7 cards, one install list, rendered and viewed.
+- **Phases 2-4: agent, menu bar app, build/sign/install — INSTALLED and switched on 2026-10-09.**
+  - **Package:** `app/` (SwiftPM, Swift 5 language mode): `PlayerCore`, `Agent`, `App`.
+  - **Tests:** 13 tests in 4 suites pass (`swift test`): probe parsing from the real `-l` output,
+    argument building with controls, settings round-trip and defaults, MAC identity.
+  - **`scripts/build.sh`:**
+    - builds deps → engine (plus the conversion test) → Swift (plus tests), then the bundle;
+    - signs inside-out by the identity's hash;
+    - checks arm64, the `runtime` flag, zero entitlements and system-only libraries on all three
+      executables;
+    - `--install` copies to /Applications.
+  - **Installed as Simon chose:**
+    - "Mac Player", reusing the test identity `02:00:4c:4d:50:01`, which kept its LMS fixed volume;
+    - the FiiO, with exclusive mode and DoP on.
+  - **Measured:**
+    - launchd runs the agent, the agent ran the engine with the expected arguments, and the
+      engine connected;
+    - status.json showed "Simons Music", connected;
+    - LMS name "Mac Player", with the name file following;
+    - `kill -9` of the engine: the agent restarted it;
+    - `kill -9` of the agent: launchd restarted it;
+    - switching off (bootout) stopped the engine cleanly;
+    - the rebuild needed no new Local Network approval.
+
+- **Phase 1 audible verification on Simon's FiiO M11 Plus — PASS 2026-10-09.**
+  - **The DAC, as `-l` reports it:** UID `AppleUSBAudioEngine:FiiO:FiiO M11 Plus:3fa90f5:1`;
+    rates 32k-384k; physical format 32-bit integer only; NO Mac-side volume control (its knob).
+    Simon chose LMS "fixed at 100%" plus the FiiO knob, and DoP on.
+  - **The command:** engine with `-o <FiiO UID> -a 0:1 -D -R vE -Z 384000 -C 30`; test player MAC
+    `02:00:4c:4d:50:01`, `digitalVolumeControl=0`.
+  - **Rates.** FLAC at 44.1/16, 48/24, 88.2/24, 96/24 and 192/24: the FiiO's nominal rate equalled
+    the track's every time, in 32-bit integer format, hogged by the engine PID. Each rate switch
+    was confirmed in 10 ms, and nothing was resampled ("rates match").
+  - **Bit-exact.** `tools/bitcheck` on the tap against Apple's ExtAudioFile decode of the file from
+    `/music/<id>/download`: 0 of 10,534,070 samples differed across the five tracks, about 11 s each.
+  - **Anti-test.** At `digitalVolumeControl=1`, volume 99: 618,869 of 623,344 samples differ, so
+    DIFFERENT, as it must be.
+  - **DoP.** DSD64 went as DoP at 176.4 kHz, and Simon saw the FiiO show DSD; a DoP lock proves the
+    HAL-to-DAC hop is untouched.
+  - **DSD256 and DSD512** went as PCM, as designed: "DSD sample rate too high for device -
+    converting to PCM", resampled 1411200 / 2822400 → 352800. See `DSD256 IS PCM ON THE FIIO`.
+  - **Replay gain.** With `replayGainMode=1`, a track tagged −6.41 dB logged `replay_gain: 31232`,
+    which is LMS's own `dBToFixed` (10^(−6.41/20) × 256 = 122.4 → 122 << 8). Exact 16.16 would be
+    31331; LMS quantises to 1/256 before sending.
+  - **Idle release.** With `-C 30`, the FiiO stayed hogged at 26 s after stop and was released
+    (owner −1) at 31 s. Also released on engine exit.
+  - **Listening.** Simon, on headphones: every clip played and sounded good.
+- **Phase 1 build — 2026-10-09.**
+  - `deps/build-deps.sh` produced 13 static arm64 libraries:
+    - FLAC 1.5.0, Ogg 1.3.6, Vorbis 1.3.7, Opus 1.6.1 (all via CMake);
+    - opusfile 0.12, compiled directly because its release archive has no CMakeLists.txt;
+    - mpg123 1.33.7, faad2 2.11.4, soxr 0.1.3, Apple ALAC.
+  - `make -f Makefile.coreaudio` builds `engine/squeezelite`: arm64. `otool -L` shows libSystem,
+    CoreAudio, CoreFoundation and libc++ only. Build options `OSX COREAUDIO SELFPIPE RESAMPLE
+    ALAC OPUS DSD NO_MAD LINKALL`.
+  - Exhaustive conversion test (`make -f Makefile.coreaudio test`): 16,777,216 values, 0
+    failed; the anti-test value rounded. PASS.
+- **Verification step 1, the engine alone — PASS 2026-10-09.**
+  - `-l` lists the FiiO and the built-in speakers (44.1-96k, float only, main volume
+    -63.5..0 dB with mute) as JSON.
+  - A silent connect (`-C 5`, so no device was opened) appeared in LMS `players` as model
+    `squeezelite`, modelname `LyrionPlay`, firmware 2.0.0-1609, connected.
+  - HELO: `MaxSampleRate=384000,dsf,dff,alc,aac,ogg,ops,ogf,flc,aif,pcm,mp3`. Test MAC
+    `02:00:4c:4d:50:01`, name "LyrionPlay (test)".
+- **Phase 0 gate 1, signing identity — PASS 2026-10-09.**
+  - Simon did not know how to make the certificate, so it was created from the command line:
+    LibreSSL key + self-signed certificate (`extendedKeyUsage = codeSigning`, 10 years),
+    imported to the login keychain with `-T /usr/bin/codesign`.
+  - It showed as `CSSMERR_TP_NOT_TRUSTED`, which is expected and harmless.
+  - A test binary signed with the hardened runtime and no prompt; its designated requirement
+    named the certificate leaf.
+  - That identity was deleted on 2026-10-09 when the project moved to `EACH USER SIGNS IT`.
+- **Phase 0 gate 2, agent plus network — PASS via Fallback 1, 2026-10-09.**
+  - SMAppService failed after a rebuild (`SMAPPSERVICE PINS THE FIRST BUILD`).
+  - A classic launch agent then ran the BSD-socket child (TCP `plex:3483` plus the discovery
+    broadcast) and its own URLSession request to `plex:9000`, all PASS, including the first run
+    after a rebuild that changed the child's code hash.
+  - Simon approved two Local Network prompts (agent, child).
+  - The test agent was stopped and its plist and log folder removed; findings are in §A3.
+  - The spike source was deleted on 2026-10-09.
+- **Phase 0 gate 4, first half, CMake — PASS 2026-10-09.** CMake 4.4.4 built from source by
+  `deps/build-cmake.sh`; `lipo -archs` prints `arm64`.
+- **Phase 0 gate 3, `swift test` under the Command Line Tools — PASS 2026-10-09.**
+  - Swift Testing ran (library version 2084, arm64e-apple-macos14.0).
+  - A deliberately failing test was reported and the run exited 1, so suites are trustworthy
+    by summary line plus exit code. No Xcode needed.
+
+### D. ADDING TO THIS LEDGER
+When a finding is declined, accepted, parked or disproven, add it in the same session: the entry
+in its section and its index row, with the reason as a fact that can be disproven.

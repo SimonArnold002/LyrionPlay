@@ -1,0 +1,43 @@
+# LyrionPlay: macOS 14+ arm64 build with the native CoreAudio output (output_coreaudio.c)
+# and the static codec libraries built by ../deps/build-deps.sh. No dylibs are linked, so the
+# binary runs under the hardened runtime with no exceptions.
+#   make -f Makefile.coreaudio            build ./squeezelite
+#   make -f Makefile.coreaudio test       exhaustive sample-conversion test, then the CoreAudio
+#                                         output's regression suite (fake HAL, no device touched)
+
+DEPS_OUT  ?= $(abspath ../deps/out)
+SDK       ?= $(shell xcrun --show-sdk-path)
+MACOS_MIN  = 14.0
+ARCH       = -arch arm64 -isysroot $(SDK) -mmacosx-version-min=$(MACOS_MIN)
+
+# mpg123 decodes MP3, so libmad is left out; no USE_SSL (LMS proxies HTTPS streams)
+OPTS = -DCOREAUDIO -DDSD -DRESAMPLE -DLINKALL -DALAC -DOPUS -DNO_MAD \
+	-I$(DEPS_OUT)/include -I$(DEPS_OUT)/include/opus -I$(DEPS_OUT)/include/alac
+
+CFLAGS   = $(ARCH) -O2 -Wall
+CXXFLAGS = -std=c++11
+LDFLAGS  = $(ARCH) -L$(DEPS_OUT)/lib
+LDADD    = -lpthread -lm
+
+EXECUTABLE ?= squeezelite
+
+include Makefile
+
+# Makefile appends -std=gnu99 to CFLAGS, which its .cpp rule also passes to the C++ compiler
+alac_wrapper.o: alac_wrapper.cpp $(DEPS)
+	$(CXX) $(CXXFLAGS) $(ARCH) -O2 -Wall $(CPPFLAGS) $(OPTS) -Wno-multichar $< -c -o $@
+
+.PHONY: test
+test: tests/test_conversion tests/test_output_coreaudio
+	./tests/test_conversion
+	./tests/test_output_coreaudio
+
+tests/test_conversion: tests/test_conversion.c output_coreaudio_conv.h
+	$(CC) $(ARCH) -O2 -Wall -o $@ tests/test_conversion.c
+
+# the suite #includes output_coreaudio.c and links upstream's own output.c, buffer.c, output_pack.c
+# and dop.c; its header shows how to build it against an older copy
+OCA_TEST_UPSTREAM = output.c buffer.c output_pack.c dop.c
+tests/test_output_coreaudio: tests/test_output_coreaudio.c output_coreaudio.c output_coreaudio_conv.h squeezelite.h $(OCA_TEST_UPSTREAM)
+	$(CC) $(ARCH) -O1 -Wall -std=gnu99 -D_FORTIFY_SOURCE=0 $(OPTS) -I. \
+		-o $@ tests/test_output_coreaudio.c $(OCA_TEST_UPSTREAM) -framework CoreAudio -framework CoreFoundation

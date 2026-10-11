@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LyrionPlay</title>
+<style>
+  :root {
+    --brand: #589e81;
+    --brand-dark: #2c5444;
+    --accent: #e3fdc4;
+    --accent-ink: #1f3b30;
+    --ink: #1c1c28;
+    --muted: #5b5b6b;
+    --line: #e4e4ec;
+    --bg: #f7f7fa;
+    --card: #ffffff;
+    --code-bg: #eef3f0;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: #3b7d62; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header.hero {
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
+    color: #fff;
+    padding: 56px 24px 48px;
+    text-align: center;
+  }
+  header.hero h1 { margin: 0 0 10px; font-size: 2.1rem; letter-spacing: -0.01em; }
+  header.hero .logo { width: 96px; height: auto; display: block; margin: 0 auto 14px; }
+  header.hero p.tagline { margin: 0 auto; max-width: 660px; color: #e6f3ec; font-size: 1.08rem; }
+  header.hero p.tagline a { color: var(--accent); }
+  .badges { margin-top: 22px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .badge {
+    display: inline-block; padding: 5px 13px; border-radius: 999px;
+    font-size: 0.82rem; font-weight: 600;
+    background: rgba(255,255,255,0.14); color: #fff; border: 1px solid rgba(255,255,255,0.26);
+  }
+  .badge.accent { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .hero-actions { margin-top: 26px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 11px 22px; border-radius: 8px; font-weight: 600; font-size: 0.95rem; }
+  .btn-primary { background: var(--accent); color: var(--accent-ink); }
+  .btn-primary:hover { text-decoration: none; filter: brightness(1.04); }
+  .btn-ghost { background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.32); }
+  .btn-ghost:hover { text-decoration: none; background: rgba(255,255,255,0.20); }
+
+  main { max-width: 880px; margin: 0 auto; padding: 8px 24px 64px; }
+  section { margin-top: 44px; }
+  h2 {
+    font-size: 1.45rem; margin: 0 0 6px; padding-bottom: 8px;
+    border-bottom: 3px solid var(--brand); display: inline-block;
+  }
+  h3 { font-size: 1.12rem; margin: 26px 0 6px; color: var(--brand-dark); }
+  p { margin: 10px 0; }
+  ul, ol { padding-left: 24px; }
+  li { margin: 5px 0; }
+  li > ul, li > ol { margin-top: 5px; }
+  li > p { margin: 8px 0; }
+
+  table {
+    width: 100%; border-collapse: collapse; margin: 14px 0;
+    background: var(--card); border-radius: 10px; overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06); font-size: 0.95rem;
+  }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--brand-dark); color: #fff; font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: #fafcfb; }
+  td strong { color: var(--brand-dark); }
+
+  code {
+    background: var(--code-bg); padding: 2px 6px; border-radius: 5px;
+    font-family: "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.88em;
+  }
+  pre {
+    background: var(--brand-dark); color: #f1fbf5; padding: 16px 18px;
+    border-radius: 10px; overflow-x: auto; font-size: 0.9rem;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+
+  blockquote {
+    margin: 14px 0; padding: 12px 18px; background: #f1f9f4;
+    border-left: 4px solid var(--brand); border-radius: 0 8px 8px 0; color: var(--muted);
+  }
+  blockquote p { margin: 0; }
+
+  .feature-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  .card h4 { margin: 0 0 6px; font-size: 1rem; color: var(--brand-dark); }
+  .card p { margin: 0; font-size: 0.9rem; color: var(--muted); }
+
+  footer {
+    text-align: center; color: var(--muted); font-size: 0.88rem;
+    padding: 32px 24px 48px; border-top: 1px solid var(--line); margin-top: 48px;
+  }
+  @media (max-width: 600px) {
+    header.hero h1 { font-size: 1.6rem; }
+    main { padding: 8px 16px 48px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <svg class="logo" fill="#fff" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="23.18" height="20" viewBox="0.25 0 7.36 6.35">
+ <rect x="4.1544" y="0.5291" width="0.3538" height="5.2917" rx="0.1769"/>
+ <rect x="4.8794" y="1.3180" width="0.3538" height="3.7140" rx="0.1769"/>
+ <rect x="5.6045" y="2.2708" width="0.3538" height="1.8084" rx="0.1769"/>
+ <rect x="6.3295" y="1.2088" width="0.3538" height="3.9324" rx="0.1769"/>
+ <rect x="7.0546" y="2.7455" width="0.3538" height="0.8590" rx="0.1769"/>
+ <path transform="translate(-2.141 7.062) scale(0.008097)" d="M320-273v-414q0-17 12-28.5t28-11.5q5 0 10.5 1.5T381-721l326 207q9 6 13.5 15t4.5 19q0 10-4.5 19T707-446L381-239q-5 3-10.5 4.5T360-233q-16 0-28-11.5T320-273Z"/>
+</svg>
+  <h1>LyrionPlay</h1>
+  <p class="tagline"><strong>A bit-perfect Lyrion Music Server player for Apple Silicon Macs, built on squeezelite.</strong></p>
+  <div class="badges">
+    <span class="badge accent">v0.2.10</span>
+    <span class="badge">Apple Silicon</span>
+    <span class="badge">macOS 14+</span>
+    <span class="badge">Bit-perfect</span>
+    <span class="badge">DSD over DoP</span>
+  </div>
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="https://github.com/SimonArnold002/LyrionPlay/releases/latest">Download latest</a>
+    <a class="btn btn-ghost" href="INSTALL.html">Installation</a>
+  </div>
+</header>
+
+<main>
+<section class="intro">
+<p>LyrionPlay plays music from your Lyrion Music Server (LMS) on your Mac. LMS sees it as an ordinary squeezelite player. It lives in your menu bar, and its player runs in the background.</p>
+</section>
+<section id="features">
+<h2>Features</h2>
+<div class="feature-cards">
+<div class="card"><h4>Bit-perfect on a DAC</h4><p>Exclusive (hog) mode, with the DAC switched to each track's sample rate. Samples reach the DAC unchanged at full volume.</p></div>
+<div class="card"><h4>Told about your DAC</h4><p>LMS learns your DAC's highest sample rate and transcodes anything above it. Rates the DAC lacks below that are resampled in the player, only when needed.</p></div>
+<div class="card"><h4>DSD</h4><p>Sent as DoP to DACs that accept it, and converted to PCM for those that don't.</p></div>
+<div class="card"><h4>LMS replay gain</h4><p>Applied by the player, exactly as LMS sends it.</p></div>
+<div class="card"><h4>Volume both ways</h4><p>The LMS slider moves your Mac's volume, or your DAC's hardware volume, and your Mac's volume keys move the LMS slider. LMS's "fixed at 100%" leaves the device alone.</p></div>
+<div class="card"><h4>Menu bar app</h4><p>Switch the player on and off, see what it's doing, and choose the output device and its options.</p></div>
+<div class="card"><h4>Signed by you</h4><p>Every user signs their own copy with a certificate made on their own Mac, so no Apple developer account is involved.</p></div>
+</div>
+</section>
+<section id="requirements">
+<h2>Requirements</h2>
+<ul>
+<li>A Mac with Apple Silicon (M1 or later), running macOS 14 Sonoma or later.</li>
+<li>Lyrion Music Server on your network.</li>
+</ul>
+</section>
+<section id="install">
+<h2>Install</h2>
+<p>Download the <a href="https://github.com/SimonArnold002/LyrionPlay/releases/latest">latest release</a>, then follow <a href="INSTALL.html">INSTALL.md</a>. It takes one Terminal command.</p>
+</section>
+<section id="how-it-works">
+<h2>How it works</h2>
+<table>
+<thead><tr>
+<th>part</th>
+<th>what it does</th>
+</tr></thead>
+<tbody>
+<tr><td><code>engine/</code></td><td>squeezelite with a native CoreAudio output added (<code>output_coreaudio.c</code>): exclusive mode, per-track rate and format switching, DoP, and the device's volume in both directions.</td></tr>
+<tr><td><code>app/Sources/Agent</code></td><td>A background launch agent. It reads the device's abilities from the engine, builds the engine's arguments, keeps the engine running, and passes volume changes made on the Mac to LMS.</td></tr>
+<tr><td><code>app/Sources/App</code></td><td>The menu bar app: On/Off, status, settings.</td></tr>
+<tr><td><code>scripts/</code></td><td><code>build.sh</code> builds the app and the release. <code>test.sh</code> is the regression suite. <code>install.sh</code> and <code>uninstall.sh</code> are what users run.</td></tr>
+</tbody></table>
+</section>
+<section id="building-from-source">
+<h2>Building from source</h2>
+<p>You need Apple's Command Line Tools (<code>xcode-select --install</code>). Nothing else is installed system-wide.</p>
+<pre><code>scripts/build.sh            # build and check
+scripts/build.sh --install  # build, then install with your own certificate
+scripts/build.sh --release  # build the release zip into dist/
+scripts/test.sh             # the regression suite on its own</code></pre>
+<p>Every build runs the regression suite (<code>scripts/test.sh</code>) and stops if a test fails. It needs no DAC, server or keychain: the CoreAudio output is tested against a fake audio system.</p>
+<p>The first build downloads pinned, checksummed sources and compiles them for Apple Silicon: CMake, and the codec libraries (FLAC, Ogg, Vorbis, Opus, mpg123, FAAD2, soxr, ALAC). This takes a while.</p>
+</section>
+<section id="credits">
+<h2>Credits</h2>
+<p><strong>LyrionPlay's audio engine is <a href="https://github.com/ralph-irving/squeezelite">squeezelite</a>.</strong></p>
+<ul>
+<li><strong>Adrian Smith</strong> wrote it (2012–2015).</li>
+<li><strong>Ralph Irving</strong> has maintained and developed it since 2015, with many contributors.</li>
+<li>Squeezelite does everything that makes this a real LMS player: the slimproto protocol, decoding, gapless playback, sync groups, resampling, DSD and DoP.</li>
+<li>LyrionPlay adds a macOS output to it. Every change to squeezelite's own files is listed in <a href="https://github.com/SimonArnold002/LyrionPlay/blob/main/engine/UPSTREAM.md">engine/UPSTREAM.md</a>.</li>
+<li>Thank you, Adrian and Ralph.</li>
+</ul>
+<p>Squeezelite in turn contains:</p>
+<ul>
+<li><strong>dsd2pcm</strong> by Sebastian Gesemann;</li>
+<li>the <strong>Daphile</strong> project's DSD patch.</li>
+</ul>
+<p>Also used:</p>
+<ul>
+<li><strong>Codec libraries:</strong> FLAC, Ogg and Vorbis (Xiph.Org), Opus and opusfile, mpg123, FAAD2, soxr, and Apple Lossless (ALAC).</li>
+<li><strong>The Music Player Daemon's</strong> macOS output was a reference for CoreAudio's exclusive mode and format selection.</li>
+<li><strong>The icon</strong> joins the play arrow from Google's <a href="https://fonts.google.com/icons">Material Symbols</a> (Apache 2.0) to the Lyrion waveform from <a href="https://github.com/CDrummond/lms-material">LMS-Material</a> by Craig Drummond (MIT).</li>
+<li><strong><a href="https://lyrion.org">Lyrion Music Server</a></strong> and its community.</li>
+</ul>
+<p>Full notices ship inside the app, in <code>LyrionPlay.app/Contents/Resources/NOTICES.txt</code>.</p>
+<p>LyrionPlay is not affiliated with the Lyrion Music Server project.</p>
+</section>
+<section id="licence">
+<h2>Licence</h2>
+<ul>
+<li><strong>The engine (<code>engine/</code>):</strong> squeezelite's licence, the <a href="https://github.com/SimonArnold002/LyrionPlay/blob/main/engine/LICENSE.txt">GNU General Public License v3</a>.</li>
+<li><strong>Everything else</strong> (the menu bar app, the agent, the scripts and tools): the <a href="https://github.com/SimonArnold002/LyrionPlay/blob/main/LICENSE">MIT licence</a>.</li>
+</ul>
+</section>
+</main>
+
+<footer>
+  <p>LyrionPlay — a player for Lyrion Music Server, built on squeezelite ·
+  <a href="https://github.com/SimonArnold002/LyrionPlay">View on GitHub</a></p>
+</footer>
+
+</body>
+</html>
