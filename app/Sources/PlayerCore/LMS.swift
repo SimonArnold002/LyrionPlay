@@ -232,7 +232,8 @@ public struct LMSClient: Sendable {
 		return json["result"] as? [String: Any]
 	}
 
-	/// `mixer volume ?`: LMS keeps a muted player's volume as a negative number
+	/// `mixer volume ?`: the SAVED volume (`mixerQuery` reads the pref, LMS 9.1), never the temporary
+	/// one a fade sets. LMS keeps a muted player's volume as a negative number
 	public func volume(player: String) async -> Double? {
 		guard let result = await call(player: player, ["mixer", "volume", "?"]) else { return nil }
 		return Double("\(result["_volume"] ?? "")")
@@ -240,16 +241,29 @@ public struct LMSClient: Sendable {
 
 	/// `playerpref digitalVolumeControl ?`: 0 is "Output level fixed at 100%". LMS sends this pref
 	/// as audg's adjust byte (Squeezebox2::volume, LMS 9.1), and defaults it to 1.
-	public func volumeFixed(player: String) async -> Bool? {
+	public func digitalVolumeControl(player: String) async -> Int? {
 		guard let result = await call(player: player, ["playerpref", "digitalVolumeControl", "?"]),
 			  let value = result["_p2"] else { return nil }
-		return "\(value)" == "0"
+		return Int("\(value)")
+	}
+
+	public func volumeFixed(player: String) async -> Bool? {
+		await digitalVolumeControl(player: player).map { $0 == 0 }
 	}
 
 	public struct PlayerState: Sendable {
 		public var connected: Bool
 		public var mode: String?
 		public var nowPlaying: String?
+		/// the player's `digitalVolumeControl` pref, 0 = "Output level fixed at 100%"; nil when
+		/// `status` did not say
+		public var digitalVolumeControl: Int?
+
+		/// `status` carries the pref as `digital_volume_control`, an integer (Queries.pm, LMS 9.1;
+		/// measured on the rig 2026-10-11)
+		static func digitalVolumeControl(in status: [String: Any]) -> Int? {
+			status["digital_volume_control"].flatMap { Int("\($0)") }
+		}
 	}
 
 	public func playerState(mac: String) async -> PlayerState? {
@@ -261,6 +275,7 @@ public struct LMSClient: Sendable {
 		var state = PlayerState(connected: (me["connected"] as? Int ?? 0) == 1)
 		if let status = await call(player: mac, ["status", "-", "1", "tags:a"]) {
 			state.mode = status["mode"] as? String
+			state.digitalVolumeControl = PlayerState.digitalVolumeControl(in: status)
 			if let track = (status["playlist_loop"] as? [[String: Any]])?.first {
 				let title = track["title"] as? String ?? ""
 				let artist = track["artist"] as? String

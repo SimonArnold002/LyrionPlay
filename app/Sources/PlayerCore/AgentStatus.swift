@@ -11,6 +11,8 @@ public struct AgentStatus: Codable, Equatable, Sendable {
 	/// the device's real state, read from CoreAudio
 	public var currentRate: Int?
 	public var currentFormat: String?
+	/// DSD played as DoP: its rate (16 x currentRate), from the engine's report (FormatReport)
+	public var dsdRate: Int?
 	public var exclusive: Bool
 	public var serverName: String?
 	public var connected: Bool

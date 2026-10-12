@@ -14,7 +14,9 @@ the changes listed under "Our changes":
 
 ## Our changes
 
-Every change to an upstream file is listed here, so a later upstream update can be merged by hand.
+Modified by CrystalGipsy for LyrionPlay, from 2026-10-09 (the dates of each change are in the git
+history and the repo's `CLAUDE.md`). This list is the notice GPLv3 section 5(a) asks for. Every change
+to an upstream file is listed here, so a later upstream update can be merged by hand.
 
 New files (ours): `output_coreaudio.c`, `output_coreaudio_conv.h`, `Makefile.coreaudio`,
 `tests/test_conversion.c`, `tests/test_output_coreaudio.c` (built with upstream's `output.c`,
@@ -26,7 +28,7 @@ Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines:
   - On `__APPLE__`, `PORTAUDIO` is defined only `#if !defined(COREAUDIO)`.
   - `COREAUDIO` is normalised to 0/1 next to the `ALSA` switch.
   - `struct outputstate` gains `ca_reopen` and `volume_fixed`.
-  - Prototypes for `output_coreaudio.c`.
+  - Prototypes for `output_coreaudio.c` (`ca_report_format` among them).
 - `main.c`
   - Usage text for `-a <f>:<e>`, `-V` and `-X`; `-V`/`-X` take no argument here.
   - `" COREAUDIO"` added to the build options.
@@ -36,6 +38,8 @@ Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines:
   - In the main loop, `output.ca_reopen` is cleared, then `_ca_open()` is called; the
     PortAudio block clears after its call, which would lose a request raised meanwhile.
   - `process_audg` sets `output.volume_fixed = !audg->adjust` before `set_volume()`.
+  - In the main loop, after `UNLOCK_O`, `ca_report_format()` (DoP or PCM, and the idle release, for
+    the agent's menu).
 - `Makefile`
   - `OPT_COREAUDIO`.
   - `output_coreaudio.c` added to `SOURCES`.

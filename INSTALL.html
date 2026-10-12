@@ -126,7 +126,7 @@
   <h1>Installing LyrionPlay</h1>
   <p class="tagline">LyrionPlay plays music from your Lyrion Music Server (LMS) on your Mac. LMS sees it as an ordinary squeezelite player.</p>
   <div class="badges">
-    <span class="badge accent">v0.2.10</span>
+    <span class="badge accent">v0.3.14</span>
     <span class="badge">Apple Silicon</span>
     <span class="badge">macOS 14+</span>
     <span class="badge">Bit-perfect</span>
@@ -145,7 +145,7 @@
 <li><strong>Bit-perfect playback on a DAC.</strong> It switches the DAC to each track's sample rate and takes exclusive use of it while playing.</li>
 <li><strong>DSD</strong>, sent as DoP to DACs that accept it, and converted to PCM for those that don't.</li>
 <li><strong>LMS replay gain.</strong></li>
-<li><strong>Volume both ways:</strong> the LMS slider and your Mac's volume keys move each other.</li>
+<li><strong>Volume both ways:</strong> with <em>Device's own volume</em>, the LMS slider and your Mac's volume keys move each other (the keys only when the output is the Mac's built-in speakers or Follow the macOS output).</li>
 </ul>
 </section>
 <section id="what-you-need">
@@ -203,32 +203,38 @@
 <li><strong>Play something.</strong> The player appears in LMS (in Material or any other LMS interface) under your Mac's name. Material shows it with an Apple icon.</li>
 <li><strong>Choose your options:</strong> click the icon, then <strong>Settings…</strong>. See the next section.</li>
 </ol>
+<p>The menu shows whether the player is connected to your server, the output device with the rate it plays at (for DSD sent as DoP, the DSD rate, such as DSD64), a lock when it has the device to itself, and the track playing.</p>
 <p>Quitting from the menu stops the player as well. Both start again when you log in, or when you open LyrionPlay from Applications. If the menu ever disappears while the player is running, it comes back by itself within a few seconds.</p>
 </section>
 <section id="settings">
 <h2>Settings</h2>
+<p><strong>Name</strong> is the player's name in LMS; it starts as your Mac's name. <strong>Server</strong> is left empty to find your server on the network by itself; enter its name or IP address if it is on another network.</p>
 <p><strong>Output device.</strong> Either follow the macOS sound output, or pick one device. Picking the device is the better choice for a DAC.</p>
-<p><strong>Exclusive mode</strong> is on by default for USB and Thunderbolt DACs. While playing, LyrionPlay:</p>
+<p><strong>Exclusive mode</strong> is on by default for external DACs (USB, Thunderbolt and the like), and off for the Mac's own outputs. While playing, LyrionPlay:</p>
 <ul>
 <li>takes the DAC for itself, so other apps can't play through it;</li>
 <li>sets the DAC to each track's sample rate;</li>
 <li>sends the samples unchanged.</li>
 </ul>
-<p>It lets go of the DAC 30 seconds after you stop. You can change that time under Advanced.</p>
+<p>It lets go of the DAC 30 seconds after you stop. You can change that time under Advanced. At 0 it reads <em>never</em>: LyrionPlay then keeps the DAC for as long as the player is on, even while stopped.</p>
 <p><strong>DAC accepts DSD over PCM (DoP).</strong> Turn this on only if your DAC supports DoP; macOS cannot detect it.</p>
 <ul>
 <li>With it off, DSD is converted to PCM, so it still plays.</li>
 <li>DoP needs a PCM rate of a sixteenth of the DSD rate: DSD64 needs 176.4 kHz and DSD128 needs 352.8 kHz. DSD faster than your DAC's top PCM rate allows is converted to PCM.</li>
 </ul>
-<p><strong>LMS volume.</strong></p>
+<p><strong>LMS volume.</strong> Each device offers only the choices it can take: <em>Device's own volume</em> only when the Mac can set its volume, and <em>Fixed at 100%</em> only on a DAC, not on the Mac's own outputs (built-in speakers and headphones, Bluetooth, AirPlay, HDMI).</p>
 <ul>
-<li><em>Device's own volume</em>: the LMS volume slider and your Mac's volume follow each other. Move the LMS slider and your Mac's volume (built-in speakers, headphones) or the DAC's hardware volume moves with it. Use your Mac's volume keys, or mute, and the LMS slider follows a moment later.</li>
+<li><em>Device's own volume</em>: the LMS volume slider and your Mac's volume follow each other. Move the LMS slider and your Mac's volume (built-in speakers, headphones) or the DAC's hardware volume moves with it. Use your Mac's volume keys, or mute, and the LMS slider follows a moment later. The volume keys only work when LyrionPlay's output is the Mac's built-in speakers or <strong>Follow the macOS output</strong>.</li>
 <li><em>Software</em>: LyrionPlay scales the samples instead.</li>
+<li><p><em>Fixed at 100%</em>: LMS sends the music at full level, and you set the volume on the DAC or your amplifier. LyrionPlay sets the player's <strong>Output level is fixed at 100%</strong> in LMS for you, and turns LMS's volume control back on when you play to a device set to one of the other two. Each device keeps its own choice. Coming from <em>Software</em>, this is louder: turn the DAC down before you save.</p>
+<p>LMS's own Volume Control setting for this player follows the choice here: change it in LMS or Material, and LyrionPlay puts it back within a few seconds.</p></li>
 </ul>
 <p><strong>Silence on a rate change.</strong> Some DACs mute for a moment after switching rate. If the start of a track gets clipped, add a little silence here.</p>
+<p><strong>Advanced:</strong> the release time above; <strong>Resampling quality</strong>, used only when your device lacks a track's rate; <strong>Log detail</strong>: Debug writes more to the logs.</p>
+<p><strong>Save</strong> keeps your changes, <strong>Save and Close</strong> keeps them and closes the window, and <strong>Revert</strong> goes back to what is saved. If a save fails, the window says why and keeps your changes on screen.</p>
 <h3 id="for-bit-perfect-playback">For bit-perfect playback</h3>
 <ul>
-<li><strong>Use your DAC's or amplifier's own volume control.</strong> In LMS, go to the player's settings → Audio → Volume Control and choose <strong>Output level is fixed at 100%</strong>.</li>
+<li><strong>Use your DAC's or amplifier's own volume control.</strong> In LyrionPlay's Settings, set the DAC's <strong>LMS volume</strong> to <strong>Fixed at 100%</strong>.</li>
 <li><strong>Replay gain</strong> is set in LMS, under the player's settings → Audio. LyrionPlay applies it, but it changes the level, so tracks played with replay gain are not bit-perfect.</li>
 </ul>
 </section>
@@ -303,16 +309,16 @@ codesign --force --options runtime -s "LyrionPlay Signing" /Applications/LyrionP
 <p>You need Apple's Command Line Tools: run <code>xcode-select --install</code> in Terminal. Then:</p>
 <ul>
 <li><code>scripts/build.sh --install</code> builds LyrionPlay and installs it with your own certificate, exactly as above. The first build downloads and compiles CMake and the audio codec libraries, which takes a while.</li>
-<li><code>scripts/build.sh --release</code> makes the zip.</li>
+<li><code>scripts/build.sh --release</code> makes the two release zips: the app, and the codec libraries' source.</li>
 <li>Every build first runs the regression suite, <code>scripts/test.sh</code>, and stops if a test fails.</li>
 </ul>
 </section>
 <section id="licences">
 <h2>Licences</h2>
 <ul>
-<li><strong>Audio engine:</strong> squeezelite by Adrian Smith and Ralph Irving, modified for LyrionPlay, under GPLv3. Its source code, and LyrionPlay's, is at <a href="https://github.com/SimonArnold002/LyrionPlay">github.com/SimonArnold002/LyrionPlay</a>.</li>
+<li><strong>Audio engine:</strong> squeezelite by Adrian Smith and Ralph Irving, modified for LyrionPlay, under GPLv3. Its source code, and LyrionPlay's, is at <a href="https://github.com/SimonArnold002/LyrionPlay">github.com/SimonArnold002/LyrionPlay</a>: each version's under its tag (<code>v&lt;version&gt;</code>), and the source of the codec libraries built into the engine in <code>LyrionPlay-&lt;version&gt;-codec-sources.zip</code>, on the same release page as this download.</li>
 <li><strong>Menu bar app and background service:</strong> MIT licence.</li>
-<li><strong>Third-party notices:</strong> in <code>LyrionPlay.app/Contents/Resources/NOTICES.txt</code>.</li>
+<li><strong>Third-party notices:</strong> in <code>LyrionPlay.app/Contents/Resources/NOTICES.txt</code>, and each licence's full text in the <code>licences</code> folder beside it.</li>
 </ul>
 <p>LyrionPlay is not affiliated with the Lyrion Music Server project.</p>
 </section>

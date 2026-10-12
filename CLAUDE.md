@@ -8,8 +8,8 @@ It is built for macOS:
   is bit-perfect;
 - DSD as DoP;
 - LMS replay gain;
-- LMS volume drives the Mac's own volume (built-in speakers or headphones) or the DAC's
-  hardware volume.
+- LMS volume, chosen per device: the device's own volume (the Mac's volume or the DAC's
+  hardware volume, both ways), software, or Fixed at 100% on a DAC (LyrionPlay sets LMS's pref).
 
 It runs as a background launchd agent, switched on and off from a menu bar app, signed with
 the hardened runtime.
@@ -40,8 +40,12 @@ tools/make_readme_html.py   README.md + INSTALL.md -> README.html, INSTALL.html,
 VERSION               the one place the version is set (build.sh and the pages read it)
 scripts/bump-version.sh  raises VERSION (patch by default; minor, major) and regenerates the pages
 scripts/build.sh      deps -> engine -> swift build -> regression suite -> icon -> bundle ->
-                      ad-hoc sign -> checks; stops if a test fails;
-                      --install runs install.sh on it, --release makes dist/LyrionPlay-<v>.zip
+                      ad-hoc sign -> checks; stops if a codec build or a test fails;
+                      --install runs install.sh on it; --release checks the codec archives
+                      against their SHA-256 straight after the codec build, before anything
+                      else is built, then makes TWO zips, both attached
+                      to the release: dist/LyrionPlay-<v>-codec-sources.zip, then
+                      dist/LyrionPlay-<v>.zip (A RELEASE CARRIES ITS SOURCE)
 scripts/test.sh       the regression suite (REGRESSION SUITE): engine conversion, engine output
                       against a fake HAL (engine/tests/test_output_coreaudio.c, linked with
                       upstream's output.c, with the SCENARIO MATRIX), swift test,
@@ -49,7 +53,7 @@ scripts/test.sh       the regression suite (REGRESSION SUITE): engine conversion
                       keychain or server is touched
 scripts/install.sh    what every user runs: own certificate, unquarantine, sign, install
 scripts/uninstall.sh  removes the app, agent, settings, logs (--remove-certificate too)
-INSTALL.md            the user-facing install guide, shipped in the release zip
+INSTALL.md            the user-facing install guide, shipped in the release zip with INSTALL.html
 ```
 `deps/src`, `deps/tools`, `deps/out`, `build/`, `.build/` and `dist/` are git-ignored.
 
@@ -117,6 +121,10 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "the agent's Local Network approval covers the programs it starts" | **WRONG** (§A3): each executable asks once | `EACH EXECUTABLE ASKS ONCE` |
 | "LMS can be told the DAC's rate list" | **WRONG** (§A3) | `NO RATE LIST` |
 | `set_volume` with LMS fixed volume (`output.volume_fixed`) leaves the device level alone | by design; differs from `output_alsa.c` `-V` | `FIXED VOLUME LEAVES THE DEVICE ALONE` |
+| "Fixed at 100%" per DAC; `VolumeMode.fixed`, `FixedVolumeSync` (`checked`/`recordRefusal`, was `sent`), `syncFixedVolume`, `playerpref digitalVolumeControl`, `PlayerState.digitalVolumeControl`; LyrionPlay putting back a fixed/variable setting made in LMS or Material | **BUILT 2026-10-11, DECIDED by Simon** ("LyrionPlay, per DAC"): LyrionPlay OWNS the pref, both ways; **INSTALLED as 0.3.0** 2026-10-11, the put-back in 0.3.1; the switch BOTH WAYS **VERIFIED LIVE 2026-10-12** on the DragonFly (agent.log + LMS); still owed: a change made in Material put back, the FiiO on 0.3.1, the DragonFly's level after a switch (§B) | `FIXED AT 100% PER DAC` |
+| "a `digitalVolumeControl` set from outside takes effect only at the next track" | **WRONG** (§A3): LMS sends an audg at once | `SETTING DVC SENDS AN AUDG AT ONCE` |
+| "changing `digitalVolumeControl` leaves the player's volume alone"; `volumeRestore`, LMS volume 0 after a switch back from Fixed; a user's slider move between `volumeRestore`'s two reads undone | **WRONG** (§A3): LMS's hook saves a faded (temporary) volume; the slider-move window ACCEPTED (§A2 `FIXED AT 100% PER DAC`, "Volume put back"; re-reported by /code-review 2026-10-12 (4)); FOUND LIVE 2026-10-11 (50 -> 0), FIXED (put back), **INSTALLED as 0.3.1, VERIFIED LIVE 2026-10-12** both ways on the DragonFly (§B) | `THE DVC HOOK SAVES A FADED VOLUME` |
+| "`mixer volume ?` answers the temporary volume while LMS fades" | **WRONG** (§A3): it reads the saved pref | `MIXER VOLUME ? IS THE SAVED VOLUME` |
 | `ioproc` stops taking frames at a rate-change boundary; `slimproto.c` clears `ca_reopen` BEFORE `_ca_open` | by design; both differ from the PortAudio path | `THE BOUNDARY AND THE REOPEN FLAG` |
 | agent restart leaving a second engine; `stopOrphanedEngine`, `engine.pid` | **FIXED 2026-10-09** (§A3) | `A CRASHED AGENT ORPHANS ITS ENGINE` |
 | SwiftUI `@State` in the menu app | **WRONG with the Command Line Tools** (§A3): state lives in `PlayerModel` | `NO SWIFTUI MACROS WITHOUT XCODE` |
@@ -166,6 +174,23 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "the agent.log `took N s` line (0.2.7-0.2.8, whole check over 4 s) shows a stalled server" | **WRONG** (§A3): only a request with no answer could cross it | `THE 4 S LINE SAW ONLY TIMEOUTS` |
 | "a stop inside the open leaves the delay mark for a later album" (CODE-REVIEW 2026-10-11 finding 3's path) | **NARROWER** (§A3): the next album's own strm q clears it, unless the output went off between | `A NEW ALBUM'S FLUSH CLEARS THE MARK` |
 | "the engine starts with its device absent and waits for it" (`volume_pending`, REVIEW 2026-10-10 finding 7) | **ONLY WITH -r** (§A3): without a rate delay, `output_init_common` exits on `test_open` | `AN ABSENT DEVICE AT START EXITS THE ENGINE` |
+| the menu's output line showing DoP's PCM rate (176.4 kHz) for DSD64; `ca_report_format`, `lyrionplay:format`, `FormatReport`, `FormatLine` (`lyrionplay:format idle`, since CODE-REVIEW 2026-10-12), `AgentStatus.dsdRate`, `DeviceCaps.dsd`, `engineFormat` | **BUILT 2026-10-11** (Simon: "when playing DSD the helper app shows the PCM rate when its DoP this should show the DSD Rate"); suite PASS, **INSTALLED as 0.2.11** 2026-10-11 22:03Z, **VERIFIED LIVE by Simon** ("it works correctly") (§B) | `DSD RATE IN THE MENU` |
+| volume choices a device offers; `VolumeMode.isOffered`/`offered(by:)`/`nearestOffered(on:)` (was `offered(on:)`), `Settings.options(for:)`, the LMS volume picker; Fixed on the speakers / Bluetooth / AirPlay / HDMI; "Device's own volume" on a device with no volume control | **DECIDED by Simon 2026-10-12**: device volume only with a control, Fixed only on a DAC (`isExternal`); a blocked choice already saved is read as the nearest offered | `ONLY WHAT A DEVICE OFFERS` |
+| Settings window buttons; "Save and Close", `dismissWindow`, `PlayerModel.save` returning Bool, `saveError` | **BUILT 2026-10-12 at Simon's request** ("can we add a save and close option as well as save"); INSTALLED 0.3.5, **VERIFIED LIVE by Simon** ("works") | `SAVE AND CLOSE` |
+| /code-review 2026-10-12 of 0.2.11-0.3.1: Fixed caption "the Mac's volume keys set it" (hog moves the default output); the "louder" warning keyed on `device.volume == nil` (now `VolumeMode.scalesSamples`, `volumeCaption`); `dsdRate` after the idle release (now `FormatLine`, `lyrionplay:format idle`); `_ = await client.call` (send result ignored); `volumeRestore` with a failed read; `lastLMSCheck` after a settings change; `ca_report_format`'s second lock; the redundant `lastLMSCheck = .distantPast`; the format test's statics; stale ledger lines; the `fixedVolume` lock comment | **ALL 11 CHECKED 2026-10-12** (Simon: "verify all of them before recommending fixing"): 2, 3 VERIFIED + FIXED (each pinned: anti-run / mutant); 6, 10, 11 VERIFIED, prose FIXED; 1 CONFIRMED by Simon (the keys act on the macOS output only), wording FIXED, CLOSED (§B); 4, 5 DROPPED (`A STALLED SERVER IS NOT A FINDING`); 7, 8 DECLINED; 9 WRONG (§A3). **INSTALLED as 0.3.2** 2026-10-12 09:05Z, NOT live-tested (§C) | `CODE-REVIEW 2026-10-12` |
+| the menu's format report straight after a reopen (`ca_report_format` saying the last track's `ca.track_rate`/`ca.track_fmt`, "176400 dop" for a PCM track after the idle release, `said_open`); the idle-release test replaying the same DSD64; ANY lag of the report or the menu behind the DAC (the "every ~100 ms" comment, `wait_readwake(ehandles, 1000)`, no `wake_controller` at a same-rate gapless start: up to ~1 s) | **NOT A FINDING — DECIDED by Simon 2026-10-12** ("this is how dacs work the change will happen when output hits the dac not before"; on the lag, /code-review (6): "I dont care about the lag"): the report follows what reaches the DAC, and a new track's format reaches it only at its start. Skip it in reviews | `THE FORMAT CHANGES WHEN OUTPUT HITS THE DAC` |
+| /code-review 2026-10-12 (2) of 0.3.2-0.3.5: findings 1+2 above; `VolumeMode.scalesSamples(deviceHasVolume:)` dead branch + the `.device` "falls back to software" comment; Revert / `onAppear` leaving `saveError`/`lastError` (`PlayerModel.revert`, `clearSaveError`); `lyrionplay:volume` lines from a replaced engine sent to LMS (`self.engine === process`) | **1, 2 DECLINED by Simon** (above); **3, 4, 5 VERIFIED + FIXED 2026-10-12** (Simon: "Verify the rest and look to fix"); suite PASS; 4 and 5 not covered by a suite (app UI / agent main); **INSTALLED as 0.3.6** 2026-10-12 10:13Z, not live-tested (§C) | `CODE-REVIEW 2026-10-12 (2)` |
+| "each engine test shares one process, so a test that keeps static state passes only when it runs first" | **WRONG** (§A3): `main` forks every test | `EACH ENGINE TEST IS ITS OWN PROCESS` |
+| "a `playerpref` set answers no result, so `call` returns nil for it"; "status's `mixer volume` is the temporary (faded) volume" | **WRONG** (§A3, measured / LMS 9.1 source 2026-10-12) | `A SET ANSWERS AN EMPTY RESULT` |
+| "the engine ignores SIGPIPE (`stream.c`), so its stdout lines (`lyrionplay:format`, `lyrionplay:volume`) are harmless after the agent dies" | **WRONG** (§A3, source 2026-10-12): an orphan dies at its next line; not a defect | `AN ORPHAN DIES AT ITS NEXT REPORT` |
+| "a mid-play reopen for a rate change makes `ca_report_format` print a stray `lyrionplay:format idle`" (`_ca_open` clears `ca.dev` and unlocks) | **WRONG** (§A3, source 2026-10-12, /code-review 2026-10-12 (4)) | `NO STRAY IDLE ON A REOPEN` |
+| "a probe sees no volume control on a device another process holds exclusively"; `settable()`, `DeviceCaps.probe` / `squeezelite -l` while the engine holds the DAC | **WRONG** (§A3, measured on the DragonFly 2026-10-12) | `A HOG DOES NOT HIDE THE VOLUME CONTROL` |
+| /code-review 2026-10-12 (3) of 0.2.10-0.3.6: a reconcile probe while the engine holds the DAC turning a saved "Device's own volume" into Software (`options(for:)`, `-V`); `PlayerModel.save` writing the corrected choice for every listed device; `formats[nformats - 1]` in the format tests' messages; `FixedVolumeSync.sent` (now `recordRefusal`); `offered(by:)`/`offered(on:)` (now `nearestOffered(on:)`) | **1, 2 DISPROVEN 2026-10-12** (Simon: "verify 1 & 2 hold up under real world tests"): the hold does not hide the volume control (§A3), so neither has a writer; **3, 4, 5 VERIFIED + FIXED**; suite PASS; **INSTALLED as 0.3.7** 2026-10-12 10:53Z (§C) | `CODE-REVIEW 2026-10-12 (3)` |
+| docs pass of 0.3.7: README.md, INSTALL.md, NOTICES.txt, engine/UPSTREAM.md, the pages, build.sh's header, this file's overview/layout/install log; full licence texts of the bundled libraries not in the app | **DONE 2026-10-12** (Simon: "do a pass on all docs to ensure nothings missing or reported incorrecly"); UPSTREAM.md VERIFIED exact against the pinned archive; the licence texts BUILT (Simon: "yes"), INSTALLED as 0.3.10 (§C) | `DOCS PASS 2026-10-12` |
+| licence compliance for a release: the 15 texts in `licences/`, `NOTICES.txt` (version stamped by build.sh), the source tag `v<version>`, `LyrionPlay-<version>-codec-sources.zip`, copyright lines in the files written for LyrionPlay, UPSTREAM.md's 5(a) notice | **BUILT 2026-10-12** (Simon: "update all accordingly we need this to be correct"); what a release must carry is in §A2 | `A RELEASE CARRIES ITS SOURCE` |
+| /code-review 2026-10-12 (4) of 0.2.10-0.3.11: the codec-sources zip copied unchecked (`build.sh --release`, `fetch`, `.built-*` stamps); `volumeRestore` undoing a slider move; `DeviceCaps.dsd` "22.5 MHz" / "3.0 MHz" (`dsdLabels`); the `fixedVolume` comment's `sent`; the soxr licence loop | **ALL 5 VERIFIED 2026-10-12** (Simon: "verify all 5"): 1, 4, 5 FIXED (Simon: "fix them"); 2 a REPEAT (accepted, §A2); 3 FIXED (Simon: other users' DACs reach it): the full rate, "DSD64 (2.8224 MHz)"; **INSTALLED as 0.3.12** (§C) | `CODE-REVIEW 2026-10-12 (4)` |
+| /code-review 2026-10-12 (5) of 0.2.10-0.3.12: `build-deps.sh \| tail -15` hiding a failed codec build (also `make-icon`'s `\| grep … \|\| true`); `--release` writing the app zip before the codec-source checks (`check_codec_sources`, `codec_pins`); `ca_report_format`'s `!rate` guard unpinned, and its two `fflush(stdout)` (`CHECK_FLUSHED`, `fake_fflush`); the layout line's one zip; `volumeAfter`'s dead `?? "?"` | **ALL 5 VERIFIED + FIXED 2026-10-12** (Simon: "fix them all ensure no regressions check all carriers for the core audio"); a 14-mutant sweep of the engine code new since the last push: 14 of 14 killed after the flush pin; build.sh new vs old in an APFS clone; **INSTALLED as 0.3.13** (§C) | `CODE-REVIEW 2026-10-12 (5)` |
+| /code-review 2026-10-12 (6) of 0.2.10-0.3.13: a good `PlayerModel.save` wiping a switch-on error in `lastError`; the release stepper at 0 (`idleSeconds`, no `-C`) and the Exclusive caption; build.sh's "before anything is built" comment + the Layout line; the "every ~100 ms" report cadence; cleared: `digital_volume_control` in `status`, `-f` stderr only, `codec_pins` on macOS awk/shasum, the pages vs their `.md` | **1-3 VERIFIED + FIXED 2026-10-12** (Simon: "fix those"); **4 DISMISSED by Simon** ("I dont care about the lag", `THE FORMAT CHANGES WHEN OUTPUT HITS THE DAC`); suite PASS; **INSTALLED as 0.3.14** with the docs; fixes 1 and 2 VERIFIED LIVE by Simon (1 staged) (§C) | `CODE-REVIEW 2026-10-12 (6)` |
 
 ### HOW TO LOG A VERDICT so the next round finds it
 Every new decision goes in §A2 (declined or by design), §A3 (a belief a measurement killed), §B
@@ -183,8 +208,10 @@ finding about behaviour the fix introduced is new.
 
 ### A. NOT FINDINGS — deliberate, fleet-wide
 The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
-- The local folder is not a git repository (the GitHub repo is the public copy): there is no diff
-  and nothing is "uncommitted". Never prompt to commit, push, tag or ship.
+- The folder is a git repository since 2026-10-11 (Simon: "commit and push to dev"; first push
+  `7faf2f8` on `dev`, `main` still the initial README). As in the fleet: uncommitted = under review,
+  unpushed = review not passed; a review's scope is the last dev push..HEAD plus the tree. Rounds
+  before 2026-10-11 (5) were scoped by file times. Never prompt to commit, push, tag or ship.
 - A `dist/` release zip older than `VERSION`: it is made only by `build.sh --release`.
 - An entry §B marks UNVERIFIED, not yet live-tested or PARKED: known, not missed.
 - A threshold or interval §A2 or §C says was chosen (retry cadence, volume tolerance): a tuning
@@ -336,6 +363,96 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
       INSTALLED 2026-10-10 10:42 (install.sh: "version 0.2.2 (was 0.2.1)"; agent.log "LyrionPlay
       0.2.2 (202610101042)", engine started with `-M SqueezeLiteMac`). LMS `players`: prodmac46
       `96:57:54:14:bd:87`, model `squeezelite`, modelname `SqueezeLiteMac`, connected.
+    - **0.3.0** (Simon: "Yes, 0.3.0", a feature so a minor, 2026-10-11): "Fixed at 100%" per DAC
+      (`FIXED AT 100% PER DAC`), with 0.2.11's work. INSTALLED 2026-10-11 22:25Z.
+    - **0.3.1** (Simon: "build and install" after 0.3.1 was named, 2026-10-12): the volume put-back
+      (`THE DVC HOOK SAVES A FADED VOLUME`). INSTALLED 2026-10-12 08:07Z, VERIFIED LIVE.
+    - **0.3.2** (Simon: "install", "Yes, 0.3.2", 2026-10-12): the `CODE-REVIEW 2026-10-12` fixes (the
+      Fixed warning, the idle release in the menu, the volume-keys wording). INSTALLED 2026-10-12 09:05Z.
+    - **0.3.3** (Simon: "build and update", "Yes, 0.3.3", 2026-10-12): the volume-keys wording as Simon
+      set it (`THE VOLUME KEYS ON A FIXED DAC`), menu app and INSTALL.md only. INSTALLED 2026-10-12 09:18Z:
+      suite PASS inside build.sh, install.sh "version 0.3.3 (was 0.3.2)", the new menu app started 10:18:39
+      local; agent and engine NOT restarted (same cdhash, by design), prodmac46 stopped and connected.
+    - **0.3.4** (Simon: "install", "Yes, 0.3.4", "Install now" with prodmac46 PAUSED at volume 35, 2026-10-12):
+      the non-fixed captions without "fixed", and `ONLY WHAT A DEVICE OFFERS`. INSTALLED 09:43Z: suite PASS
+      inside build.sh (engine output 43/43, swift 76, install.sh 3/3); install.sh "version 0.3.4 (was
+      0.3.3)"; agent restarted (PlayerCore is in the agent, so its cdhash changed: the player restarted and
+      stopped, as told), "agent started: LyrionPlay 0.3.4 (202610121042)", "LMS: using Simons Music";
+      LMS connected, stopped, volume 35, `digital_volume_control` 1. The engine's `-a 0:0 -C 10` are
+      Simon's own Settings changes at 09:31-09:32Z (Follow the macOS output, the DragonFly's exclusive off,
+      release after 10 s), not this build. NOT live-tested: the picker per device.
+    - **0.3.5** (Simon: "build and install", "Yes, 0.3.5", 2026-10-12): `SAVE AND CLOSE` and the save error
+      in the Settings window; menu app only. INSTALLED 09:54Z: suite PASS inside build.sh (engine output
+      43/43, swift 76, install.sh 3/3); install.sh "version 0.3.5 (was 0.3.4)"; the new menu app started
+      10:54:28 local; agent (68048) and engine NOT restarted; prodmac46 stopped, connected, volume 35. (The
+      engine's `-a 0:1` is Simon's own Settings change at 09:52:45Z, before the install.) VERIFIED LIVE by
+      Simon the same day ("works"). The failed-save message itself was not seen (no save failed).
+    - **0.3.6** (Simon: "build and install", 2026-10-12): the `CODE-REVIEW 2026-10-12 (2)` fixes. INSTALLED
+      10:13Z: install.sh "version 0.3.6 (was 0.3.5)"; agent restarted (its cdhash changed), "agent started:
+      LyrionPlay 0.3.6 (202610121112)", engine on the DragonFly with `-V`, "LMS: using Simons Music". NOT
+      live-tested.
+    - **0.3.7** (Simon: "build and install", "Yes, 0.3.7", 2026-10-12): the `CODE-REVIEW 2026-10-12 (3)`
+      fixes (test messages, `recordRefusal`, `nearestOffered(on:)`); no change in behaviour. INSTALLED
+      10:53Z with prodmac46 stopped: suite PASS inside build.sh (engine output 43/43, swift 76, install.sh
+      3/3); install.sh "version 0.3.7 (was 0.3.6)". The agent restarted, as expected, since its cdhash
+      changed: "agent started: LyrionPlay 0.3.7 (202610121153)", engine on the DragonFly with `-V`, "LMS:
+      using Simons Music". LMS: connected, stopped, `digital_volume_control` 1, volume -35. That is
+      muted, as before the install (the Mac mute at 10:46:10Z).
+    - **0.3.8** (Simon: "rebuild and install", 2026-10-12): the `DOCS PASS 2026-10-12` (NOTICES.txt's
+      dsd2pcm line, build.sh's header, the pages). INSTALLED 11:08Z: suite PASS inside build.sh (engine
+      output 43/43, swift 76, install.sh 3/3); install.sh "version 0.3.8 (was 0.3.7)", "the player is
+      unchanged: it keeps running" (agent 56294 and engine not restarted, by design); new menu app
+      started 12:08:55 local; the installed NOTICES.txt has the dsd2pcm line.
+    - **0.3.9 / 0.3.10** (Simon: "yes" to bundling the licence texts, 2026-10-12): `DOCS PASS 2026-10-12`'s
+      licence texts; 0.3.10 adds the GPLv3 text that 0.3.9 lacked. INSTALLED 11:17Z: suite PASS inside
+      build.sh each time; "the player is unchanged: it keeps running"; 15 files in `licences/`.
+    - **0.3.11** (Simon: "update all accordingly we need this to be correct", 2026-10-12): `A RELEASE
+      CARRIES ITS SOURCE`. Built with `--release` (suite PASS): `dist/LyrionPlay-0.3.11.zip` (1.3 MB, 15
+      licence texts in the app) and `-codec-sources.zip` (15 MB, 9 archives, each SHA-256 matching
+      build-deps.sh); the installed NOTICES.txt names v0.3.11. INSTALLED 11:26Z from that build. The
+      player RESTARTED: the copyright lines moved output_coreaudio.c's `__LINE__`s, so the engine's
+      cdhash changed (no behaviour change); "LMS: using Simons Music" after.
+    - **0.3.12** (Simon: "build and install", after 0.3.12 was named, 2026-10-12): the `CODE-REVIEW
+      2026-10-12 (4)` fixes (the DSD rate in full in the menu; the release step checking the codec
+      archives' SHA-256; the licence helper; a comment). prodmac46 checked first: stopped, volume 35.
+      INSTALLED 13:42Z: suite PASS inside build.sh (engine output 43/43, swift 76 in 17 suites, install.sh
+      3/3); install.sh "version 0.3.12 (was 0.3.11)", "stopped the old player" (PlayerCore is in the agent,
+      so its cdhash changed); agent.log "agent started: LyrionPlay 0.3.12 (202610121442)", engine on the
+      DragonFly with `-V`, "LMS: using Simons Music"; LMS: connected, stopped, volume 35,
+      `digital_volume_control` 1, queue 10 tracks as before; NOTICES.txt names 0.3.12; `licences/` the same
+      15 texts. NOT live-tested: the new DSD label needs a DoP play (the FiiO; the DragonFly tops at 96k).
+    - **0.3.13** (Simon: "build and update", "Yes, 0.3.13", 2026-10-12): the `CODE-REVIEW 2026-10-12 (5)` fixes
+      (build.sh stops on a failed codec build or make-icon compile, the release's codec check first and the
+      app zip last, the report and flush tests, the agent's log line); the engine source unchanged.
+      prodmac46 checked first: stopped, volume 35. INSTALLED 14:34Z: suite PASS inside build.sh (engine output
+      45/45, swift 76 in 17 suites, install.sh 3/3); install.sh "version 0.3.13 (was 0.3.12)", "stopped the
+      old player" (the agent's cdhash changed); agent.log "agent started: LyrionPlay 0.3.13 (202610121533)",
+      engine on the DragonFly with `-V`, "LMS: using Simons Music" 2 s later; LMS: connected, stopped, volume
+      35, `digital_volume_control` 1, queue 10 tracks as before; menu app running; NOTICES.txt names 0.3.13;
+      `licences/` 15 texts. The first build.sh run with the codec step's new log (`build/build-deps.log`).
+    - **0.3.14** (Simon: "build and update all docs", "Yes, 0.3.14", 2026-10-12): the `CODE-REVIEW
+      2026-10-12 (6)` fixes (a good Save keeps a switch-on error; the release stepper reads "never" at 0 and
+      the Exclusive caption says so; build.sh's comment) and the docs: INSTALL.md's release time at 0
+      ("reads *never*", the DAC kept while the player is on), and the two release zips in README.md's build
+      block and INSTALL.md's Building section (round (5) fixed only the Layout line); pages regenerated by
+      `bump-version.sh` (index.html has neither, unchanged). prodmac46 checked first: stopped, volume 35.
+      INSTALLED 15:15Z: suite PASS inside build.sh (engine output 45/45, swift 76 in 17 suites, install.sh
+      3/3); install.sh "version 0.3.14 (was 0.3.13)", "the player is unchanged: it keeps running" (only the
+      menu app changed: agent 19517 and engine 19520 from 0.3.13 still running, by design); new menu app
+      started 16:15:40 local; both new strings in the installed binary; NOTICES.txt names v0.3.14;
+      `licences/` 15 texts; LMS after: connected, stopped, volume 35, `digital_volume_control` 1, queue 10
+      tracks. Fix 2 VERIFIED LIVE by Simon 2026-10-12 ("yes I see never now": the stepper at 0; then
+      "correct I see it": the Exclusive caption at 0, read with the stepper at 0 unsaved). Fix 1 STAGED + VERIFIED LIVE 2026-10-12 (Simon: "you can stage it"): a `ditto` copy of the installed
+      0.3.14 at `<scratchpad>/AppTranslocation/LyrionPlay.app` (no quarantine: the check is the path string,
+      so Gatekeeper's real translocation was not needed); Simon switched the installed player Off and
+      quit its menu (one menu at a time, `MenuPresence.claim`), the copy was opened, Player On gave the
+      install.sh message, then Settings > Save and Close (settings.json rewritten 16:24:46 by the copy,
+      values identical to the backup) and the message STAYED (Simon: "yes"). A first try proved
+      nothing: no save had happened (the file's mtime predated the copy), so check the mtime. Restored:
+      copy quit, installed menu reopened, Player On by Simon: the launch agent plist identical to its backup;
+      agent 75372 "agent started: LyrionPlay 0.3.14 (202610121614)" (the first 0.3.14 agent), engine on the
+      DragonFly, "LMS: using Simons Music"; LMS: connected, stopped, volume 35, `digital_volume_control` 1,
+      queue 10 tracks. Copy and backups deleted.
 - **APPLE SILICON ONLY — Simon, 2026-10-09.** arm64 only, macOS 14+. No universal builds.
 - **NO VIRTUAL AUDIO DRIVERS — Simon, 2026-10-09.**
   - Simon: "we dont need blackhole it messes up things last time i installed it and was hard to
@@ -372,6 +489,145 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
     `set_mixer(.., 0dB)`). On a headphone DAC whose volume control is the only one, that is full
     volume.
   - Fixed means "the player does no volume", so the listener's level stays where it was.
+  - Since 2026-10-11 the app can set LMS's fixed mode itself, per device: `FIXED AT 100% PER DAC`.
+- **FIXED AT 100% PER DAC — BUILT 2026-10-11** (Simon: "is it possible to add a fixed volume mode
+  that would feed back to LMS to set the player to 100% fixed … save that setting per dac"; then
+  "LyrionPlay, per DAC" for who owns the pref). INSTALLED as 0.3.0 2026-10-11, the put-back as 0.3.1; the
+  switch both ways VERIFIED LIVE 2026-10-12 on the DragonFly; the rest owed (§B).
+  - **The setting:** a third "LMS volume" choice per device (keyed by UID, like the other two),
+    `VolumeMode.fixed`, "Fixed at 100%". The engine gets no `-V`, so it never moves the device's
+    level, even on an audg LMS sends before the pref is set; once LMS says fixed (audg adjust 0),
+    the gain is unity (`slimproto.c:448`). The engine is UNCHANGED.
+  - **LyrionPlay OWNS the pref, both ways (Simon's choice; the other option, "only undo what it
+    set", was declined):** the agent's LMS check (every 5 s, and at once after a settings change; a change to or from the
+    device's own volume restarts the engine and follows at the NEXT check, 6 s live: `CODE-REVIEW
+    2026-10-12` finding 6) reads
+    `digital_volume_control` from the `status` it already asks for, and when it differs from the
+    engine device's mode sends `playerpref digitalVolumeControl 0` (Fixed) or `1` (device, software).
+    So a switch from a fixed DAC lands right, and a change made in LMS or Material is put back at
+    the next check. NOT A FINDING: that a hand-set LMS fixed setting is turned back on for a device
+    not set to Fixed (decided; INSTALL.md says so).
+  - **Refusal guard:** after a send the agent reads the pref back (`digitalVolumeControl(player:)`);
+    if LMS did not keep it (its validator refuses 0 without `HasDigitalOut`; the engine always sends
+    `HasDigitalOut=1`, so NO WRITER today), it logs once and does not send again until the device
+    or its mode changes. The read-back, not the next check, decides, so a change made in Material
+    within 5 s of a send is put back, not taken for a refusal. A missing read-back is not a refusal.
+  - **agent.log:** "LMS volume for <device>: setting it to fixed at 100% / turning volume control
+    back on, as this device's setting says"; the refusal line.
+  - **Settings window:** the caption under the picker says what the choice does, and never "fixed"
+    outside Fixed (Simon, 2026-10-12: "If yuo have a DAC chosen, devices volume is not fixed you say it
+    is", of 0.3.3's "LMS's own fixed-volume setting for this player follows this choice" under *Device's
+    own volume*). Now: *Device's own volume* "The LMS volume slider sets X's own volume." (offered only
+    with a volume control, `ONLY WHAT A DEVICE OFFERS`);
+    *Software* "The LMS volume slider scales the samples; X's own volume stays where it is."; each with the
+    keys note on a device with a volume control. With Fixed, that LMS sends full level, and "turn it down before saving" when the SAVED mode scales
+    the samples (`VolumeMode.scalesSamples`: software only; the device's own volume saved on a device
+    with no Mac volume control is read as software by `Settings.options(for:)`), since from software volume Fixed is louder at once (Software and
+    Fixed start the same engine, so nothing restarts). Until `CODE-REVIEW 2026-10-12` finding 2 it
+    keyed on the device having no volume control, so Software on the speakers or the DragonFly got
+    no warning. No volume-keys part under Fixed; the other two choices say where the keys work (§B,
+    `THE VOLUME KEYS ON A FIXED DAC`, Simon's wording 2026-10-12).
+  - **Volume put back (FIXED 2026-10-11, Simon: "okay apply the fix"):** LMS's hook for this pref
+    saves a faded (temporary) volume as the real one (`THE DVC HOOK SAVES A FADED VOLUME`), which
+    left the rig at volume 0. The agent reads the saved volume (`mixer volume ?`) before the send and
+    after it, and when it changed sends `mixer volume <before>` (`volumeRestore`), which also moves
+    Material's slider; a negative (muted) volume is never sent (`mixer volume -N` is RELATIVE), and the
+    hook does not change one anyway. agent.log: "LMS saved its faded volume (N) as the player's volume
+    when the setting changed; put back: mixer volume M". A user's own slider move inside the ~60 ms
+    between the two reads would be undone: accepted. Tests `aFadedVolumeLMSSavedIsPutBack`,
+    `aMutedVolumeIsNeverPutBack`; mutants (a muted volume put back; put back when unchanged; a
+    fractional volume rounded) each fail. Suite PASS, swift 72 in 17 suites. INSTALLED as 0.3.1,
+    VERIFIED LIVE 2026-10-12 (§B).
+  - **Not done:** the switch between devices is not instant: the pref follows at the next check
+    (≤5 s plus the reconnect), so a track already playing at the switch plays at the old mode
+    until then (during that window nothing moves the device's level).
+  - **Tests:** `Arguments.fixedVolumeNeverTouchesTheDevice`, suite `FixedAtFullPerDAC` (7: once,
+    both ways, put back, refusal not a loop, no read-back, status parse, settings file), settings
+    round trip with `.fixed`. New API, so no anti-run on the old code; MUTANTS instead, each failing
+    its test: `.fixed` passing `-V`; "only undo" (non-fixed modes send nothing); a refusal retried
+    every check; a refusal never cleared; no read-back taken as a refusal; the status field read as
+    a string only. `scripts/test.sh` PASS (swift 70 tests in 17 suites); agent and app build, the
+    one warning the known `SendableClosureCaptures` in `refreshLMS` (the new task captures an
+    `OSAllocatedUnfairLock`, not `self`).
+- **ONLY WHAT A DEVICE OFFERS — Simon, 2026-10-12** ("we need to block device volume as an option if it
+  doesnt offer it, block fixed on MacOS outputs"; then, asked: "Everything not a DAC", and a blocked
+  choice already saved "Treat as allowed choice").
+  - `VolumeMode.isOffered(by:)`: *Device's own volume* only with a volume control the Mac can set
+    (`device.volume`); *Fixed at 100%* only on a DAC (`DeviceCaps.isExternal`: usb, thunderbolt,
+    firewire, pci, avb, the test that already sets exclusive mode's default), so never on built-in,
+    Bluetooth, AirPlay or HDMI; *Software* everywhere. The picker lists only those (`offered(by:)`); the
+    old "Device volume (none here: software is used)" label is gone.
+  - A saved choice the device does not offer is read as the nearest offered (`nearestOffered(on:)`, was `offered(on:)`) in
+    `Settings.options(for:)`, which EVERY reader uses (engine arguments, the agent's LMS sync, the
+    picker, the caption, the warning): device volume without a control -> software (what the engine
+    already played it as: `-V` with no control is software gain, so no change heard); Fixed on a Mac
+    output -> the device's own volume (software without a control), so the agent turns LMS's volume
+    control back on. The Settings window's Save writes the corrected choice for the devices it lists.
+  - On the rig nothing is read differently (DragonFly saved `device`, FiiO `software`, the speakers
+    unsaved): the engine's arguments are unchanged.
+  - Tests `eachDeviceOffersOnlyWhatItHas`, `aBlockedChoiceSavedIsReadAsOneOffered` (new API; MUTANTS:
+    Fixed offered everywhere FAILS both, no correction in `options(for:)` FAILS the second);
+    `fixedVolumeNeverTouchesTheDevice` and `fixedIsLouderOnlyAfterSoftwareVolume` moved from the speakers
+    (Fixed blocked there now) to a DragonFly fixture (its real probe line); an HDMI fixture with no
+    control. Suite PASS (swift 76).
+  - **Live report on 0.3.4, 2026-10-12** (Simon: "I still see all options and can chnage them on all
+    outputs", "this is not doing anything different to previous version"): NOT A BUG. The rule judges the
+    DEVICE behind the choice, and both entries Simon looked at were the DragonFly ("Follow the macOS
+    output" followed it, as the macOS output), a DAC with a volume control, which offers all three, as in
+    0.3.3. Only the speakers (2 choices) and the FiiO (2; not connected then) differ. Simon, told so: "I
+    see what the issue was and makes sense". PROPOSED, NOT BUILT, no decision: no Fixed under "Follow the
+    macOS output" whatever it follows; hiding Exclusive/DoP on Mac outputs (the speakers' saved `dop` is
+    true; what that does on the speakers was not checked).
+- **A RELEASE CARRIES ITS SOURCE — 2026-10-12** (Simon: "so we are ok license wise to release this",
+  then "update all accordingly we need this to be correct"). The engine is GPLv3 and links FAAD2 (GPL),
+  mpg123 and soxr (LGPL 2.1) and the BSD/Apache codecs statically, so a binary given out must come with
+  its Corresponding Source and the licence texts:
+  - **In the app** (build.sh): `Contents/Resources/licences/`, 15 texts (`DOCS PASS 2026-10-12`), and
+    `NOTICES.txt` with `<version>` replaced by the build's version, naming the tag and the sources zip.
+  - **`build.sh --release`** makes `dist/LyrionPlay-<v>.zip` AND `dist/LyrionPlay-<v>-codec-sources.zip`:
+    the 9 archives `deps/build-deps.sh` fetches (read from its `fetch` lines; it stops if that is not 9,
+    one is missing, or one differs from the SHA-256 build-deps.sh pins, since `CODE-REVIEW 2026-10-12 (4)`), build-deps.sh itself, and a README naming the tag.
+    Since `CODE-REVIEW 2026-10-12 (5)` that check runs straight after the codec build, before anything
+    else is built, and again on the copies; the sources zip is made first and the app's zip last, so a
+    release that stops leaves no app zip without its sources.
+  - **What a release needs, beyond the build:** the `v<version>` tag is ALREADY part of every release
+    (Simon, 2026-10-12: "we always add a version tag to our release build part of the release process";
+    do not raise it as a risk). The one new step: attach BOTH zips, the app's and
+    `-codec-sources.zip`, to that release page. NOTICES, INSTALL and README point users there.
+  - **Copyright:** the files written for LyrionPlay say "(c) 2026 CrystalGipsy" (output_coreaudio.c
+    beside squeezelite's authors, output_coreaudio_conv.h, Makefile.coreaudio, both test files), as
+    LICENSE does. `engine/UPSTREAM.md` opens with the section 5(a) modification notice and date.
+  - **Not licence, Simon's call:** "Lyrion" in the name and the Lyrion waveform in the icon are a
+    trademark courtesy; the docs say it is not affiliated. Asking the Lyrion maintainers before an
+    announcement was suggested, not done.
+  - The menu app and agent (MIT) run the engine as a separate program (arguments in, lines out on
+    stdout): a separate work, not GPL-bound.
+- **THE FORMAT CHANGES WHEN OUTPUT HITS THE DAC — Simon, 2026-10-12** ("1 and 2 are not issues this
+  is how dacs work the change will happen when output hits the dac not before"). /code-review 2026-10-12
+  (2) reported that after the idle release, the next open says the LAST track's format at once
+  (`ca_report_format`, `ca.track_rate`/`ca.track_fmt`, e.g. "176400 dop" while a 176.4k PCM track
+  buffers), and that the test `the_idle_release_is_reported` replays the same DSD64 so cannot see it.
+  DECLINED: the report follows the IOProc's record of what reached the DAC, and a new track's format
+  reaches it only at that track's start. Do not report the window between an open and the track start,
+  and do not propose reporting the pending track first.
+  - **The lag is not a finding either — Simon, 2026-10-12** (/code-review 2026-10-12 (6) finding 4,
+    DISMISSED: "I dont care about the lag"). The comment above `ca_report_format` (and the engine note
+    under §C's DSD rate entry) says "every ~100 ms"; in fact slimproto runs it on a wake or on
+    `wait_readwake(ehandles, 1000)`'s timeout. A rate change wakes it at once (`ca_reopen` ->
+    `wake_controller()` in the IOProc), but a gapless start at the SAME device rate (DSD64 DoP <->
+    176.4k PCM, DSD128 <-> 352.8k) does not, so the line and the menu can trail the DAC by up to ~1 s.
+    Do not report the lag, the cadence or the "~100 ms" wording, and do not propose a wake at the
+    track start.
+- **SAVE AND CLOSE — Simon, 2026-10-12** ("can we add a save and close option as well as save"). The
+  Settings window has Revert, Save (still the Return key) and Save and Close, which saves and then closes
+  the window (`dismissWindow(id: "settings")`) ONLY when the save worked (`PlayerModel.save` now returns
+  whether it did; its two callers are these buttons), so a failed save keeps the edits on screen. A failed
+  save's message now shows in the Settings window too, in red above the buttons (Simon: "yes show it in
+  window"): `PlayerModel.saveError`, set by a failed save, cleared by a good one, by Revert and when the window
+  opens (`clearSaveError`, which also clears `lastError` when it holds the same message);
+  `lastError` still carries it to the menu panel as before (`lastError` also holds switch-on errors, which
+  do not belong in Settings). INSTALLED as 0.3.5, VERIFIED LIVE by Simon 2026-10-12 ("works"); the
+  failed-save message not seen (not staged: it would mean making Simon's settings file unwritable).
 - **THE BOUNDARY AND THE REOPEN FLAG — by design, 2026-10-09.** Two places where the CoreAudio
   path deliberately differs from `output_pa.c`:
   - **The boundary.** `pa_callback` keeps calling `_output_frames` after a track start that
@@ -492,13 +748,16 @@ evidence it cites.
 | NO SWIFTUI MACROS WITHOUT XCODE: SwiftUI builds fine with the Command Line Tools | **PARTLY WRONG** (2026-10-09) | `@State` failed: "plugin for module 'SwiftUIMacros' not found". The CLT plugin folder (`/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins`) holds only `libObservationMacros`, `libSwiftMacros` and `testing`. `@Observable` and `@Bindable` work; `@State` (a macro in the macOS 26 SDK) does not. The app keeps all state in an `@Observable` `PlayerModel.shared`. Installing Xcode would lift this; it is not needed. |
 | A SHORTCUT QUIT THE MENU: playback made the menu bar icon disappear | **WRONG** (measured 2026-10-09) | Simon: the icon went "when I started to play". The unified log shows the menu app's panel opened at 22:47:20 over VS Code and kept the keyboard (WindowServer "outbound to keyThief") while VS Code was in front. At 22:48:51 a modifier plus a key reached it, AppKit ran `performKeyEquivalent:`, and launchservicesd logged `QUITTING` 50 ms later: an orderly quit, with no crash report. The first track started 16 s after that, at 22:49:07. The agent and engine never stopped. Only ⌘Q terminates a default SwiftUI app, so the key was almost certainly ⌘Q, though the log does not name it. Fix: `CommandGroup(replacing: .appTermination) {}` removes ⌘Q, and `applicationShouldTerminateAfterLastWindowClosed` returns false. Any quit not from Quit Menu is logged with its event to `~/Library/Logs/LyrionPlay/menu.log` and is never refused, since logout needs it. The ⌘Q removal is UNVERIFIED by keypress (no Accessibility access to send one). |
 | READ-BACK IS NOT THE LEVEL SET: a device reports the dB the engine just set, so comparing with the requested level tells the user's changes from ours | **WRONG** (measured 2026-10-10) | The MacBook Pro speakers move in coarse steps. With the record set to the REQUESTED dB, `mixer volume 50` produced 4 reports (−22.73, −21.85, −21.07, −20.37 dB), and LMS crept to 57: each read-back was mistaken for a user change and pushed back. Fix: `apply_volume` records the read-back after setting, and opens a 500 ms window (`VOLUME_SETTLE_NS`) in which the listener only records. Re-measured: 50 stayed 50, 62 stayed 62, 0 reports. (A clean set-versus-read-back table was NOT obtained: the probe ran with sync live, so the engine overwrote its readings.) |
-| UNMUTE IS NOT A LEVEL: when the Mac unmutes, sending LMS the device's level restores the volume | **WRONG** (measured 2026-10-10) | For squeezelite, LMS fades the level down over 0.3125 s (`SUPER::fade_volume`; `SqueezePlay::fade_volume` skips the fade only for baby/fab4), then mutes with gain 0. The engine then holds the device at its minimum, −63.5 dB. Unmuting sent `mixer volume 7`. Fix: `pushVolume` reads `mixer volume ?` (LMS stores a muted volume as negative), and sends `mixer muting 0` when it is negative. Re-measured: back to 42. |
+| UNMUTE IS NOT A LEVEL: when the Mac unmutes, sending LMS the device's level restores the volume | **WRONG** (measured 2026-10-10) | For squeezelite, LMS fades the level down over 0.3125 s (`SUPER::fade_volume`; `SqueezePlay::fade_volume` skips the fade only for baby/fab4), then mutes with gain 0. The engine then holds the device at its minimum, −63.5 dB. Unmuting sent `mixer volume 7`. Fix: `pushVolume` (now `VolumePush`) reads `mixer volume ?` (LMS stores a muted volume as negative), and sends `mixer muting 0` when it is negative. Re-measured: back to 42. |
 | RESUME IS ONE AUDG: LMS sends a single volume when playback resumes | **WRONG** (LMS 9.1 source, 2026-10-10) | `StreamingController::_Resume` calls `fade_volume(fadeIn or FADEVOLUME)`; `SqueezePlay::fade_volume` skips the fade only for baby/fab4, so squeezelite gets `Player::fade_volume`: an `audg` every 0.05 s from 0 up to the volume. After a pause longer than `-C` (30 s) the device is closed, so these arrive while the monitor is opening it. |
 | LMS SENDS VOLUME ON CONNECT: the player gets LMS's volume as soon as it connects | **WRONG** (LMS 9.1 source, 2026-10-10) | `Squeezebox::play` re-sends it ("make sure volume is set") when each track starts, and `mixer` commands send it. A freshly connected player has no `audg` until then, hence the engine watches from init. |
+| SETTING DVC SENDS AN AUDG AT ONCE: a `digitalVolumeControl` set from outside (`playerpref`) reaches the player only at the next track start or `mixer` command | **WRONG** (LMS 9.1 source, read 2026-10-11) | `Player.pm:77`: `$prefs->setChange( sub { $_[2]->volume( $_[2]->volume ); }, 'digitalVolumeControl')`, and `Squeezebox2::volume` sends `audg` with the pref as its adjust byte. `Prefs::Base::set` runs the change only when the value changes and the validator passes: `Player.pm:85-89` refuses a false value unless `hasDigitalOut` (squeezelite's `HasDigitalOut=1`, mapped in `SqueezePlay.pm`). `prefCommand` takes `_newvalue` "0" (`value || _newvalue` gives "0"). `status` returns it as `digital_volume_control`, an integer (rig, 2026-10-11), and Material shows a player at 0 as fixed at 100 (`server.js` dvc). |
+| THE DVC HOOK SAVES A FADED VOLUME: changing `digitalVolumeControl` leaves the player's saved volume alone | **WRONG** (LMS 9.1 source, read 2026-10-11, after Simon's live report) | The hook is `$_[2]->volume( $_[2]->volume )` (Player.pm:77). `Client::volume` with no argument returns `tempVolume` when one is set (Client.pm:850), and with one but no temp flag SAVES it as the pref and clears the temp (Client.pm:842-845). LMS sets a temporary volume while it fades: `_Pause` fades to a temporary 0 (`fade_volume(-FADEVOLUME)`, Player.pm:427 `volume($endVol, 1)`), as do mute and sleep fades. So a fixed/variable change while one is in effect saves it, typically 0. LMS's own `stream_s` passes the temp flag (`volume($client->volume(), defined($client->tempVolume()))`, Squeezebox.pm:189); the hook does not: an LMS bug, which LyrionPlay hits on every device switch. On the rig 2026-10-11: prodmac46 at 50 (22:25Z), the FiiO left USB mid-track (23:26:55 local), the agent turned volume control back on (22:28:56Z), and LMS's saved volume was 0 at 22:30:40Z; the agent pushed no volume (agent.log). Which fade left that 0 was not seen. **REPRODUCED LIVE 2026-10-12** (0.3.1, DragonFly, Simon's OK): prodmac46 paused at volume 17, a switch to Fixed: the agent read 0.0 after the send (the pause fade's temporary 0, saved by the hook) and put 17 back; then played 8 s, paused, switched back to Device: 0.0 again, 17 put back. A muted player is safe: its negative volume survives the hook because the `mute` pref stops `Client::volume`'s clamp (Client.pm:831). |
+| MIXER VOLUME ? IS THE SAVED VOLUME: `mixer volume ?` answers the temporary volume while LMS fades | **WRONG** (LMS 9.1 source, 2026-10-11) | `mixerQuery` answers `volume` from `$prefs->client($client)->get("volume")` (Queries.pm:2137); only bass/treble/pitch call the client's method. So it is the saved volume, negative while muted (what `VolumePush`'s unmute and `volumeRestore` both rely on). |
 | UNIVERSAL IS NOT ROSETTA: A "universal" binary depends on Rosetta | **WRONG** (raised 2026-10-09) | A universal Mach-O carries a full native arm64 slice; Rosetta translates only x86_64-only code. Moot here anyway: tools are built from source as arm64-only (`TOOLS ARE BUILT HERE`). |
 | MUTE HAS A WRITER ONLY WITHOUT A MUTE CONTROL: with `-V`, an LMS mute (gain 0, which is how LMS mutes, `Squeezebox2::volume`) leaves the DAC playing at its minimum dB, because `set_volume` keeps the samples at `FIXED_ONE` | **NO WRITER** (measured 2026-10-10, `squeezelite -l`) | `apply_volume` sets `kAudioDevicePropertyMute` whenever the device has one. DragonFly Black v1.5: `{"control":"main","db_min":-64.0,"db_max":0.0,"mute":true}`; MacBook Pro Speakers: `-63.5..0, mute true`; the FiiO has NO volume control, so it gets software gain and gain 0 is digital silence. Only a DAC with a volume control and no mute control would sit at its minimum, and upstream `output_alsa.c` `-V` does exactly that for every device (it never uses the playback switch except to unmute at init, line 891). Re-raise only with a named DAC whose `-l` shows `"mute":false` with a volume control. |
 | THE OFF POLL COSTS NOTHING MEASURABLE: the monitor waking every 100 ms (`OFF_POLL_US`) while the output is off (the idle state with `-C 30`) costs energy | **WRONG** (measured 2026-10-10) | Engine PID 5610, idle 28 min (`mode stop`, output off, so the monitor polling): `top -l 3 -s 5 -stats cpu,idlew` gave 0.0% CPU and idle wakeups 793 → 796 in 5 s, about 0.6/s for the whole process (macOS coalesces the timers). |
-| HOG MOVES THE DEFAULT OUTPUT: taking exclusive access to the macOS default output leaves it the default | **WRONG** (measured on macOS 26.7.1, 2026-10-10, silent probe: speakers idle, `DeviceIsRunningSomewhere` 0) | Hogging the MacBook Pro speakers made the FiiO the default 7-9 ms later; releasing put the speakers back 5-8 ms later, each with a `DefaultOutputDevice` notification (3 rounds). So with "Follow the macOS output" and exclusive mode (the default on a USB DAC), the engine's own hog at the first track moved the default, the agent's `AudioDeviceWatcher` restarted the engine on the speakers, the release moved it back, and so on. Fix: `Settings.resolveDevice(in:holding:)` stays on the device the engine holds (`heldDevice()`: `hogOwner == engine PID`); `followDeferred` plus `tick` follow a different output chosen meanwhile once the engine lets go. |
+| HOG MOVES THE DEFAULT OUTPUT: taking exclusive access to the macOS default output leaves it the default | **WRONG** (measured on macOS 26.7.1, 2026-10-10, silent probe: speakers idle, `DeviceIsRunningSomewhere` 0) | Hogging the MacBook Pro speakers made the FiiO the default 7-9 ms later; releasing put the speakers back 5-8 ms later, each with a `DefaultOutputDevice` notification (3 rounds). So with "Follow the macOS output" and exclusive mode (the default on a USB DAC), the engine's own hog at the first track moved the default, the agent's `AudioDeviceWatcher` restarted the engine on the speakers, the release moved it back, and so on. Fix: `Settings.resolveDevice(in:holding:)` stays on the device the engine holds (`heldDevice()`: `hogOwner == engine PID`); `followDeferred` (now `OutputFollow`) plus `tick` follow a different output chosen meanwhile once the engine lets go. |
 | REMOVE WAITS FOR THE LISTENER: `AudioObjectRemovePropertyListener` returns at once | **WRONG** (measured 2026-10-10, silent probe on the hog-mode property) | Called while a listener call that sleeps 1 s was running, it took 1001 ms and returned after the call ended. `watch_volume`/`unwatch_volume` held `vrec.lock` across it, and `volume_listener` takes `vrec.lock`: a volume key at engine exit or at a device switch deadlocked. Fix: `vrec.watch` serialises the add/remove calls and the listener never takes it; `vrec.lock` is held only to copy `dev`/`ctl`. The fake HAL in `engine/tests/test_output_coreaudio.c` models this wait. |
 | ATS LOCAL IS PLAIN NAMES ONLY: `NSAllowsLocalNetworking` lets the agent reach any LAN server name | **WRONG** (measured 2026-10-10 with a helper in a scratch bundle on the real Info.plist; the agent's `Bundle.main` is the app, so ATS applies to it) | `plex` and `192.168.1.234` loaded; `lms.lan`, `plex.home.arpa` and `example.com` failed -1022 before any DNS. With `NSAllowsArbitraryLoads` alone they passed ATS (-1003, no such host). With BOTH keys: -1022 again, because the local key voids the arbitrary one. The same binary outside a bundle had no ATS. Fix: `NSAllowsArbitraryLoads` only; `TransportSecurity` test forbids the local key coming back. The agent's only HTTP peer is the user's own LMS, over plain HTTP by necessity. |
 | TESTING MACROS BY NAME: `swift test` under the Command Line Tools is deterministic | **WRONG with CLT 27.0 / Swift 6.4** (measured 2026-10-10) | About half of all test compiles failed with "plugin for module 'TestingMacros' not found" (repo: 5/6 then 3/8 serial with `-j 1`; a one-test scratch package 5/8, and 2/8 outside the tool sandbox), with `-plugin-path …/host/plugins/testing` on the command line. `-Xswiftc -load-plugin-library -Xswiftc …/plugins/testing/libTestingMacros.dylib`: scratch 12/12, repo 10/10. `build.sh` had piped `swift test` into `grep … \|\| true`, which hid both this and any real failure. |
@@ -506,6 +765,11 @@ evidence it cites.
 | A NEW ALBUM'S FLUSH CLEARS THE MARK: the delay mark a stop inside the open left set (CODE-REVIEW 2026-10-11 finding 3) reaches the next album | **NARROWER than logged** (scenario matrix on the 0.2.5 copy, 2026-10-11) | LMS starts every album with strm q, and `output_flush` clears `delay_active` unless the output is OFF. A stop, then another album, cleared it: no such scenario lost the first half on 0.2.5. Only with the idle release between the stop and the next album (strm q while OFF) did the mark survive to a later gapless rate change, which then lost its first half: 84 matrix failures on 0.2.5, all 84 with the idle release between. The 2026-10-11 named test skipped the album's strm q; its fix stands. |
 | THE MATRIX IS FRAME-EXACT BUT ONE: the scenario matrix gives the same frames run to run, so a `MATRIX_SIG` diff between two builds is the change | **NARROWER** (CODE-REVIEW 2026-10-11 (4), 2026-10-11) | 3 parallel runs of one build: identical in all 26,250 scenarios. 0.2.10's first run differed from its next two in ONE: 7869, a synced start of DSD64 after a 48k device with a 200 ms rate delay, its music one IOProc call later (99 vs 100 segments, same music frames); serially (`MATRIX_ONE=7869`) 8 of 8 runs alike on both builds. A difference in a synced start: rerun before reading it as the build's. **NARROWER STILL (CODE-REVIEW 2026-10-11 (5)):** with the signature hashing every sample, two parallel runs of ONE build differed in 34 scenarios, and that build against 0.2.10 (the same machine code) in 37; all 51 are synced starts (of 170), every difference in the segment structure (none hash-only, so the hash adds no noise). Replayed serially, 3 runs each: 0.2.10 differed from itself in 13 of the 51. So a synced start can slip a call even alone, more under load. A difference there is the build's only if MATRIX_ONE reruns of both builds never give the same output; no other scenario has ever differed run to run. |
 | AN ABSENT DEVICE AT START EXITS THE ENGINE: the engine starts while its device is away and waits for it (REVIEW 2026-10-10 finding 7, `volume_pending`) | **ONLY WITH -r** (upstream `output.c`, read 2026-10-11 while linking it into the suite) | `output_init_common` calls `test_open` unless `user_rates`, and `exit(1)`s when the device is absent. `-r` sets `user_rates`, and the agent passes `-r` only with a rate delay (`EngineArguments`). So with the default settings an engine started in the probe-to-start window exits at once and the agent starts it again; the absent-at-init path (and its tests, which now pass `-r`'s rates) needs a rate delay. Finding 7's fix stays; no writer changes. |
+| EACH ENGINE TEST IS ITS OWN PROCESS: the engine suite's tests share one process, so a test that reads function-level statics (`ca_report_format`'s `said_*`) passes only while it runs first | **WRONG** (`CODE-REVIEW 2026-10-12` finding 9) | `main` in `engine/tests/test_output_coreaudio.c` `fork()`s every test (and the matrix every scenario) and runs it in the child; the parent never calls the engine, so each test starts from fresh statics. Only `what plays is reported once per change` and `the idle release is reported` call `ca_report_format`. |
+| A SET ANSWERS AN EMPTY RESULT: a `playerpref` set answers no `result`, so `LMSClient.call` returns nil for a send that worked; and status's `mixer volume` is the temporary volume a fade sets | **WRONG, both** (rig + LMS 9.1 source, 2026-10-12) | `playerpref digitalVolumeControl 1` (the value it held, so no change hook ran; player stopped) answered `{"result":{}}`, so `call` gives `[:]`: nil means no HTTP answer, i.e. a stalled or gone server. `statusQuery` writes `mixer volume` from `$prefs->client($client)->get('volume')` (Queries.pm:4137), under `hasVolumeControl`, which is 1 for every player (Player.pm:482): the SAVED volume, negative while muted, as `mixer volume ?` (`MIXER VOLUME ? IS THE SAVED VOLUME`). |
+| AN ORPHAN DIES AT ITS NEXT REPORT: the engine ignores SIGPIPE, so a `printf` to stdout (`ca_report_format`, `volume_listener`) cannot kill an engine whose agent died | **WRONG** (source, /code-review 2026-10-12 (3), 2026-10-12; a review cleared it on this wrong reason) | `signal(SIGPIPE, SIG_IGN)` (`engine/stream.c:804`) is inside `#if SUN`, which `squeezelite.h:73` defines for `__sun` only. `utils.c`'s `SO_NOSIGPIPE` covers sockets only, and the agent ignores only SIGTERM and SIGINT (`Agent/main.swift:137`). stdout is a `Pipe` to the agent (`main.swift:234`); stderr goes to the engine log, a file. So an engine orphaned by a crashed agent (`A CRASHED AGENT ORPHANS ITS ENGINE`) dies of SIGPIPE at its next stdout line. Since 0.3.x, `lyrionplay:format` makes that the next format change or idle release; before, it was the next Mac volume change on a `-V` device. Still NOT A FINDING: launchd restarts a crashed agent (`KeepAlive` `SuccessfulExit: false`, `LaunchAgent.swift:16`), and `stopOrphanedEngine` stops the orphan at once anyway. Not measured live. |
+| A HOG DOES NOT HIDE THE VOLUME CONTROL: while another process holds a device exclusively and plays to it, `squeezelite -l` run from a separate process reports no settable volume for it, so a probe taken during a play (the agent's reconcile, the Settings window's) reads a saved "Device's own volume" as Software and drops `-V` | **WRONG** (measured 2026-10-12 on the DragonFly Black v1.5, /code-review 2026-10-12 (3) findings 1 and 2; silent: prodmac46 `mode stop`, zeros at the DAC's own 48k / 24-bit, so no relock) | A scratch probe set `kAudioDevicePropertyHogMode` on the DragonFly to its own PID. In its own view, `kAudioDevicePropertyVolumeScalar` (output, main) was present and settable. Meanwhile `/Applications/LyrionPlay.app/Contents/MacOS/squeezelite -l` gave `"exclusive_owner":<probe PID>` and `"volume":{"control":"main","db_min":-64.00,"db_max":0.00,"mute":true}`. A second probe did the same with an IOProc running (`DeviceIsRunningSomewhere` 1, 404 IOProc calls of zeros in 4 s), and `-l` again gave the volume. So holding a device and playing to it leave its volume control visible and settable to every process. Not run: an LMS play under the engine itself, or any DAC but the DragonFly. Re-raise only with a named device whose `-l` loses `volume` while held. |
+| NO STRAY IDLE ON A REOPEN: `_ca_open` sets `ca.dev = kAudioObjectUnknown` and drops the output lock while it stops the old IOProc, so a `ca_report_format` tick during a mid-play reopen for a rate change sees the device closed and prints `lyrionplay:format idle` between two tracks | **WRONG** (source, 2026-10-12, /code-review 2026-10-12 (4)) | The rate-change reopen is `output.ca_reopen` -> `_ca_open()` on the slimproto thread (`slimproto.c:717-720`), and `ca_report_format()` is called later in the SAME loop iteration on the same thread (`slimproto.c:751`), so it can never run inside that window. The only other caller of `_ca_open` is the monitor thread (`monitor()`), which `_ca_open` starts only on `err` (the open failed, `ca.dev` already unknown). So the report has already said idle, correctly, before any monitor open. Re-raise only with a third `_ca_open` caller, or a report call moved off the slimproto thread. |
 
 ### B. KNOWN-OPEN AND ACCEPTED — do not re-report as new
 
@@ -544,9 +808,83 @@ evidence it cites.
   - Quit stopping the player;
   - the icon in a real menu bar.
 - **A fresh install means a new MAC address, so a new LMS player** named after the Mac. That
-  player needs "Output level is fixed at 100%" again, for the FiiO.
+  player needs "Output level is fixed at 100%" again, for the FiiO. [Since `FIXED AT 100% PER DAC`
+  (installed as 0.3.0 2026-10-11): the FiiO's "LMS volume" set to Fixed in the app does it.]
+- **FIXED AT 100% PER DAC — INSTALLED as 0.3.0, 2026-10-11 22:25Z; the switch both ways VERIFIED LIVE in
+  0.3.1 on the DragonFly, 2026-10-12 (below); the rest of the list below still owed** (Simon: "build
+  and install", "Yes, 0.3.0"; 0.2.11 -> 0.3.0 with `bump-version.sh minor`; `build.sh --install`,
+  suite PASS inside it; nothing playing, the FiiO back on USB at 22:24:50). install.sh "version 0.3.0
+  (was 0.2.11)"; agent.log "agent started: LyrionPlay 0.3.0 (202610112324)", engine on the FiiO,
+  "LMS: using Simons Music". First checks: prodmac46 connected, stopped, `digital_volume_control` 1,
+  volume 50, which matches the FiiO's saved `"volume": "software"`: nothing sent, no "LMS volume"
+  line (correct). Simon picks Fixed for the FiiO in Settings to get fixed volume back.
+  **LIVE REPORT, Simon 2026-10-11:** "setting it back from fixed doesnt work it stays fixed", then
+  "it works for the Fiio fine" (the DragonFly fails: there a mode change restarts the engine for
+  `-V`, and LMS's volume drives the device). agent.log and LMS: every switch back DID reach LMS
+  (22:28:56Z, 22:29:38Z; `digitalVolumeControl` 1 at 22:30:40Z), but LMS's saved volume was 0, so
+  the DragonFly in device mode went to its minimum and muted: most likely what read as "stays fixed"
+  (Simon did not say which screen element; not confirmed). Cause and fix: `THE DVC HOOK SAVES A
+  FADED VOLUME`; the put-back INSTALLED as 0.3.1 and VERIFIED LIVE 2026-10-12 (below). Simon's guess, "squeezelite sets volume
+  to 0 when stopped", is LMS's pause fade (a temporary 0) saved by the hook.
+  Live checks owed, each a sound test (ask the player; FiiO knob down first):
+  - FiiO set to Fixed and saved: agent.log "setting it to fixed at 100%" within ~2 s; LMS
+    `playerpref digitalVolumeControl ?` 0; Material shows the player fixed at 100; engine.log
+    audg `adjust: 0` (debug log);
+  - changed back in Material: put back within ~5 s, one agent.log line;
+  - DragonFly (device volume) after the FiiO: "turning volume control back on", the LMS slider moves
+    the DragonFly again; the DragonFly as Fixed: its level stays where the Mac set it.
+  - the put-back: **VERIFIED LIVE 2026-10-12, 0.3.1** (Simon: "build and install", "continue",
+    output "DragonFly"; 0.3.0 -> 0.3.1 with `bump-version.sh patch`, `build.sh --install` suite PASS,
+    install.sh "version 0.3.1 (was 0.3.0)", agent.log "agent started: LyrionPlay 0.3.1
+    (202610120907)"). Mode checked before each command; settings.json backed up and restored
+    byte-identical (`cmp`), no engine restart on the restore. (1) prodmac46 found PAUSED (Simon's
+    Dean & Britta queue, volume 17); DragonFly set to Fixed in settings.json at 08:09:12Z: engine
+    restarted without `-V`, then 08:09:18 "setting it to fixed at 100%" and "LMS saved its faded
+    volume (0.0) … put back: mixer volume 17"; LMS fixed, volume 17. The restart STOPPED the paused
+    player (LMS, on the reconnect). (2) `play` of the same queue 8 s (DragonFly in Fixed, its level
+    where LMS 17 left it), `pause 1`, then Device at 08:09:56Z: 08:10:02 "turning volume control back
+    on" and again "(0.0) … put back: mixer volume 17"; LMS volume control on, volume 17, stopped.
+    Queue after: 14 tracks, index 0, as before (the paused place in track 1 lost to the restart in
+    (1)). Not checked: the DragonFly's hardware level after the put-back (no read of it), and
+    Material's slider (not looked at).
+- **THE VOLUME KEYS ON A FIXED DAC — CONFIRMED by Simon 2026-10-12, wording FIXED, CLOSED** (`CODE-REVIEW
+  2026-10-12` finding 1). Simon: "Volume keys control what MacOS it set to use in the OS audio widget, mute
+  does however mute LMS". So the Fixed caption's "the Mac's volume keys set it" held only for a DAC chosen
+  as the macOS output; on the rig that is the MacBook Pro Speakers (status.json `"default": true`), not
+  the DragonFly the player uses. FIXED (0.3.2: "set it on the device, or with the Mac's volume keys while
+  it is the Mac's sound output"), then REWORDED by Simon's decision, 2026-10-12: "You dont need the mac os
+  part of the warning when its fixed on a DAC this will confuse things. We do however need to be clear
+  that VOlume keys only work when outout is MacBook Speakers or Follow OS." Now: Fixed's caption has no
+  volume-keys part ("leaves X's own volume alone."); *Device's own volume* and *Software*, on a device with
+  a volume control, add "The Mac's volume keys work only when the output is the Mac's built-in speakers or
+  Follow the macOS output." WRONG BELIEF, mine, corrected by Simon the same day ("Voluime keys only affect
+  MacOS output"): "LyrionPlay passes the volume keys to LMS, only with the device's own volume". LyrionPlay
+  never sees a key; the keys change the macOS output's level in every mode. With `-V` the engine watches
+  ITS OWN device's level (`watch_volume`) and passes any change of it to LMS, so a key reaches LMS only
+  when that device is the macOS output. The note first sat under *Device's own volume* only, from that
+  belief; INSTALL.md the same (feature line, *Device's own volume*;
+  *Fixed at 100%*: "on the DAC or your amplifier"), the `VolumeMode.fixed` comment too. "Built-in
+  speakers" for Simon's "MacBook Speakers" (the device name differs per Mac). WORDING DECIDED: never
+  re-argue it; a complaint means change it. Pages regenerated. Then (same day) the non-fixed captions
+  lost "LMS's own fixed-volume setting … follows this choice" (Simon: it read as the DAC's volume being
+  fixed); see §A2 Settings window for the text. README.md's feature line ("your Mac's volume keys move each other") was left for the merge to
+  main, then corrected in the `DOCS PASS 2026-10-12` at Simon's request (same keys wording). MUTE: Simon reports the mute key mutes LMS; which device and mode he
+  used was not said, and how it reaches LMS when the player's device is not the macOS output was not
+  traced. CLOSED by Simon 2026-10-12 ("as I said volume keys do not alter the dac in my test so this can
+  be closed"): no live test owed. Not a finding: the keys during exclusive playback on a DAC that is the
+  macOS output (`HOG MOVES THE DEFAULT OUTPUT`); the wording ("while it is the Mac's sound output")
+  holds either way.
+  - **Why two-way volume "worked before" (Simon asked, 2026-10-12; "that makes sense"):** the code is
+    unchanged. The engine watches the volume control of the device it PLAYS TO and passes any change to
+    LMS; the keys move only the macOS output. `VOLUME BOTH WAYS` was measured on the speakers, which were
+    both. With the DragonFly playing and the speakers the macOS output, the keys move the speakers and the
+    engine sees nothing. agent.log 08:46:50-59Z: four MUTE reports from the DragonFly (-48.83 dB = LMS 17,
+    -64.00 dB its minimum), LMS muted and unmuted, no level report; why the mute reached the DragonFly
+    was not traced. The keys on the DragonFly as the macOS output were not tested: CLOSED by Simon, above.
 - **GitHub:** Simon created https://github.com/SimonArnold002/LyrionPlay (public, 2026-10-09).
-  The local folder is not a git repository. README.md (credits squeezelite's Adrian Smith and
+  The local folder became a git repo on 2026-10-11: the whole project pushed to `dev` as `7faf2f8`
+  (135 files, compiled test binaries and this ledger included, Simon's choice); `main` holds only the
+  initial README. README.md (credits squeezelite's Adrian Smith and
   Ralph Irving, as Simon asked), LICENSE (MIT, CrystalGipsy, excluding engine/), INSTALL.md,
   NOTICES and UPSTREAM.md name the repo as the source.
   - GitHub API, 2026-10-10: the repo holds one file, `README.md` (pushed 2026-10-09 23:36Z), and
@@ -689,10 +1027,362 @@ evidence it cites.
   - resume after a pause longer than 30 s on a `-V` device (the DragonFly): the level is LMS's;
   - Mac volume keys before the first track on a fixed-volume player: agent.log "not sent".
 
+- **DSD RATE IN THE MENU — BUILT 2026-10-11, INSTALLED as 0.2.11, VERIFIED LIVE by Simon 2026-10-11** (Simon: "in LyrionPlayer
+  when playing DSD the helper app shows the PCM rate when its DoP this should show the DSD Rate not its
+  DoP rate"). The menu's output line was CoreAudio's nominal rate plus physical format, so DSD64 read
+  "176.4 kHz · 32-bit integer": the device really runs there, and CoreAudio cannot tell DoP from PCM
+  (`NO DOP PROPERTY IN COREAUDIO`). Now "FiiO M11 Plus · DSD64 (2.8 MHz) · DoP · exclusive" [since `CODE-REVIEW 2026-10-12 (4)`
+  finding 3: "DSD64 (2.8224 MHz)", the rate in full].
+  - **Engine:** `ca_report_format()` prints `lyrionplay:format <rate> <pcm|dop>` once per change of
+    the IOProc's own record of the last track start it took (`ca.track_rate`/`ca.track_fmt`), so a
+    gapless next track the decoder is already on is not said early. Called by the slimproto thread
+    after `UNLOCK_O` (~100 ms; never from the real-time IOProc; printf can block on the pipe). One
+    line added to `slimproto.c` (UPSTREAM.md). Engine-only, read-only: it changes no frame.
+  - **Agent:** `FormatReport` parses the line; the agent keeps it per engine (`engineFormat`, cleared
+    when the engine stops or exits, and a line from a replaced engine is dropped) and writes
+    `status.dsdRate` = 16 x the device rate ONLY while the device is at the reported DoP rate. That
+    rule alone did NOT cover the idle release: a DAC keeps its rate when we let go, so the menu said
+    "DSD64 · DoP" there, and over another app's PCM at 176.4k. Since `CODE-REVIEW 2026-10-12` finding 3
+    the engine also says `lyrionplay:format idle` once when the device closes (`ca.dev` unknown), and
+    the agent drops the report (`FormatLine`). DSD256 on the FiiO is
+    352.8k PCM and still shows as kHz (`DSD256 IS PCM ON THE FIIO`).
+  - **Tests:** engine "what plays is reported once per change" (nothing before a track; DSD64, 44.1k,
+    352.8k PCM, DSD128 at that same rate; a repeat says nothing; a gapless DSD64 -> 44.1k says 44.1k only
+    after the boundary). Mutants: no dedupe FAILS; the decoder's `next_sample_rate`/`next_fmt` FAILS
+    (first version of the test, without the gapless half, PASSED that mutant: the half was added for
+    it). Swift suite `FormatReports` (parse, DoP rule, a moved device, labels, an old status.json
+    without the field). `scripts/test.sh` PASS (engine output 42/42 with the matrix; swift 61 in 16
+    suites; install.sh 3/3); engine and Swift products build, no new warning.
+  - **Other rates (Simon asked, 2026-10-11):** nothing is rate-specific. DoP is chosen when DSD rate / 16
+    <= the device's top rate (`dsd.c`), from `device_rates` over `TEST_RATES` (to 1,536,000); `-Z`'s 384k
+    cap is only the HELO's `MaxSampleRate`, and DSD passes through LMS at any rate (`DSD IS PASSTHROUGH AT
+    ANY RATE`). So DSD128 = 352.8k on the FiiO (played live as DoP 2026-10-11); DSD256/DSD512 show as DSD
+    on a DAC offering 705.6k/1411.2k (Swift cases added; no such DAC here, unverified live).
+  - **INSTALLED as 0.2.11, 2026-10-11 22:03Z** (Simon: "build and install", "Yes, 0.2.11" to version up;
+    0.2.10 -> 0.2.11 with `bump-version.sh patch`; with it, rounds (4) and (5), never installed before).
+    Nothing was playing; the FiiO had left USB at 22:00:46Z ("is not present", agent.log), so the engine
+    waits for it. `build.sh --install` suite PASS inside it; install.sh "version 0.2.11 (was 0.2.10)";
+    agent.log "agent started: LyrionPlay 0.2.11 (202610112301)", then "LMS: using Simons Music
+    (192.168.1.234:9000)"; menu app restarted.
+  - **VERIFIED LIVE, 2026-10-11, after the 0.2.11 install** (Simon, on his own: "it works correctly"). Simon ran
+    the play himself; which tracks he played was not reported. DSD256/DSD512 as DoP stay unverified (no
+    DAC here offers 705.6k).
+  - **What the live check was to show:** DSD64 on the FiiO with DoP on shows "DSD64 (2.8 MHz) · DoP"; 44.1k after it
+    shows "44.1 kHz"; DSD256 shows "352.8 kHz". Reads the menu only (no tap needed); a play test, so
+    ask the player first.
+
 ### C. CLOSED FINDINGS
 
 Each entry records that a defect, as described, was fixed. It does not cover the code written to
 fix it (see HOW TO LOG).
+
+- **CODE-REVIEW 2026-10-12 (6) — /code-review of 0.2.10-0.3.13** (Simon: "lets do another /code-review
+  of lyrionplayer show me the resutls before acting on anything", then "Dimiss 4 I dont care about the
+  lag", then "fix those"). Scope `origin/dev` 7faf2f8..tree (no commits past it). Gate drops: the same
+  set as round (5). Four findings: 1-3 FIXED, 4 DISMISSED (`THE FORMAT CHANGES WHEN OUTPUT HITS THE
+  DAC`, now covering any lag). After: `scripts/test.sh` PASS (engine output 45/45, swift 76 in 17
+  suites, install.sh 3/3); `swift build` clean (agent + app); `sh -n scripts/build.sh` clean. No suite
+  covers the app's UI, so 1 and 2 are pinned by none. **INSTALLED as 0.3.14** 2026-10-12 15:15Z (Simon:
+  "build and update all docs", "Yes, 0.3.14"; §A2 version history), with the docs. Fix 2 VERIFIED LIVE by Simon ("yes I see never now", "correct I see it": stepper and caption); fix 1
+  STAGED + VERIFIED LIVE (the switch-on message survives Save and Close; §A2 version history, 0.3.14).
+  1. **A good Save wiped a switch-on error** — VERIFIED from the code: `PlayerModel.save` set
+     `lastError = nil` on success, so the menu panel lost "Install LyrionPlay with install.sh first…"
+     (or a `LaunchAgent.turnOn` error) at the next Save; Revert and the window opening kept it (round (2)
+     finding 4). FIXED: a good save calls `clearSaveError()`. Carriers: `lastError` is written only by
+     `setOn` and `save`; a switch-on error written after a failed save stays (it no longer equals
+     `saveError`).
+  2. **At 0 the release stepper said "after 0 s"** — VERIFIED: 0 passes no `-C` (`EngineArguments`), so
+     the engine opens the device at start and keeps it (INSTALL.md: "0 keeps it"). FIXED: the stepper
+     reads "Release the device: never" at 0, and the Exclusive caption says the device is held "while
+     the player is on" then, not "while the player is playing".
+  3. **build.sh's comment put the codec-source check "before anything is built"** — VERIFIED: it runs
+     after `deps/build-deps.sh` (which fetches the archives on a fresh checkout; round (5) finding 2).
+     Prose only: the comment and this file's Layout line now say "straight after the codec build".
+  - **Checked and cleared in this round** (not findings; do not re-derive): `status` carrying
+    `digital_volume_control` (Material has read it for years); the engine's `-f` redirects stderr only,
+    so stdout carries only the `lyrionplay:` lines; `codec_pins` works with macOS awk (`{64}`) and macOS
+    `shasum -q`; every changed line in README.html/INSTALL.html/index.html matches its `.md`.
+
+- **CODE-REVIEW 2026-10-12 (5) — /code-review of 0.2.10-0.3.12** (Simon: "lets do a /code-review of
+  lyrionplayer show me th results before proceeding", then "fix them all ensure no regressions check all
+  carriers for the core audio, the audio side should be done by now yes things keep popping up"). Scope
+  `origin/dev` 7faf2f8..tree (no commits past it). Gate drops: a stalled LMS, the format at a reopen, the
+  silence format, the `volumeRestore` slider window, `syncFixedVolume`'s four requests, the ignored
+  `client.call` result, `ca_report_format`'s second lock, the tracked test binary, and others already in
+  the index. ALL 5 VERIFIED + FIXED, plus one of finding 1's class and the flush pin from the carrier
+  sweep. After: `scripts/test.sh` PASS (engine output 45/45, swift 76 in 17 suites, install.sh 3/3); the
+  6 report tests 20 runs of 20; agent and app build (only the known `SendableClosureCaptures`); every
+  engine source and header byte-identical to before (`shasum`), so the engine is unchanged, and of the
+  Swift sources only `Agent/main.swift`. **INSTALLED as 0.3.13** 2026-10-12 14:34Z (Simon: "build and
+  update", "Yes, 0.3.13"; §A2 version history); no change in behaviour to live-test.
+  - **How build.sh was tested:** an APFS clone of the repo (`cp -Rc`, in the session scratchpad), the new
+    `build.sh` and a copy of the old one run in it under /bin/sh, each case staged for real; Simon's tree,
+    `deps/` and `dist/` untouched.
+  1. **`build-deps.sh | tail -15` hid a failed codec build** — VERIFIED: clone with the opusfile archive
+     changed and its stamp removed (so `fetch`'s SHA-256 check fails): the OLD script exited 0 and printed
+     `built:`, linking the libopusfile.a an earlier build left. FIXED: build-deps.sh's stdout to
+     `build/build-deps.log`, its status checked, then the same `tail -15`; not `set -o pipefail` (dash,
+     which /bin/sh can be, lacks it). New: "FAIL: deps/build-deps.sh stopped", exit 1, before the engine.
+     - **The same class, found in the sweep of every script's pipelines:** `swiftc … | grep -v 'search
+       path' || true` for `make-icon` went on with an OLDER make-icon after a failed compile. FIXED (swiftc's
+       status; the binary removed so the next build compiles it again). Clone, a source that does not
+       compile: old `built:` with the stale tool; new "FAIL: make-icon did not compile", binary removed.
+       The other pipelines are display only, or fail safe (install.sh's cdhash read: empty = changed =
+       restart; build.sh's `ents`/`libs` are behind checks that fail first).
+  2. **`--release` wrote the app zip before the codec-source checks** — VERIFIED: clone with the soxr
+     archive changed and its stamp kept: the OLD script built everything, wrote `LyrionPlay-0.3.12.zip`,
+     then failed the SHA-256 check, leaving it with no codec-sources zip. FIXED: `codec_pins` and
+     `check_codec_sources` run straight after the codec build (`== codec sources`), not "before the
+     build" as the review said: on a fresh checkout the archives arrive by build-deps.sh's `fetch`. The
+     release step then copies, checks the COPIES again, zips the sources first and the app LAST. New:
+     stops at `== codec sources`, before the engine, `dist/` empty. Control, a clean `--release` with each
+     script: both zips hold the same files at the same sizes; the codec-sources content identical; its 9
+     archives the same as Simon's `deps/src` (cmake-4.4.4.tar.gz, a build tool, not shipped, as before).
+  3. **The `!rate` guard in `ca_report_format` was pinned by no test** — VERIFIED: mutant without `!rate
+     ||`, the OLD suite 43/43 PASS. Writers of an open device with `ca.track_rate` 0 (it is 0 only from
+     init to the IOProc's first track start; never reset): "Release after" 0 (the agent passes no `-C`,
+     so the device opens at the engine's start and is kept), and every first play from idle while it
+     buffers. Tests "nothing is reported while a kept device waits for a first track" and "… while a first
+     play from idle buffers", each with a control that the track start is then said once; both FAIL on the
+     mutant with `lyrionplay:format 0 pcm`. The review's "cannot fail" for the first check of "what plays
+     is reported once per change" was WRONG: with the device closed it pins that nothing is said at the
+     start (mutant without `if (!said_open) return;` fails it); its message now says so. The agent drops a
+     rate-0 line anyway (`FormatReport`, test `lyrionplay:format 0 dop` -> nil).
+     - **CARRIER SWEEP of the CoreAudio side** (Simon: "check all carriers for the core audio"): the only
+       engine code new since the last dev push is `ca_report_format` and its one call (slimproto.c:751).
+       Readers/writers: `ca.track_rate`/`ca.track_fmt` written only by the IOProc at a track start (and
+       init's memset), read by `_silence_fmt` and the report; `ca.dev` written under the lock by `_ca_open`,
+       close and init; `said_*` only by the slimproto thread. A 14-mutant sweep (every condition, every
+       assignment, the device rate for the IOProc's record, both `fflush(stdout)`): 12 killed, the two
+       flushes SURVIVED. MEASURED that they matter: neither engine nor agent sets stdout's buffering, and
+       stdout is a `Pipe`; a line printed unflushed reached the pipe's reader after 3.31 s, the writer's
+       whole life, against 0.04 s flushed. So without them the menu's DSD line and the Mac-volume -> LMS
+       push would wait for the buffer to fill or the engine to exit. PINNED: the suite's `fake_fflush`
+       (the real one is still called) and `CHECK_FLUSHED()` in the two format tests and the volume test
+       (`notify` waits for the listener, so no race). Sweep again: 14 of 14 killed. Out of the suite's
+       reach: the slimproto.c call itself (slimproto.c is not linked; VERIFIED LIVE since 0.2.11) and its
+       place after `UNLOCK_O` (the same mutex as `LOCK`: under it, it would deadlock).
+  4. **The layout line said `--release` makes one zip** — FIXED (both zips, the early check).
+  5. **`volumeAfter.map { "\($0)" } ?? "?"` could not fall back** — FIXED: `if let restore = …, let
+     volumeAfter`, interpolated directly; the log text is the same (Double's description, e.g. "0.0").
+     The contract the new form needs (a restore only with both reads) is pinned by
+     `aFadedVolumeLMSSavedIsPutBack` (`after: nil` -> nil).
+
+- **CODE-REVIEW 2026-10-12 (4) — /code-review of 0.2.10-0.3.11** (Simon: "lets do another /code-review
+  lyrionplayer", then "verify all 5"). Scope `origin/dev` 7faf2f8..tree. Gate drops: `ca_report_format`'s
+  second lock, the format at a reopen, a stalled server, the tracked test binary; one candidate cleared on
+  the source (`NO STRAY IDLE ON A REOPEN`). The licence work (0.3.8-0.3.11), reviewed for the first time:
+  the 15 texts are present and right. All 5 VERIFIED; 1, 3, 4, 5 FIXED (3 first, then Simon: "fix them"), 2 a
+  repeat. After: `scripts/test.sh` PASS, and a plain `build.sh` (suite inside it) built `build/LyrionPlay.app`
+  with its checks clean and its `licences/` identical to the installed 0.3.11's. **INSTALLED as 0.3.12**
+  2026-10-12 13:42Z (Simon: "build and install"), not live-tested (§A2 version history).
+  1. **The codec-sources zip copies `deps/src` unchecked** (`build.sh --release`, whose comment says "the
+     exact ones deps/build-deps.sh checked by SHA-256") — VERIFIED in a sandbox under /bin/sh (zsh does not
+     split `$archives`: a first run under it made one file with newlines in its name): with all 9 libraries
+     stamped (`.built-*`) and every archive replaced, build-deps.sh printed "already built" 9 times and
+     checked no hash, and the release loop, run verbatim, copied all 9 replacements with no error. Writer:
+     only an archive changed by hand after its build (`fetch` downloads only a missing file, and a missing
+     one stops the release); none today: all 9 match build-deps.sh's hashes (`shasum -c`, 2026-10-12).
+     **FIXED:** the release step reads each archive's SHA-256 from the line after its `fetch` (`pins`, awk),
+     stops unless there are 9 fetches and 9 pins, then `shasum -a 256 -c` in `deps/src` before any copy;
+     the comment now says why (build-deps.sh skips a library already built). Sandbox, the block run
+     verbatim under /bin/sh: all 9 replaced -> stopped, 9 FAILED named, 0 copied; only opus replaced ->
+     stopped, opus named; a pin moved off its fetch's next line -> stopped on the count; control, the real
+     archives -> 9 + build-deps.sh copied, byte-identical; the OLD block on the replaced set copied all 9.
+  2. **`volumeRestore` undoing a slider move between its reads** — a REPEAT: accepted in §A2 (`FIXED AT 100%
+     PER DAC`, "Volume put back"), and the code is still that design (read, send, pref read, read, put
+     back). The review missed it because the index did not carry it; the `THE DVC HOOK SAVES A FADED VOLUME`
+     row now does.
+  3. **`DeviceCaps.dsd`: "cut to 0.1 MHz, as DSD rates are named"** — VERIFIED by arithmetic: DSD512
+     (22,579,200) reads "22.5 MHz", usually called 22.4; 48k-family DSD64 (3,072,000) reads "3.0 MHz";
+     `dsdLabels` pins both. NO WRITER on the rig: the one reader is the menu's DoP line (16 x the device
+     rate), and DSD512 as DoP needs a 1,411.2k device (DragonFly and speakers 96k, FiiO 384k). The library's
+     DSD (LMS `titles` tags oT, 2026-10-12) is 19 DSD64, 1 DSD128, 25 DSD256 and 7 DSD512 files, all 44.1k
+     family. The review's suggested fix (round to 0.1 MHz) is WRONG: it makes DSD256 "11.3 MHz".
+     **FIXED 2026-10-12** (Simon: "it doesnt matter if my devices dont cover that high other users will and
+     needs to display correctly. My dacs dont do 48k clocks but other dacs do", with the table of both
+     families, DSD64 to DSD1024, to 4 places). `DeviceCaps.dsd` now gives the rate in full, `%.4f` of
+     rate / 1e6: "DSD64 (2.8224 MHz)", "DSD512 (22.5792 MHz)", "DSD64 (3.0720 MHz)". Exact for every DSD
+     rate of either family (64 x 44.1k or 48k x a power of 2, all multiples of 100 Hz). `dsdLabels` pins
+     all 10 rates of the table; anti-run: 10 of 10 failed on the old code. One reader (the menu's output
+     line, `outputLine`). `scripts/test.sh` PASS (engine output 43/43, swift 76 in 17 suites, install.sh
+     3/3); `swift build` complete. NOT built into the app, NOT installed.
+  4. **The `fixedVolume` comment and the index row name `sent`** — VERIFIED (main.swift:86, the `FIXED AT
+     100% PER DAC` index row). `checked` does run on the main queue and `recordRefusal` on the send's task,
+     so only the name is stale. **FIXED:** both now say `recordRefusal` (the index row "was `sent`").
+  5. **The soxr licence loop repeats the main loop's check** — VERIFIED (build.sh). A simplification with
+     no change in behaviour. **FIXED:** one `licence name source...` function: checks each source, then
+     `cat`s them in order (soxr: LICENCE, then COPYING.LGPL); quoted arguments, so a checkout path with
+     spaces still works (a space-separated list in the entry, the review's suggestion, would not). Old
+     and new blocks run verbatim: the same 15 files, `diff -r` identical, all 644 as `cp` gave; an empty
+     soxr LGPL stops it with "missing licence text" and writes no soxr.txt.
+
+- **DOCS PASS 2026-10-12 — every doc against the code of 0.3.7** (Simon: "do a pass on all docs to ensure
+  nothings missing or reported incorrecly"). Checked against the code, not the ledger:
+  - **VERIFIED, unchanged:** install.sh's 7 steps, certificate (`-days 3650`, ten years), signing ids
+    (`com.crystalgipsy.lyrionplay[.exe]`), uninstall.sh's removals and `--remove-certificate`, the idle
+    default 30 s, the retry cadence (2/4/5 s: "within about 5 seconds"), every log line INSTALL quotes
+    (`device is held exclusively by another process`, `LMS check of … took N s`, `back under 2 s`,
+    `did not answer`, `no server found`), the 5 s LMS check, the menu reopening itself (`ensureMenu`).
+    `engine/UPSTREAM.md` diffed against the pinned archive (SHA-256 matches): exactly the 4 files it
+    lists differ, and every hunk is listed.
+  - **WRONG, FIXED:** README's volume row said the keys move the LMS slider in every mode; the volume
+    listener runs only with `-V` (`watch_volume`, *Device's own volume*), and LyrionPlay now sets LMS's
+    fixed level per DAC. INSTALL's intro bullet the same (now "with *Device's own volume*", Simon's keys
+    wording kept). INSTALL's "Exclusive on for USB and Thunderbolt DACs": `isExternal` is usb,
+    thunderbolt, firewire, pci, avb (now "external DACs (USB, Thunderbolt and the like)"). README's DSD
+    row ("DACs that accept it": DoP is a switch, `DOP IS A SWITCH`). build.sh's header said the zip has
+    INSTALL.md only (it ships INSTALL.html too).
+  - **MISSING, ADDED:** INSTALL: Name and Server, the Advanced section (release time, 0 keeps it;
+    resampling quality, only when the device lacks the rate; log detail), Save / Save and Close /
+    Revert, what the menu shows (DSD rate for DoP, the lock). README: the menu's rate line, the engine's
+    format report, the agent keeping LMS's fixed setting in step. NOTICES.txt: dsd2pcm (compiled in,
+    `SOURCES_DSD`) and the Daphile patch. CORRECTION (same day): I said dsd2pcm's notice was not
+    shipped; WRONG, squeezelite's own `engine/LICENSE.txt` (shipped as `squeezelite-LICENSE.txt` since
+    the first build) carries it. What was missing was the GPLv3 text that file only refers to. This file: the overview's volume line, the layout's INSTALL.html, the missing 0.3.6 install.
+  - **LICENCE TEXTS — BUILT 2026-10-12** (Simon: "yes"): the app shipped NOTICES.txt and squeezelite's
+    LICENSE.txt (its GPL notice + dsd2pcm's) only. libFLAC/libogg/libvorbis/Opus/opusfile (BSD-3), ALAC
+    and Material Symbols (Apache 2.0), the LMS-Material waveform (MIT) and the GPLv3 itself each ask a
+    binary release to carry their text. Now `build.sh` copies 15 into `Contents/Resources/licences/`
+    (`squeezelite-LICENSE.txt` moved there as `squeezelite.txt`): the codecs' from `deps/src` (kept by
+    build-deps.sh; soxr = its LICENCE + COPYING.LGPL), the rest from the repo, with the GPLv3, Material
+    Symbols and LMS-Material texts now kept in `app/Resources/licences/` (fetched from gnu.org and the two
+    upstream repos). A missing or empty source stops the build ("missing licence text"). NOTICES.txt,
+    README and INSTALL point to the folder. INSTALLED as 0.3.10: 15 files, `codesign --verify --strict` OK.
+  - Pages regenerated (`tools/make_readme_html.py`). INSTALLED as 0.3.8 2026-10-12 11:08Z (Simon:
+    "rebuild and install").
+
+- **CODE-REVIEW 2026-10-12 (3) — /code-review of 0.2.10-0.3.6** (Simon: "/code-review" of "lyrionplayer",
+  then "verify 1 & 2 hold up under real world tests, verfif rest and fix"). Scope: `origin/dev`
+  7faf2f8..tree plus the untracked `FormatReport.swift`; no unpushed commits. Gate drops: everything
+  in rounds (1) and (2), a stalled server, the format at a reopen, the silence format, the caption
+  wording, and the four sequential requests in `syncFixedVolume`. The review cleared one check on a
+  wrong reason; it was re-cleared on the right one (`AN ORPHAN DIES AT ITS NEXT REPORT`). After the
+  fixes: `scripts/test.sh` PASS (engine conversion; engine output 43/43; swift 76 tests in 17 suites;
+  install.sh 3/3), and `swift build` is clean. **INSTALLED as 0.3.7** 2026-10-12 10:53Z (Simon: "build
+  and install"), suite PASS inside build.sh; no change in behaviour to live-test.
+  1. **A probe while the engine holds the DAC reads "Device's own volume" as Software** (since 0.3.4,
+     `options(for:)` decides `-V` from the probed `device.volume`; the hog's default-output
+     notification makes the agent reconcile) — DISPROVEN, measured: holding the device and playing to
+     it leave its volume control visible to `squeezelite -l` (`A HOG DOES NOT HIDE THE VOLUME
+     CONTROL`). No writer; nothing changed.
+  2. **`PlayerModel.save` rewrites every listed device's volume choice from one misread** — falls
+     with 1, because the misread it needs has no writer. The write stores what every reader already
+     reads (`ONLY WHAT A DEVICE OFFERS`). Nothing changed.
+  3. **`formats[nformats - 1]` in failure messages** — VERIFIED with a mutant (`ca_report_format`
+     returning at once, built through `OCA_SOURCE` in scratch): `what plays is reported once per
+     change` and `the idle release is reported` both ended "(crashed)" at the first message with
+     nothing captured, and their later checks never ran. FIXED: `last_format()` and `last_report()`
+     give "(none)" when nothing was captured. The mute test's message had the same pattern
+     (`reports[nreports - 1]`) and is fixed too. Anti-run: the same mutant now prints every FAILED
+     line, with "(none)" where nothing was captured, and no crash; the suite still FAILs on it.
+  4. **`FixedVolumeSync.sent(…)` returned true on a refusal** — VERIFIED: the agent's `guard … sent(…)
+     else { return }` logs a refusal, and the tests already named its result `refused`. FIXED: renamed
+     `recordRefusal(device:mode:lmsAfter:)`, and its doc says it records. The review's second half
+     (`checked(…)` as a mutating predicate) not taken: it returns the command to send, the same shape
+     as `ServerChoice.checked`.
+  5. **`VolumeMode.offered(by:)` vs `offered(on:)`** — VERIFIED (the overload). The review also said
+     the `.device` comment cites the wrong one; that is WRONG: the comment cites the read of a saved
+     choice, which is `offered(on:)`'s job. FIXED: the instance method is now `nearestOffered(on:)`,
+     and the ledger rows that named it are updated.
+
+- **CODE-REVIEW 2026-10-12 (2) — /code-review of 0.3.2-0.3.5** (Simon: "lets do another /code-review
+  of LyrionPlayer", then "1 and 2 are not issues … Verify the rest and look to fix"). Gate drops: round
+  1's findings 7 (second lock), the four sequential requests in `syncFixedVolume`, the sync after a
+  settings change waiting a check, the tracked test binary, overlapping sends (`A STALLED SERVER IS NOT A
+  FINDING`). After: `scripts/test.sh` PASS (engine 43/43, swift 76, install 3/3), `swift build` clean.
+  **INSTALLED as 0.3.6** 2026-10-12 10:13Z (Simon: "build and install"; `bump-version.sh patch`,
+  `build.sh --install`, suite inside it; agent.log: agent 0.3.6 started, engine on the DragonFly, LMS
+  found). None of 3-5 live-tested.
+  1. **The last track's format said at a reopen** — DECLINED by Simon (`THE FORMAT CHANGES WHEN OUTPUT
+     HITS THE DAC`).
+  2. **The idle-release test cannot see 1** — DECLINED with it.
+  3. **`scalesSamples(deviceHasVolume:)`'s `.device` branch dead** — VERIFIED: its one caller
+     (`volumeCaption`) reads the mode from `Settings.options(for:)`, which maps `.device` on a device with
+     no volume control to `.software` (`ONLY WHAT A DEVICE OFFERS`), and `EngineArguments` reads the same,
+     so the engine never gets `-V` there either. The comments were the defect. FIXED: `scalesSamples` is
+     a property, `self == .software`; both comments say where the rule lives. Test
+     `fixedIsLouderOnlyAfterSoftwareVolume` now pins the real path: `.device` saved on the FiiO (no
+     control) reads as software and warns; on the DragonFly it does not.
+  4. **Revert left the failed-save message** — VERIFIED from the code: Revert set only `draft`;
+     `onAppear` cleared `saveError` but not the same text in `lastError`, so the menu panel kept "Could
+     not save the settings". FIXED: `PlayerModel.revert()` and `clearSaveError()` (clears `lastError` only
+     when it holds the save's message, so a switch-on error stays), used by Revert and `onAppear`. No
+     suite covers the app's UI; not live-tested (a failed save needs the settings file unwritable).
+  5. **`lyrionplay:volume` lines from a replaced engine sent to LMS** — VERIFIED from the code: the
+     readability handler reads the old engine's pipe until it exits, and only `FormatLine` checked
+     `self.engine === process`. No live writer seen (needs a Mac volume change in the restart's window).
+     FIXED: the same check on both branches, one comment. Agent main has no suite; compiles.
+
+- **CODE-REVIEW 2026-10-12 — /code-review of 0.2.11-0.3.1** (the DSD rate in the menu, Fixed at 100% per
+  DAC, the volume put-back; scope `origin/dev` 7faf2f8..tree, no unpushed commits). Eleven findings. Simon:
+  "I have not seen 1 happen in operation this appears to be some theory unproven. Verify all of them before
+  recommending fixing. Check fixes work and ensure no regressions all carriers are looked at." After:
+  `scripts/test.sh` PASS (engine output 43/43 with the matrix; swift 74 tests in 17 suites; install.sh 3/3);
+  agent, app and engine build (the one warning the known `SendableClosureCaptures`). BUILT 2026-10-12
+  09:54 local (Simon: "build and test for the changes"): `scripts/build.sh`, suite PASS inside it,
+  `build/LyrionPlay.app` 0.3.1 (202610120954), the version NOT raised (not handed over); checks clean
+  (arm64, runtime, 0 entitlements, system libraries only); the new strings in all three binaries. NOT
+  installed then. **INSTALLED as 0.3.2, 2026-10-12 09:05Z** (Simon: "install", "Yes, 0.3.2"; 0.3.1 ->
+  0.3.2 with `bump-version.sh patch`; prodmac46 found PAUSED at volume 18, Simon told the restart would stop
+  it). `build.sh --install`, suite PASS inside it (engine output 43/43, swift 74, install.sh 3/3); install.sh
+  "version 0.3.2 (was 0.3.1)"; agent.log "agent started: LyrionPlay 0.3.2 (202610121005)", engine on the
+  DragonFly with `-V`, "LMS: using Simons Music"; LMS: connected, stopped (the restart), volume 18 kept,
+  `digital_volume_control` 1 (= the DragonFly's device mode: nothing sent, correct). NOT live-tested: the
+  menu after a DoP play and the idle release (needs the FiiO with DoP: shows kHz, not DSD64, once released),
+  and the caption/warning in Settings.
+  1. **Fixed caption: "the Mac's volume keys set it"** — first UNVERIFIED (Simon: "this appears to be
+     some theory unproven"), then CONFIRMED by Simon: the keys act on the macOS output only, and on the
+     rig that is not the DragonFly. The review's own chain (the hog moving the default) is still
+     unmeasured on a DAC and was not needed. Wording FIXED (§B, `THE VOLUME KEYS ON A FIXED DAC`).
+  2. **The "louder" warning keyed on the device, not the mode left** — VERIFIED from the code: only
+     `.device` passes `-V` (`EngineArguments`), so Software -> Fixed starts the same engine (no restart),
+     and LMS's audg goes to unity at once (`SETTING DVC SENDS AN AUDG AT ONCE`): louder by LMS's software
+     attenuation, with no warning on a device that has a volume control. Writer: the Settings picker
+     (Software is offered for every device); none of Simon's devices is in Software with a volume control
+     today. FIX: `VolumeMode.scalesSamples(deviceHasVolume:)`, read against the SAVED mode
+     (`volumeCaption`); the window reloads the saved settings when it opens (`model.settings`, read only
+     by the caption and Revert, which now goes back to what is on disk). Test
+     `fixedIsLouderOnlyAfterSoftwareVolume` (new API; MUTANT: the old rule FAILS it on "software with a
+     volume control"), plus the pin that Software and Fixed give the same engine arguments.
+  3. **`dsdRate` after the idle release** — VERIFIED: `ca.track_rate`/`ca.track_fmt` outlive the release
+     (kept on purpose, `SILENCE FORMAT IS NOT A FINDING`), so no new line came, and a DAC stays at its last
+     rate (§B TWO RATE SWITCHES, steady state). The menu read "DSD64 · DoP" for a released FiiO, and over
+     another app's PCM at 176.4k (writer: the FiiO chosen in that app; not seen). FIX: `ca_report_format`
+     also says `lyrionplay:format idle` once when `ca.dev` is unknown (read under the output lock, as every
+     write of it is), and says the rate again on the next open; the agent's `FormatLine` drops the report.
+     Frames unchanged (the report only reads; the matrix passes). Tests: engine "the idle release is
+     reported" (FAILED on the pre-fix engine: no idle line, nothing said after it), MUTANT (idle said every
+     pass) fails it and "what plays is reported once per change"; swift `theReleaseDropsTheReport`.
+     Carriers: `ca_report_format` has one caller (slimproto.c:751); `ca.dev` is written under the lock
+     (init aside); `engineFormat` is read only by `writeStatus`, `dsdRate` only by the menu's output line;
+     `VolumeReport` does not take the idle line. A failed reopen now says idle, then the rate on the
+     retry's open: correct.
+  4. **The send's result thrown away** — DROPPED (`A STALLED SERVER IS NOT A FINDING`): a set answers
+     `{"result":{}}` (`A SET ANSWERS AN EMPTY RESULT`), so a nil send is a request with no HTTP answer
+     while the read-back ms later is answered: a late or lost answer. Re-raise only with one seen in agent.log.
+  5. **`volumeRestore` silent on a failed read** — DROPPED for the same reason. Its suggestion (take
+     "before" from the check's `status`) is SOUND, measured (`A SET ANSWERS AN EMPTY RESULT`: status's
+     `mixer volume` is the saved pref) but NOT BUILT: one request saved on a rare path (a mode change),
+     against code verified live on 2026-10-12.
+  6. **"bring LMS's fixed setting along now"** — VERIFIED in agent.log 2026-10-12: changes at 08:09:12 and
+     08:09:56, synced at 08:09:18 and 08:10:02, both a Device <-> Fixed change that restarts the engine.
+     The comment was the defect: FIXED (main.swift and §A2). No code change: the restart already stops the
+     player (§B, the put-back's live run), so the 6 s fall while nothing plays; the switch's delay is the
+     known "not instant" in §A2. Which of "not yet connected" or "a check already running" skipped it was
+     not measured; the comment says only what the log shows.
+  7. **`ca_report_format` takes the output mutex again** — TRUE (`LOCK` and `LOCK_O` are both
+     `outputbuf->mutex`), DECLINED: two loads under the lock once per ~100 ms pass, beside the same thread's
+     longer `LOCK_O` section just before it; the fix moves the read into upstream's slimproto.c block, a
+     second edit to an upstream file for no measurable gain.
+  8. **The redundant `lastLMSCheck = .distantPast` on a server change** — TRUE, DECLINED: harmless, and
+     each write states its own reason; removing one is what would let the edit the finding describes drop
+     the server check.
+  9. **The format test's statics** — WRONG, `EACH ENGINE TEST IS ITS OWN PROCESS`.
+  10. **Stale ledger lines** — VERIFIED (index row, §A2, two §B lines said 0.3.0 not live-tested / not
+      installed): FIXED, with what is still owed named.
+  11. **The `fixedVolume` lock comment** — VERIFIED (`sent` runs on `syncFixedVolume`'s own task, not
+      the check's): FIXED.
 
 - **CODE-REVIEW 2026-10-11 (5) — /code-review of the tree after round 4** (Simon: "lets do a code
   review of LyrionPlayer", then "fix the toolings"; scope by file times, diffed against session

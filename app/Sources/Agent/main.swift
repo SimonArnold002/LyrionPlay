@@ -4,6 +4,7 @@
 // status.json for the menu bar app. It also keeps the menu app open while it runs. It only ever
 // signals the engine PID it started.
 import Foundation
+import os
 import PlayerCore
 
 final class Log {
@@ -54,6 +55,9 @@ final class Supervisor {
 	private var engineArgs: [String]?
 	/// the device the running engine plays to
 	private var engineDevice: DeviceCaps?
+	/// what the running engine last said it plays (PCM, or DoP at a rate); nil until it says, and
+	/// again once it lets go of the device (`lyrionplay:format idle`, FormatLine)
+	private var engineFormat: FormatReport?
 	/// following the macOS output, but held on the engine's device while it has exclusive access
 	private var follow = OutputFollow()
 	private var expectedExit: Int32?
@@ -78,6 +82,9 @@ final class Supervisor {
 	private var menuOpenedAt: Date?
 	private var menuBackoff: TimeInterval = 5
 	private var lastNoServerLog = Date.distantPast
+	/// LMS's "Output level fixed at 100%" for this player, following the engine device's setting;
+	/// locked: `checked` runs on the main queue, `recordRefusal` on the send's own task (syncFixedVolume)
+	private let fixedVolume = OSAllocatedUnfairLock(initialState: FixedVolumeSync())
 	/// Mac volume -> LMS: one push at a time, at most one per 150 ms while a key is held, the
 	/// latest level winning (VolumeSync.swift)
 	private let volumeSender = LatestValueSender<VolumeChange>(interval: 0.15) { change in
@@ -221,11 +228,12 @@ final class Supervisor {
 		let process = Process()
 		process.executableURL = engineURL
 		process.arguments = args
-		// the engine reports volume changes made on the Mac here (output_coreaudio.c, volume_listener)
+		// the engine reports volume changes made on the Mac here (output_coreaudio.c, volume_listener),
+		// and what it plays (ca_report_format)
 		let reports = Pipe()
 		process.standardOutput = reports
 		var partial = ""
-		reports.fileHandleForReading.readabilityHandler = { [weak self] handle in
+		reports.fileHandleForReading.readabilityHandler = { [weak self, weak process] handle in
 			let data = handle.availableData
 			if data.isEmpty {
 				handle.readabilityHandler = nil // the engine exited
@@ -235,8 +243,21 @@ final class Supervisor {
 			while let newline = partial.firstIndex(of: "\n") {
 				let line = String(partial[..<newline])
 				partial.removeSubrange(...newline)
-				guard let report = VolumeReport(line: line) else { continue }
-				DispatchQueue.main.async { self?.deviceVolumeChanged(report) }
+				// a line from an engine already replaced says nothing of what plays now: its volume
+				// was another device's, or the same device's before a setting changed
+				// (/code-review 2026-10-12 (2), finding 5)
+				if let report = VolumeReport(line: line) {
+					DispatchQueue.main.async {
+						guard let self, let process, self.engine === process else { return }
+						self.deviceVolumeChanged(report)
+					}
+				} else if let format = FormatLine(line: line) {
+					DispatchQueue.main.async {
+						guard let self, let process, self.engine === process else { return }
+						self.engineFormat = format.report // nil once the engine lets go of the device
+						self.writeStatus()
+					}
+				}
 			}
 		}
 		// anything printed before the engine opens its own log (a bad option, say) lands there too
@@ -272,6 +293,7 @@ final class Supervisor {
 		engine = nil
 		engineArgs = nil
 		engineDevice = nil
+		engineFormat = nil
 		try? FileManager.default.removeItem(at: Paths.enginePID)
 		expectedExit = process.processIdentifier
 		process.terminate()
@@ -307,6 +329,7 @@ final class Supervisor {
 		engine = nil
 		engineArgs = nil
 		engineDevice = nil
+		engineFormat = nil
 		try? FileManager.default.removeItem(at: Paths.enginePID)
 		let ran = Date().timeIntervalSince(startedAt)
 		if ran > 60 { backoff = 1 }
@@ -338,6 +361,11 @@ final class Supervisor {
 				engineArgs = nil
 			}
 			reconcile("settings changed")
+			// a device's "LMS volume" may have changed: check LMS at once (FixedVolumeSync). A change to or
+			// from the device's own volume restarts the engine (-V), and the check in this tick does not
+			// sync it (only a connected player is synced): it followed at the next check, 6 s after the
+			// change, both ways, live 2026-10-12 (/code-review 2026-10-12, finding 6)
+			lastLMSCheck = .distantPast
 		}
 		// macOS puts its default output back when the engine lets go of a device it held, which
 		// reconciles by itself; this catches a different output chosen meanwhile
@@ -415,6 +443,38 @@ final class Supervisor {
 				let end: LMSCheckLog.End = kept ? .kept(answered: state != nil, answer: answer)
 					: .dropped(began: configured, now: self.lms.setting, took: took)
 				for line in self.checkLog.ended(end, found: checked) { log(line) }
+				if kept, let state, state.connected, let server = checked { self.syncFixedVolume(state, server: server) }
+			}
+		}
+	}
+
+	/// LMS's "Output level fixed at 100%" for this player follows the "LMS volume" setting of the
+	/// device the engine plays to (FixedVolumeSync). `status` already carries the pref, so this costs
+	/// requests only when LMS differs: the send, a read of what LMS kept, and the saved volume before
+	/// and after (put back when LMS's hook changed it, `volumeRestore`).
+	private func syncFixedVolume(_ state: LMSClient.PlayerState, server: LMSServer) {
+		guard let device = engineDevice else { return }
+		let mode = settings.options(for: device).volume, uid = device.uid, name = device.name
+		guard let command = fixedVolume.withLock({ $0.checked(device: uid, mode: mode, lms: state.digitalVolumeControl) }) else { return }
+		log("LMS volume for \(name): \(mode == .fixed ? "setting it to fixed at 100%" : "turning volume control back on"), as this device's setting says")
+		let mac = self.mac, sync = fixedVolume
+		Task.detached {
+			let client = LMSClient(server: server)
+			let volumeBefore = await client.volume(player: mac)
+			_ = await client.call(player: mac, command)
+			let after = await client.digitalVolumeControl(player: mac)
+			// LMS saves a faded (temporary) volume as the real one when this pref changes
+			let volumeAfter = await client.volume(player: mac)
+			// a restore needs both reads (aFadedVolumeLMSSavedIsPutBack), so volumeAfter is there with one
+			if let restore = FixedVolumeSync.volumeRestore(before: volumeBefore, after: volumeAfter), let volumeAfter {
+				_ = await client.call(player: mac, restore)
+				DispatchQueue.main.async {
+					log("LMS volume for \(name): LMS saved its faded volume (\(volumeAfter)) as the player's volume when the setting changed; put back: \(restore.joined(separator: " "))")
+				}
+			}
+			guard sync.withLock({ $0.recordRefusal(device: uid, mode: mode, lmsAfter: after) }) else { return }
+			DispatchQueue.main.async {
+				log("LMS volume for \(name): LMS did not take digitalVolumeControl \(FixedVolumeSync.value(for: mode)); not sent again until the device or its volume setting changes")
 			}
 		}
 	}
@@ -431,6 +491,7 @@ final class Supervisor {
 			if let id = CoreAudioQuery.device(uid: device.uid) {
 				status.currentRate = CoreAudioQuery.nominalRate(id)
 				status.currentFormat = CoreAudioQuery.physicalFormat(id)
+				status.dsdRate = engineFormat?.dsdRate(deviceRate: status.currentRate)
 				if let owner = CoreAudioQuery.hogOwner(id), let pid = status.enginePID {
 					status.exclusive = owner == pid
 				}

@@ -105,3 +105,61 @@ public final class LatestValueSender<Value: Sendable>: @unchecked Sendable {
 		}
 	}
 }
+
+/// "Fixed at 100%" per DAC (Simon, 2026-10-11): LMS's "Output level fixed at 100%" for this player
+/// (`playerpref digitalVolumeControl`, 0 = fixed) follows the "LMS volume" setting of the device
+/// the engine plays to. Fixed sets it; the other modes turn LMS's volume control back on, so a
+/// switch from a fixed DAC to another lands right. LyrionPlay owns the pref: a change made in LMS
+/// or Material is put back at the next check. Setting it makes LMS send a new audg at once
+/// (Player.pm's setChange, LMS 9.1).
+public struct FixedVolumeSync: Sendable {
+	private struct Want: Equatable, Sendable {
+		var device: String
+		var value: Int
+	}
+
+	/// a value LMS did not take, for that device
+	private var refused: Want?
+
+	public init() {}
+
+	public static func value(for mode: VolumeMode) -> Int { mode == .fixed ? 0 : 1 }
+
+	/// One LMS check of a connected player. `device`: the UID the engine plays to; `lms`: the pref
+	/// as `status` gave it (nil: not said, so nothing is sent). nil: send nothing.
+	public mutating func checked(device: String, mode: VolumeMode, lms: Int?) -> [String]? {
+		guard let lms else { return nil }
+		let want = Want(device: device, value: Self.value(for: mode))
+		if lms == want.value {
+			refused = nil
+			return nil
+		}
+		if refused == want { return nil }
+		return ["playerpref", "digitalVolumeControl", String(want.value)]
+	}
+
+	/// LMS's change hook for this pref, `$client->volume($client->volume)` (Player.pm:77, LMS 9.1),
+	/// saves the player's TEMPORARY volume as its real one: a pause fades it to a temporary 0
+	/// (`_Pause`, `fade_volume`), and a switch from a fixed DAC then left LMS at volume 0 (measured
+	/// 2026-10-11: 50 became 0). `before`/`after`: the saved volume (`mixer volume ?`) around the send.
+	/// The command that puts it back, or nil. A muted player keeps a negative volume, which the hook
+	/// does not change (its `mute` pref stops the clamp), and `mixer volume -N` would be relative, so
+	/// a negative volume is never put back.
+	public static func volumeRestore(before: Double?, after: Double?) -> [String]? {
+		guard let before, before >= 0, let after, after != before else { return nil }
+		let level = before == before.rounded() ? String(Int(before)) : String(before)
+		return ["mixer", "volume", level]
+	}
+
+	/// The pref as LMS gave it straight after a send. true: LMS did not take the value, and the
+	/// refusal is recorded, so say it, once: it is not sent again until the device or its mode
+	/// changes, so a refusal is not a loop. (LMS refuses 0 from a player without HasDigitalOut,
+	/// Player.pm's validator; the engine always sends HasDigitalOut=1, so this guards a case not seen.)
+	/// Was `sent(…)`, which read as "true: sent" (/code-review 2026-10-12 (3), finding 4).
+	public mutating func recordRefusal(device: String, mode: VolumeMode, lmsAfter: Int?) -> Bool {
+		let want = Want(device: device, value: Self.value(for: mode))
+		guard let lmsAfter, lmsAfter != want.value else { return false }
+		refused = want
+		return true
+	}
+}

@@ -34,6 +34,8 @@ public enum EngineArguments {
 		if settings.idleSeconds > 0 {
 			args += ["-C", String(settings.idleSeconds)]
 		}
+		// .fixed: no -V, so the engine never touches the device's level, even on an audg LMS sends
+		// before the agent has set it to fixed
 		if options.volume == .device {
 			args.append("-V")
 		}

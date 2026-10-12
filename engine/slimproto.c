@@ -747,6 +747,10 @@ static void slimproto_run() {
 			}
 			UNLOCK_O;
 
+#if COREAUDIO
+			ca_report_format(); // DoP or PCM, for the agent's menu: it takes the output lock itself
+#endif
+
 #if IR
 			LOCK_I;
 			if (ir.code) {

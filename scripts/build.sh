@@ -5,7 +5,9 @@
 #   scripts/build.sh --install  then install it with scripts/install.sh, signed with your own
 #                               certificate, exactly as a user installs a release
 #   scripts/build.sh --release  then make dist/LyrionPlay-<version>.zip: the app, install.sh,
-#                               uninstall.sh and INSTALL.md
+#                               uninstall.sh, INSTALL.md and INSTALL.html; and
+#                               dist/LyrionPlay-<version>-codec-sources.zip, the codec libraries'
+#                               source, which the GPL asks to go out with the app
 # Every user signs LyrionPlay with their own certificate (INSTALL.md), so the build itself is
 # only signed ad-hoc: Apple Silicon runs nothing unsigned, and install.sh re-signs it.
 set -eu
@@ -17,12 +19,58 @@ BUILD=$(date +%Y%m%d%H%M) # bumped every build
 APP="$ROOT/build/$NAME.app"
 BUNDLE_ID=com.crystalgipsy.lyrionplay
 JOBS=$(sysctl -n hw.ncpu)
+DEPS="$ROOT/deps/src"
 MODE="${1:-}"
 case "$MODE" in "" | --install | --release) ;; *) echo "usage: $0 [--install | --release]" >&2; exit 2 ;; esac
 
 echo "== codec libraries"
 "$ROOT/deps/build-cmake.sh"
-"$ROOT/deps/build-deps.sh" | tail -15
+# Into a log, then its tail: piped into tail, the status was tail's, so a codec build that failed (an
+# archive changed, a download or a compile failed) carried on and linked what an earlier build left
+# in deps/out (/code-review 2026-10-12 (5), finding 1). Not `pipefail`: dash, which /bin/sh can be,
+# lacks it.
+mkdir -p "$ROOT/build"
+DEPS_LOG="$ROOT/build/build-deps.log"
+"$ROOT/deps/build-deps.sh" > "$DEPS_LOG" || {
+	tail -15 "$DEPS_LOG"
+	echo "FAIL: deps/build-deps.sh stopped (its output: $DEPS_LOG)" >&2
+	exit 1
+}
+tail -15 "$DEPS_LOG"
+
+# --release: the codec libraries' source goes out with the app (A RELEASE CARRIES ITS SOURCE in the
+# repo's CLAUDE.md). Each archive build-deps.sh fetches, with the SHA-256 on the line after its fetch,
+# read from it so a version change there cannot go stale here: "<sha256>  <archive>" lines.
+codec_pins() {
+	alac=$(sed -n 's/^ALAC_COMMIT=//p' "$ROOT/deps/build-deps.sh")
+	awk '/^fetch /{ f = $2; next } f && /^\t[0-9a-f]{64}$/{ sub(/^\t/, ""); print $0 "  " f } { f = "" }' \
+		"$ROOT/deps/build-deps.sh" | sed "s/\$ALAC_COMMIT/$alac/"
+}
+# stops unless the folder holds every archive build-deps.sh fetches, each matching its SHA-256.
+# build-deps.sh checks an archive only when it builds that library, and skips one already built, so
+# an archive changed since would otherwise ship as the source of a build it was not part of.
+check_codec_sources() { # folder
+	[ "$(grep -c '^fetch ' "$ROOT/deps/build-deps.sh")" -eq 9 ] && [ "$(echo "$PINS" | wc -l)" -eq 9 ] || {
+		echo "build-deps.sh fetches other than the 9 codec archives, each with its SHA-256 on the next line:" $ARCHIVES >&2
+		exit 1
+	}
+	for archive in $ARCHIVES; do
+		[ -s "$1/$archive" ] || { echo "missing codec source: $1/$archive" >&2; exit 1; }
+	done
+	(cd "$1" && echo "$PINS" | shasum -a 256 -c -q -) || {
+		echo "a codec source in $1 differs from the SHA-256 deps/build-deps.sh pins (above)" >&2
+		exit 1
+	}
+}
+if [ "$MODE" = --release ]; then
+	# here, straight after the codec build (whose fetch brings the archives on a fresh checkout) and
+	# before anything else is built or zipped: it used to run after the app's zip was made, so a
+	# failure left that zip, naming a codec-sources zip never made (/code-review 2026-10-12 (5), finding 2)
+	echo "== codec sources"
+	PINS=$(codec_pins)
+	ARCHIVES=$(echo "$PINS" | awk '{ print $2 }')
+	check_codec_sources "$DEPS"
+fi
 
 echo "== engine"
 make -C "$ROOT/engine" -f Makefile.coreaudio -j"$JOBS" >/dev/null
@@ -40,7 +88,14 @@ echo "== icon"
 mkdir -p "$ROOT/build/tools"
 MAKE_ICON="$ROOT/build/tools/make-icon"
 if [ ! -x "$MAKE_ICON" ] || [ "$ROOT/tools/icon/make-icon.swift" -nt "$MAKE_ICON" ]; then
-	swiftc -O "$ROOT/tools/icon/make-icon.swift" -o "$MAKE_ICON" 2>&1 | grep -v 'search path' || true
+	# swiftc's own status: through `| grep … || true`, a failed compile went on with an older make-icon
+	swiftc -O "$ROOT/tools/icon/make-icon.swift" -o "$MAKE_ICON" > "$MAKE_ICON.log" 2>&1 || {
+		cat "$MAKE_ICON.log" >&2
+		rm -f "$MAKE_ICON" # so the next build compiles it again
+		echo "FAIL: make-icon did not compile" >&2
+		exit 1
+	}
+	grep -v 'search path' "$MAKE_ICON.log" || true
 fi
 "$MAKE_ICON" "$ROOT/app/Resources/$NAME.svg" "$ROOT/build/AppIcon.iconset"
 
@@ -53,8 +108,36 @@ cp "$BIN/Agent" "$APP/Contents/MacOS/lyrionplay-agent"
 cp "$ROOT/engine/squeezelite" "$APP/Contents/MacOS/squeezelite"
 iconutil -c icns "$ROOT/build/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/app/Resources/$NAME.svg" "$APP/Contents/Resources/"
-cp "$ROOT/app/Resources/NOTICES.txt" "$APP/Contents/Resources/"
-cp "$ROOT/engine/LICENSE.txt" "$APP/Contents/Resources/squeezelite-LICENSE.txt"
+# NOTICES.txt names this version's source tag and codec-sources zip
+sed "s/<version>/$VERSION/g" "$ROOT/app/Resources/NOTICES.txt" > "$APP/Contents/Resources/NOTICES.txt"
+# the full licence text of everything in the app (NOTICES.txt lists them): BSD, MIT and Apache ask a
+# binary release to carry it. The codecs' texts come from their sources, which deps/build-deps.sh keeps
+# in deps/src; the GPLv3 text squeezelite's names and the icon's two are kept in app/Resources/licences.
+LICENCES="$APP/Contents/Resources/licences"
+mkdir -p "$LICENCES"
+licence() { # name source...: the sources, in order, as one text; a missing or empty one stops the build
+	name=$1
+	shift
+	for src in "$@"; do
+		[ -s "$src" ] || { echo "missing licence text: $src" >&2; exit 1; }
+	done
+	cat "$@" > "$LICENCES/$name"
+}
+licence LyrionPlay.txt "$ROOT/LICENSE"
+licence squeezelite.txt "$ROOT/engine/LICENSE.txt"
+licence GPL-3.0.txt "$ROOT/app/Resources/licences/GPL-3.0.txt"
+licence dsd2pcm.txt "$ROOT/engine/dsd2pcm/LICENSE.txt"
+licence FLAC.txt "$DEPS/flac/COPYING.Xiph"
+licence libogg.txt "$DEPS/ogg/COPYING"
+licence libvorbis.txt "$DEPS/vorbis/COPYING"
+licence Opus.txt "$DEPS/opus/COPYING"
+licence opusfile.txt "$DEPS/opusfile/COPYING"
+licence mpg123.txt "$DEPS/mpg123/COPYING"
+licence FAAD2.txt "$DEPS/faad2/COPYING"
+licence soxr.txt "$DEPS/soxr/LICENCE" "$DEPS/soxr/COPYING.LGPL" # its notice, then the LGPL it names
+licence ALAC.txt "$DEPS/alac/LICENSE"
+licence MaterialSymbols.txt "$ROOT/app/Resources/licences/MaterialSymbols.txt"
+licence LMS-Material.txt "$ROOT/app/Resources/licences/LMS-Material.txt"
 
 echo "== sign ad-hoc"
 # inside-out: nested executables first, then the bundle (which signs the menu app)
@@ -84,12 +167,32 @@ case "$MODE" in
 	;;
 --release)
 	DIST="$ROOT/dist/$NAME-$VERSION"
-	rm -rf "$DIST" "$DIST.zip"
+	SOURCES="$ROOT/dist/$NAME-$VERSION-codec-sources"
+	rm -rf "$DIST" "$DIST.zip" "$SOURCES" "$SOURCES.zip"
+	# The codec sources first, the app's zip last, so a release that stops anywhere leaves no app zip
+	# without its sources. The engine links these codec libraries statically, so their source is part
+	# of the engine's Corresponding Source (GPLv3 section 6): FAAD2 is GPL, mpg123 and soxr LGPL.
+	# Attach this zip to the GitHub release with the app's, so it stays available whatever happens to
+	# the upstream sites. The copies are checked again: what ships is what was pinned.
+	mkdir -p "$SOURCES"
+	for archive in $ARCHIVES; do
+		cp "$DEPS/$archive" "$SOURCES/"
+	done
+	check_codec_sources "$SOURCES"
+	cp "$ROOT/deps/build-deps.sh" "$SOURCES/"
+	cat > "$SOURCES/README.txt" <<SOURCES_README
+The source code of the codec libraries linked into LyrionPlay $VERSION's audio engine, exactly as
+built: each archive as downloaded, and build-deps.sh, which names where each came from, its SHA-256,
+and how it was built. The engine's own source, and the rest of LyrionPlay's, is the tag v$VERSION at
+https://github.com/SimonArnold002/LyrionPlay
+SOURCES_README
+	ditto -c -k --norsrc --noextattr --keepParent "$SOURCES" "$SOURCES.zip"
 	mkdir -p "$DIST"
 	ditto "$APP" "$DIST/$NAME.app"
 	python3 "$ROOT/tools/make_readme_html.py" >/dev/null # the pages, with this version's badge
 	cp "$ROOT/scripts/install.sh" "$ROOT/scripts/uninstall.sh" "$ROOT/INSTALL.md" "$ROOT/INSTALL.html" "$DIST/"
 	ditto -c -k --norsrc --noextattr --keepParent "$DIST" "$DIST.zip" # no ._ files: Mac metadata does not ship
 	echo "release: $DIST.zip ($(du -h "$DIST.zip" | cut -f1))"
+	echo "release: $SOURCES.zip ($(du -h "$SOURCES.zip" | cut -f1)), attach it to the release too"
 	;;
 esac

@@ -1,5 +1,6 @@
 /*
  *  output_coreaudio_conv.h - sample conversion for the CoreAudio output (LyrionPlay)
+ *  (c) 2026 CrystalGipsy
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by

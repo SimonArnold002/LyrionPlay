@@ -126,7 +126,7 @@
   <h1>LyrionPlay</h1>
   <p class="tagline"><strong>A bit-perfect Lyrion Music Server player for Apple Silicon Macs, built on squeezelite.</strong></p>
   <div class="badges">
-    <span class="badge accent">v0.2.10</span>
+    <span class="badge accent">v0.3.14</span>
     <span class="badge">Apple Silicon</span>
     <span class="badge">macOS 14+</span>
     <span class="badge">Bit-perfect</span>
@@ -147,10 +147,10 @@
 <div class="feature-cards">
 <div class="card"><h4>Bit-perfect on a DAC</h4><p>Exclusive (hog) mode, with the DAC switched to each track's sample rate. Samples reach the DAC unchanged at full volume.</p></div>
 <div class="card"><h4>Told about your DAC</h4><p>LMS learns your DAC's highest sample rate and transcodes anything above it. Rates the DAC lacks below that are resampled in the player, only when needed.</p></div>
-<div class="card"><h4>DSD</h4><p>Sent as DoP to DACs that accept it, and converted to PCM for those that don't.</p></div>
+<div class="card"><h4>DSD</h4><p>Sent as DoP to DACs you switch DoP on for (macOS can't tell which accept it), and converted to PCM for the rest.</p></div>
 <div class="card"><h4>LMS replay gain</h4><p>Applied by the player, exactly as LMS sends it.</p></div>
-<div class="card"><h4>Volume both ways</h4><p>The LMS slider moves your Mac's volume, or your DAC's hardware volume, and your Mac's volume keys move the LMS slider. LMS's "fixed at 100%" leaves the device alone.</p></div>
-<div class="card"><h4>Menu bar app</h4><p>Switch the player on and off, see what it's doing, and choose the output device and its options.</p></div>
+<div class="card"><h4>Volume, your choice per device</h4><p><em>Device's own volume</em>: the LMS slider moves your Mac's volume or your DAC's hardware volume, and a change made on the Mac moves the LMS slider (the volume keys when the output is the Mac's built-in speakers or Follow the macOS output). <em>Software</em>: the player scales the samples. <em>Fixed at 100%</em>, on a DAC: LyrionPlay sets LMS's fixed output level for you, and you use the DAC's or amplifier's own volume.</p></div>
+<div class="card"><h4>Menu bar app</h4><p>Switch the player on and off, see what it's doing (the server, the device and the rate it plays at, the DSD rate for DoP), and choose the output device and its options.</p></div>
 <div class="card"><h4>Signed by you</h4><p>Every user signs their own copy with a certificate made on their own Mac, so no Apple developer account is involved.</p></div>
 </div>
 </section>
@@ -173,8 +173,8 @@
 <th>what it does</th>
 </tr></thead>
 <tbody>
-<tr><td><code>engine/</code></td><td>squeezelite with a native CoreAudio output added (<code>output_coreaudio.c</code>): exclusive mode, per-track rate and format switching, DoP, and the device's volume in both directions.</td></tr>
-<tr><td><code>app/Sources/Agent</code></td><td>A background launch agent. It reads the device's abilities from the engine, builds the engine's arguments, keeps the engine running, and passes volume changes made on the Mac to LMS.</td></tr>
+<tr><td><code>engine/</code></td><td>squeezelite with a native CoreAudio output added (<code>output_coreaudio.c</code>): exclusive mode, per-track rate and format switching, DoP, the device's volume in both directions, and a report of what it plays for the menu.</td></tr>
+<tr><td><code>app/Sources/Agent</code></td><td>A background launch agent. It reads the device's abilities from the engine, builds the engine's arguments, keeps the engine running, passes volume changes made on the Mac to LMS, and keeps LMS's fixed-volume setting in step with each device's choice.</td></tr>
 <tr><td><code>app/Sources/App</code></td><td>The menu bar app: On/Off, status, settings.</td></tr>
 <tr><td><code>scripts/</code></td><td><code>build.sh</code> builds the app and the release. <code>test.sh</code> is the regression suite. <code>install.sh</code> and <code>uninstall.sh</code> are what users run.</td></tr>
 </tbody></table>
@@ -184,7 +184,7 @@
 <p>You need Apple's Command Line Tools (<code>xcode-select --install</code>). Nothing else is installed system-wide.</p>
 <pre><code>scripts/build.sh            # build and check
 scripts/build.sh --install  # build, then install with your own certificate
-scripts/build.sh --release  # build the release zip into dist/
+scripts/build.sh --release  # build the two release zips (app, codec source) into dist/
 scripts/test.sh             # the regression suite on its own</code></pre>
 <p>Every build runs the regression suite (<code>scripts/test.sh</code>) and stops if a test fails. It needs no DAC, server or keychain: the CoreAudio output is tested against a fake audio system.</p>
 <p>The first build downloads pinned, checksummed sources and compiles them for Apple Silicon: CMake, and the codec libraries (FLAC, Ogg, Vorbis, Opus, mpg123, FAAD2, soxr, ALAC). This takes a while.</p>
@@ -211,13 +211,13 @@ scripts/test.sh             # the regression suite on its own</code></pre>
 <li><strong>The icon</strong> joins the play arrow from Google's <a href="https://fonts.google.com/icons">Material Symbols</a> (Apache 2.0) to the Lyrion waveform from <a href="https://github.com/CDrummond/lms-material">LMS-Material</a> by Craig Drummond (MIT).</li>
 <li><strong><a href="https://lyrion.org">Lyrion Music Server</a></strong> and its community.</li>
 </ul>
-<p>Full notices ship inside the app, in <code>LyrionPlay.app/Contents/Resources/NOTICES.txt</code>.</p>
+<p>Full notices ship inside the app, in <code>LyrionPlay.app/Contents/Resources/NOTICES.txt</code>, with the full text of each licence in the <code>licences</code> folder beside it.</p>
 <p>LyrionPlay is not affiliated with the Lyrion Music Server project.</p>
 </section>
 <section id="licence">
 <h2>Licence</h2>
 <ul>
-<li><strong>The engine (<code>engine/</code>):</strong> squeezelite's licence, the <a href="https://github.com/SimonArnold002/LyrionPlay/blob/main/engine/LICENSE.txt">GNU General Public License v3</a>.</li>
+<li><strong>The engine (<code>engine/</code>):</strong> squeezelite's licence (<a href="https://github.com/SimonArnold002/LyrionPlay/blob/main/engine/LICENSE.txt">engine/LICENSE.txt</a>), the <a href="https://github.com/SimonArnold002/LyrionPlay/blob/main/app/Resources/licences/GPL-3.0.txt">GNU General Public License v3</a>. The codec libraries linked into it keep their own licences (NOTICES.txt). Each release has its source under its tag <code>v&lt;version&gt;</code>, and the codecs' source as <code>LyrionPlay-&lt;version&gt;-codec-sources.zip</code> on its release page.</li>
 <li><strong>Everything else</strong> (the menu bar app, the agent, the scripts and tools): the <a href="https://github.com/SimonArnold002/LyrionPlay/blob/main/LICENSE">MIT licence</a>.</li>
 </ul>
 </section>

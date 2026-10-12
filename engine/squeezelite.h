@@ -752,6 +752,7 @@ bool test_open(const char *device, unsigned rates[], bool userdef_rates);
 void output_init_coreaudio(log_level level, const char *device, unsigned output_buf_size, char *params, unsigned rates[], unsigned rate_delay, unsigned idle, bool hw_volume, bool linear_volume);
 void output_close_coreaudio(void);
 void _ca_open(void);
+void ca_report_format(void);
 #endif
 
 // output_pulse.c

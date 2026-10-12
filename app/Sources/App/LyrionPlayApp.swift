@@ -120,6 +120,9 @@ final class PlayerModel {
 	var draft = PlayerCore.Settings.load()
 	var devices: [DeviceCaps] = []
 	var lastError: String?
+	/// a failed save, shown in the Settings window itself (Simon, 2026-10-12); lastError still carries
+	/// it to the menu panel
+	var saveError: String?
 	@ObservationIgnored private var timer: Timer?
 
 	init() {
@@ -175,15 +178,40 @@ final class PlayerModel {
 		if !probed.isEmpty { devices = probed }
 	}
 
-	func save(_ draft: PlayerCore.Settings) {
+	/// false when the file could not be written (lastError says why)
+	@discardableResult
+	func save(_ draft: PlayerCore.Settings) -> Bool {
+		// a saved volume choice a device does not offer is read as one it does (Settings.options(for:));
+		// write that, for the devices here
+		var draft = draft
+		for device in devices where draft.devices[device.uid] != nil {
+			draft.devices[device.uid] = draft.options(for: device)
+		}
 		do {
 			try Paths.createDirectories()
 			try draft.save()
 			settings = draft
-			lastError = nil
+			// only a failed save's message: a switch-on error stays, as at Revert (/code-review
+			// 2026-10-12 (6), finding 1)
+			clearSaveError()
+			return true
 		} catch {
 			lastError = "Could not save the settings: \(error.localizedDescription)"
+			saveError = lastError
+			return false
 		}
+	}
+
+	/// back to what is saved, and a failed save's message with it, in the window and in the menu
+	/// panel; a switch-on error in lastError stays (/code-review 2026-10-12 (2), finding 4)
+	func revert() {
+		draft = settings
+		clearSaveError()
+	}
+
+	func clearSaveError() {
+		if saveError != nil, lastError == saveError { lastError = nil }
+		saveError = nil
 	}
 }
 
@@ -264,8 +292,14 @@ struct StatusRows: View {
 
 	private func outputLine(_ device: String) -> String {
 		var parts = [device]
-		if let rate = status.currentRate { parts.append(DeviceCaps.kHz(rate)) }
-		if let format = status.currentFormat { parts.append(format) }
+		if let dsd = status.dsdRate {
+			// DoP: the device runs at the DSD rate / 16 in a 32-bit word, so show the DSD
+			parts.append(DeviceCaps.dsd(dsd))
+			parts.append("DoP")
+		} else {
+			if let rate = status.currentRate { parts.append(DeviceCaps.kHz(rate)) }
+			if let format = status.currentFormat { parts.append(format) }
+		}
 		if status.exclusive { parts.append("exclusive") }
 		return parts.joined(separator: " · ")
 	}
@@ -273,6 +307,7 @@ struct StatusRows: View {
 
 struct SettingsView: View {
 	@Bindable var model: PlayerModel
+	@Environment(\.dismissWindow) private var dismissWindow
 
 	var body: some View {
 		Form {
@@ -289,22 +324,35 @@ struct SettingsView: View {
 				}
 				if let device = model.draft.resolveDevice(in: model.devices, holding: model.heldDevice) {
 					Toggle("Exclusive mode", isOn: option(device, \.exclusive))
-					Text("Other apps cannot use \(device.name) while the player is playing.")
+					Text(model.draft.idleSeconds == 0
+						 ? "Other apps cannot use \(device.name) while the player is on: it is never released (Advanced)."
+						 : "Other apps cannot use \(device.name) while the player is playing.")
 						.font(.caption).foregroundStyle(.secondary)
 					Toggle("DAC accepts DSD over PCM (DoP)", isOn: option(device, \.dop))
 					Text("Off: DSD is converted to PCM in the player, so it still plays.")
 						.font(.caption).foregroundStyle(.secondary)
+					// only what the device offers (VolumeMode.offered): no device volume without a control,
+					// no Fixed on the Mac's own outputs
 					Picker("LMS volume", selection: option(device, \.volume)) {
-						Text(device.volume == nil ? "Device volume (none here: software is used)" : "Device's own volume")
-							.tag(VolumeMode.device)
-						Text("Software (scales the samples)").tag(VolumeMode.software)
+						ForEach(VolumeMode.offered(by: device), id: \.self) { mode in
+							switch mode {
+							case .device: Text("Device's own volume").tag(mode)
+							case .software: Text("Software (scales the samples)").tag(mode)
+							case .fixed: Text("Fixed at 100%").tag(mode)
+							}
+						}
 					}
+					// the player's "Output level fixed at 100%" in LMS follows this (FixedVolumeSync)
+					Text(volumeCaption(device))
+						.font(.caption).foregroundStyle(.secondary)
 					Stepper("Silence on a rate change: \(model.draft.options(for: device).rateSwitchDelayMs) ms",
 							value: option(device, \.rateSwitchDelayMs), in: 0...2000, step: 100)
 				}
 			}
 			Section("Advanced") {
-				Stepper("Release the device after \(model.draft.idleSeconds) s stopped",
+				// 0 passes no -C (EngineArguments): the engine opens the device at start and keeps it
+				Stepper(model.draft.idleSeconds == 0 ? "Release the device: never"
+							: "Release the device after \(model.draft.idleSeconds) s stopped",
 						value: $model.draft.idleSeconds, in: 0...600, step: 5)
 				Picker("Resampling quality", selection: $model.draft.resampleQuality) {
 					Text("Very high").tag("v")
@@ -316,19 +364,55 @@ struct SettingsView: View {
 					Text("Debug").tag("debug")
 				}
 			}
+			if let error = model.saveError {
+				Text(error).font(.caption).foregroundStyle(.red)
+			}
 			HStack {
 				Spacer()
-				Button("Revert") { model.draft = model.settings }
+				Button("Revert") { model.revert() }
 				Button("Save") { model.save(model.draft) }
 					.keyboardShortcut(.defaultAction)
+				// closes only when the save worked, so a failed one keeps the edits on screen
+				Button("Save and Close") {
+					if model.save(model.draft) { dismissWindow(id: "settings") }
+				}
 			}
 		}
 		.formStyle(.grouped)
 		.frame(width: 500)
 		.onAppear {
+			model.clearSaveError() // from an earlier opening
 			model.loadDevices()
-			model.draft = PlayerCore.Settings.load()
+			// what is saved now (the volume warning compares with it; Revert goes back to it)
+			model.settings = PlayerCore.Settings.load()
+			model.draft = model.settings
 		}
+	}
+
+	/// Under "LMS volume". The Mac's volume keys change only the macOS output's level, in every mode
+	/// (LyrionPlay never sees a key), so where they work is said for any device with a volume control;
+	/// not under Fixed, where it would confuse (Simon, 2026-10-12). Fixed warns that it is louder only
+	/// when the saved mode scales the samples (software volume, VolumeMode.scalesSamples): from the
+	/// device's own volume the level stays.
+	private func volumeCaption(_ device: DeviceCaps) -> String {
+		let keys = " The Mac's volume keys work only when the output is the Mac's built-in speakers or Follow the macOS output."
+		switch model.draft.options(for: device).volume {
+		case .device: // offered only with a volume control (VolumeMode.offered)
+			// "fixed" is never said here: nothing is fixed in these modes (Simon, 2026-10-12)
+			return "The LMS volume slider sets \(device.name)'s own volume." + keys
+		case .software:
+			return "The LMS volume slider scales the samples; \(device.name)'s own volume stays where it is."
+				+ (device.volume != nil ? keys : "")
+		case .fixed:
+			break
+		}
+		var caption = device.volume == nil
+			? "LMS sends full level; set the volume on \(device.name) or your amplifier."
+			: "LMS sends full level and leaves \(device.name)'s own volume alone."
+		if model.settings.options(for: device).volume.scalesSamples {
+			caption += " From software volume this is louder: turn it down before saving."
+		}
+		return caption
 	}
 
 	private func option<T>(_ device: DeviceCaps, _ key: WritableKeyPath<DeviceOptions, T>) -> Binding<T> {

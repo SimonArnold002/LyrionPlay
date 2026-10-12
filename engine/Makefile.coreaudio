@@ -1,3 +1,4 @@
+# (c) 2026 CrystalGipsy, GNU General Public License v3 or later, as the engine it builds.
 # LyrionPlay: macOS 14+ arm64 build with the native CoreAudio output (output_coreaudio.c)
 # and the static codec libraries built by ../deps/build-deps.sh. No dylibs are linked, so the
 # binary runs under the hardened runtime with no exceptions.

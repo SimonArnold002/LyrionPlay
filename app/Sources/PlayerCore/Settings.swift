@@ -2,10 +2,45 @@ import Foundation
 
 public enum VolumeMode: String, Codable, Sendable, CaseIterable {
 	/// LMS volume moves the device's own control: the macOS volume on built-in outputs, or a
-	/// DAC's hardware volume. The engine falls back to software volume if the device has none.
+	/// DAC's hardware volume. Offered only on a device with a volume control the Mac can set; a
+	/// saved choice on one without is read as software (`nearestOffered(on:)`, ONLY WHAT A DEVICE OFFERS).
 	case device
 	/// LMS volume scales the samples (not bit-perfect below 100%)
 	case software
+	/// LMS's "Output level fixed at 100%" for this player, set by the agent (FixedVolumeSync).
+	/// The music goes at full level, and the device's own volume is left alone: the DAC's knob or an
+	/// amplifier sets it (repo ledger, FIXED AT 100% PER DAC).
+	case fixed
+
+	/// LMS's volume scales the samples in this mode: software only. From it, Fixed plays louder at
+	/// once; from the device's own volume it does not (the level stays where LMS left it, and the
+	/// samples were already at full scale). /code-review 2026-10-12, finding 2. Read it from
+	/// `Settings.options(for:)`: the device's own volume saved on a device with no volume control
+	/// comes back as software there (/code-review 2026-10-12 (2), finding 3).
+	public var scalesSamples: Bool { self == .software }
+
+	/// What a device offers (Simon, 2026-10-12: "block device volume as an option if it doesnt offer
+	/// it, block fixed on MacOS outputs"): its own volume only with a volume control the Mac can set;
+	/// Fixed at 100% only on a DAC (`DeviceCaps.isExternal`), never on the Mac's own outputs (built-in,
+	/// Bluetooth, AirPlay, HDMI); software on every device.
+	public func isOffered(by device: DeviceCaps) -> Bool {
+		switch self {
+		case .device: return device.volume != nil
+		case .software: return true
+		case .fixed: return device.isExternal
+		}
+	}
+
+	public static func offered(by device: DeviceCaps) -> [VolumeMode] {
+		allCases.filter { $0.isOffered(by: device) }
+	}
+
+	/// A saved choice the device does not offer, read as the nearest one it does (Simon's choice): the
+	/// device's own volume without a control as software (what the engine already played it as),
+	/// Fixed on a Mac output as the device's own volume, or software without a control.
+	public func nearestOffered(on device: DeviceCaps) -> VolumeMode {
+		isOffered(by: device) ? self : device.volume != nil ? .device : .software
+	}
 }
 
 /// Options for one output device, keyed by its UID.
@@ -71,8 +106,12 @@ public struct Settings: Codable, Equatable, Sendable {
 		logLevel = try c.decodeIfPresent(String.self, forKey: .logLevel) ?? defaults.logLevel
 	}
 
+	/// Every reader takes a device's options here (the engine's arguments, the agent's LMS sync, the
+	/// Settings window), so a saved volume choice the device does not offer is read as one it does.
 	public func options(for device: DeviceCaps) -> DeviceOptions {
-		devices[device.uid] ?? .defaults(for: device)
+		var options = devices[device.uid] ?? .defaults(for: device)
+		options.volume = options.volume.nearestOffered(on: device)
+		return options
 	}
 
 	/// The device the settings point at, among those the engine reported. `holding`: the device

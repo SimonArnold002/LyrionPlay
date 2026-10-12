@@ -1,4 +1,7 @@
 /*
+ * (c) 2026 CrystalGipsy, for LyrionPlay. GNU General Public License v3 or later, as the
+ * engine it tests (../LICENSE.txt).
+ *
  * Regression suite for output_coreaudio.c, run against a fake HAL: no audio device is touched.
  *
  * The file is compiled with its HAL calls, clock, sleeps and stdout redirected to the fakes below
@@ -70,6 +73,7 @@ static uint64_t fake_clock_ns(clockid_t);
 static unsigned fake_sleep(unsigned);
 static int fake_usleep(useconds_t);
 static int fake_printf(const char *, ...);
+static int fake_fflush(FILE *);
 static int fake_pthread_create(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
 
 #define AudioObjectHasProperty            fake_HasProperty
@@ -87,6 +91,7 @@ static int fake_pthread_create(pthread_t *, const pthread_attr_t *, void *(*)(vo
 #define sleep                             fake_sleep
 #define usleep                            fake_usleep
 #define printf                            fake_printf
+#define fflush(f)                         fake_fflush(f)
 #define pthread_create                    fake_pthread_create
 
 #ifndef OCA_SOURCE
@@ -674,6 +679,13 @@ static int fake_usleep(useconds_t us) {
 static pthread_mutex_t outlock = PTHREAD_MUTEX_INITIALIZER;
 static char reports[16][96];
 static unsigned nreports;
+static char formats[16][96];                 // lyrionplay:format lines (ca_report_format)
+static unsigned nformats;
+// stdout is a pipe to the agent, so a line the engine does not flush stays in the buffer until it
+// fills or the engine exits (measured 2026-10-12: a line reached a pipe's reader after 3.3 s, the
+// writer's whole life, against 0.04 s flushed). unflushed: lines since the last flush of stdout;
+// flushed_late: lines printed while an earlier one was still unflushed (/code-review 2026-10-12 (5))
+static unsigned unflushed, flushed_late;
 static int fake_printf(const char *fmt, ...) {
 	char line[256];
 	va_list ap;
@@ -681,13 +693,33 @@ static int fake_printf(const char *fmt, ...) {
 	int n = vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
 	pthread_mutex_lock(&outlock);
+	line[strcspn(line, "\n")] = 0;
 	if (!strncmp(line, "lyrionplay:volume", 17) && nreports < 16) {
-		line[strcspn(line, "\n")] = 0;
 		strncpy(reports[nreports++], line, sizeof(reports[0]) - 1);
 	}
+	if (!strncmp(line, "lyrionplay:format", 17) && nformats < 16) {
+		strncpy(formats[nformats++], line, sizeof(formats[0]) - 1);
+	}
+	if (!strncmp(line, "lyrionplay:", 11) && unflushed++) flushed_late++;
 	pthread_mutex_unlock(&outlock);
 	return n;
 }
+static int fake_fflush(FILE *f) {
+	if (f == stdout) {
+		pthread_mutex_lock(&outlock);
+		unflushed = 0;
+		pthread_mutex_unlock(&outlock);
+	}
+	return (fflush)(f);                       // the real one: a macro name not followed by ( is not expanded
+}
+// every line said so far reached the agent
+#define CHECK_FLUSHED() CHECK(!unflushed && !flushed_late, "stdout not flushed: %u line(s) still in its buffer, %u " \
+	"more found there by the next line", unflushed, flushed_late)
+// the last line captured, for a failure message: CHECK does not stop the test, so a message must
+// not index [n - 1] with nothing captured (unsigned, it wraps and the test crashed instead of
+// saying what failed; /code-review 2026-10-12 (3), finding 3)
+static const char *last_report(void) { return nreports ? reports[nreports - 1] : "(none)"; }
+static const char *last_format(void) { return nformats ? formats[nformats - 1] : "(none)"; }
 
 static _Atomic int live_threads;
 struct trampoline { void *(*fn)(void *); void *arg; };
@@ -1349,7 +1381,7 @@ static void reports_carry_lms_state(void) {
 	CHECK(nreports >= 1 && !strcmp(reports[0], "lyrionplay:volume -30.00 0 -1"), "before any audg: '%s'", reports[0]);
 	CHECK(nreports >= 2 && !strcmp(reports[1], "lyrionplay:volume -40.00 0 1"), "after a level: '%s'", reports[1]);
 	CHECK(nreports >= 3 && !strcmp(reports[nreports - 1], "lyrionplay:volume -45.00 0 0"), "after LMS muted: '%s'",
-		  reports[nreports - 1]);
+		  last_report());
 	stop();
 }
 
@@ -1392,6 +1424,7 @@ static void user_change_reported_once_and_mute_reported(void) {
 	int muted = -1;
 	CHECK(nreports == 2 && sscanf(reports[1], "lyrionplay:volume %*f %d", &muted) == 1 && muted == 1, "mute: '%s'",
 		  nreports == 2 ? reports[1] : "(none)");
+	CHECK_FLUSHED();                          // notify waits for the listener, so its flush is done
 	stop();
 }
 
@@ -1790,6 +1823,138 @@ static void the_idle_release_keeps_the_silence_of_what_played_to_the_close(void)
 		  frames_of(K_ZERO), io_frames);
 	controller();
 	CHECK(!device_open(), "control: the idle release did not close the device (PCM)");
+	stop();
+}
+
+// The menu showed 176.4 kHz for DSD64: CoreAudio sees DoP as PCM at that rate, so the engine says
+// what plays, from the track starts the IOProc took: nothing before any track, then one line per
+// change of rate or format, including a format change alone at one rate (DSD256 converted to
+// 352.8k PCM, then DSD128 as DoP at 352.8k).
+static void what_plays_is_reported_once_per_change(void) {
+	fdev *d = add_dac();
+	d->rates[5] = 352800;
+	d->nrates = 6;
+	start(d->uid, "0:1", IDLE_MS, false, false);
+	ca_report_format();
+	// the device is closed here: no idle line at the start. Open before any track: the two tests below
+	CHECK(nformats == 0, "a line at the start, with the device closed: '%s'", formats[0]);
+	play_track(176400, DOP, 4000);
+	ca_report_format();
+	ca_report_format();
+	CHECK(nformats == 1 && !strcmp(formats[0], "lyrionplay:format 176400 dop"), "DSD64: %u line(s), '%s'",
+		  nformats, formats[0]);
+	play_track(44100, PCM, 4000);
+	ca_report_format();
+	CHECK(nformats == 2 && !strcmp(formats[1], "lyrionplay:format 44100 pcm"), "44.1k: %u line(s), '%s'",
+		  nformats, formats[1]);
+	play_track(352800, PCM, 4000);
+	ca_report_format();
+	CHECK(nformats == 3 && !strcmp(formats[2], "lyrionplay:format 352800 pcm"), "352.8k PCM: %u line(s), '%s'",
+		  nformats, formats[2]);
+	play_track(352800, DOP, 4000);
+	ca_report_format();
+	CHECK(nformats == 4 && !strcmp(formats[3], "lyrionplay:format 352800 dop"), "DSD128 at the same rate: "
+		  "%u line(s), '%s'", nformats, formats[3]);
+	play_track(352800, DOP, 4000);
+	ca_report_format();
+	CHECK(nformats == 4, "the same again was said again (%u lines)", nformats);
+
+	// gapless: the decoder is on the next track while this one plays, so what plays is the IOProc's
+	// record, not the decoder's next_sample_rate / next_fmt
+	unsigned a, b;
+	strm_q();
+	strm_s(1);
+	LOCK;
+	a = _decoder_starts(176400, DOP, 44100);  // DSD64, 1/4 s
+	UNLOCK;
+	start_output();
+	for (int i = 0; i < 1000 && !trk[a].played; i++) {
+		if (!device_open()) open_device();
+		tick();
+	}
+	ca_report_format();
+	CHECK(nformats == 5 && !strcmp(formats[4], "lyrionplay:format 176400 dop"), "DSD64 again: %u line(s), '%s'",
+		  nformats, formats[4]);
+	LOCK;
+	b = _decoder_starts(44100, PCM, 4000);    // then 44.1k, gapless
+	UNLOCK;
+	decoder_done = true;
+	CHECK(trk[a].played < trk[a].written, "control: DSD64 already over (%u/%u)", trk[a].played, trk[a].written);
+	ca_report_format();
+	CHECK(nformats == 5, "the decoder's next track was said while DSD64 played: '%s'", last_format());
+	for (int i = 0; i < 20000 && trk[b].played < trk[b].written; i++) {
+		if (!device_open()) open_device();
+		tick();
+	}
+	ca_report_format();
+	CHECK(nformats == 6 && !strcmp(formats[5], "lyrionplay:format 44100 pcm"), "44.1k after the gapless boundary: "
+		  "%u line(s), '%s'", nformats, formats[5]);
+	CHECK_FLUSHED();
+	stop();
+}
+
+// /code-review 2026-10-12 (5), finding 3: until the IOProc takes a first track start, ca.track_rate is
+// 0 while the device can be open, so nothing is said there ("lyrionplay:format 0 pcm" without the
+// guard): the first line is the track's, at its start. With the device kept ("Release after" 0: the
+// agent passes no -C) that is from the engine's start to the first track.
+static void nothing_is_reported_while_a_kept_device_waits_for_a_first_track(void) {
+	fdev *d = add_dac();
+	start(d->uid, "0:1", 0, false, false);    // no -C: opened at the start, and kept
+	CHECK(device_open(), "control: the device was not opened at the start");
+	run_ioproc();
+	ca_report_format();
+	CHECK(nformats == 0, "a line with the device open before any track: '%s'", last_format());
+	play_track(44100, PCM, 4000);
+	ca_report_format();
+	CHECK(nformats == 1 && !strcmp(formats[0], "lyrionplay:format 44100 pcm"), "the first track: %u line(s), '%s'",
+		  nformats, last_format());
+	stop();
+}
+
+// the same while the first play from idle buffers: the monitor has opened the device at the track's
+// rate, and the track has not started
+static void nothing_is_reported_while_a_first_play_from_idle_buffers(void) {
+	fdev *d = add_dac();
+	start(d->uid, "0:1", IDLE_MS, false, false);
+	play_from_idle(48000, true);              // a 2 s threshold: one frame keeps it buffering
+	WAIT_FOR(device_open());
+	CHECK(device_open() && d->rate == 48000, "control: not open at 48000 (%.0f Hz)", d->rate);
+	run_ioproc();
+	CHECK(output_state_now() == OUTPUT_BUFFER && output.track_start, "control: the track started while buffering");
+	ca_report_format();
+	CHECK(nformats == 0, "a line while the first play buffers: '%s'", last_format());
+	LOCK;
+	output.state = OUTPUT_RUNNING;
+	UNLOCK;
+	run_ioproc();
+	CHECK(!output.track_start, "control: the track start was not reached");
+	ca_report_format();
+	CHECK(nformats == 1 && !strcmp(formats[0], "lyrionplay:format 48000 pcm"), "the track start: %u line(s), '%s'",
+		  nformats, last_format());
+	stop();
+}
+
+// /code-review 2026-10-12, finding 3: the DAC keeps DoP's rate after the idle release, so the menu
+// kept "DSD64 · DoP" there, and over another app's PCM at that rate. The release is said, once, and
+// a play after it says what plays again, even the same DSD64.
+static void the_idle_release_is_reported(void) {
+	fdev *d = add_dac();
+	start(d->uid, "0:1", IDLE_MS, false, false);
+	play_track(176400, DOP, 4000);
+	ca_report_format();
+	CHECK(nformats == 1 && !strcmp(formats[0], "lyrionplay:format 176400 dop"), "DSD64: %u line(s), '%s'",
+		  nformats, formats[0]);
+	idle_release();
+	CHECK(!device_open(), "control: the idle release did not close the device");
+	ca_report_format();
+	ca_report_format();
+	CHECK(nformats == 2 && !strcmp(formats[1], "lyrionplay:format idle"), "the idle release: %u line(s), the last '%s'",
+		  nformats, last_format());
+	play_track(176400, DOP, 4000);
+	ca_report_format();
+	CHECK(nformats == 3 && !strcmp(formats[2], "lyrionplay:format 176400 dop"), "DSD64 after the release: %u line(s), "
+		  "the last '%s'", nformats, last_format());
+	CHECK_FLUSHED();                          // the idle line too
 	stop();
 }
 
@@ -2625,6 +2790,11 @@ static const struct { const char *name; void (*fn)(void); } tests[] = {
 	{ "a stop before the open after DoP leaves PCM silence", a_stop_before_the_open_after_dop_leaves_pcm_silence },
 	{ "DoP silence at the DoP rate is kept", dop_silence_at_the_dop_rate_is_kept },
 	{ "the idle release keeps the silence of what played to the close", the_idle_release_keeps_the_silence_of_what_played_to_the_close },
+	{ "what plays is reported once per change", what_plays_is_reported_once_per_change },
+	{ "nothing is reported while a kept device waits for a first track",
+	  nothing_is_reported_while_a_kept_device_waits_for_a_first_track },
+	{ "nothing is reported while a first play from idle buffers", nothing_is_reported_while_a_first_play_from_idle_buffers },
+	{ "the idle release is reported", the_idle_release_is_reported },
 	{ "a play from idle into DoP buffers in DoP silence", a_play_from_idle_into_dop_buffers_in_dop_silence },
 	{ "a play from idle after DoP at its rate buffers in PCM silence", a_play_from_idle_after_dop_at_its_rate_buffers_in_pcm_silence },
 	{ "a play from idle into DoP at the last rate buffers in DoP silence", a_play_from_idle_into_dop_at_the_last_rate_buffers_in_dop_silence },

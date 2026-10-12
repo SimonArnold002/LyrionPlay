@@ -1,12 +1,20 @@
 LyrionPlay — third-party software and artwork
 
+The full text of every licence below is in the licences folder next to this file, one file per
+name (squeezelite.txt, FLAC.txt and so on).
+
 LyrionPlay is not affiliated with or endorsed by the Lyrion Music Server project.
 
 Player engine
   squeezelite (https://github.com/ralph-irving/squeezelite), modified for LyrionPlay with a native
   CoreAudio output. Squeezelite is by Adrian Smith (2012-2015) and Ralph Irving (2015 on), with
-  contributors. GNU General Public License v3; full text in squeezelite-LICENSE.txt. The source
-  code of the modified engine is at https://github.com/SimonArnold002/LyrionPlay
+  contributors. GNU General Public License v3 (squeezelite.txt; the licence's full text in
+  GPL-3.0.txt). The source code of the modified engine is at
+  https://github.com/SimonArnold002/LyrionPlay under this version's tag, v<version>; the source of
+  the codec libraries below is LyrionPlay-<version>-codec-sources.zip on that version's release page.
+  output_coreaudio.c and the rest of the CoreAudio output: (c) 2026 CrystalGipsy, same licence.
+  It contains dsd2pcm, Copyright 2009, 2011 Sebastian Gesemann, under a BSD 2-clause licence
+  (in squeezelite.txt and dsd2pcm.txt), and the Daphile project's DSD patch.
 
 Codec libraries, linked statically into the engine
   libFLAC, libogg, libvorbis    Xiph.Org, BSD-style licence
@@ -18,7 +26,7 @@ Codec libraries, linked statically into the engine
 
 Icon
   The play arrow is "play_arrow" from Google's Material Symbols (Rounded), Apache License 2.0.
-  The waveform is drawn from lyrion-icon.svg in LMS-Material by Craig Drummond, MIT licence.
+  The waveform is drawn from lyrion-icon.svg in LMS-Material, Copyright (c) 2017 Craig Drummond, MIT licence.
 
 Menu bar app and background agent
-  MIT licence.
+  (c) 2026 CrystalGipsy, MIT licence (LyrionPlay.txt).

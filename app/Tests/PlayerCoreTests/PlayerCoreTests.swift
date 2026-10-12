@@ -12,6 +12,18 @@ let probeOutput = """
 let devices = DeviceCaps.parseList(probeOutput)
 var fiio: DeviceCaps { devices.first { $0.name == "FiiO M11 Plus" }! }
 var speakers: DeviceCaps { devices.first { $0.uid == "BuiltInSpeakerDevice" }! }
+// a DAC WITH a volume control: Simon's DragonFly, from the agent's probe in status.json, 2026-10-12
+var dragonfly: DeviceCaps {
+	DeviceCaps.parseList("""
+		{"uid":"AppleUSBAudioEngine:AudioQuest:AudioQuest DragonFly Black v1.5:AQDFBL0100009556:1","name":"AudioQuest DragonFly Black v1.5","manufacturer":"AudioQuest","transport":"usb","default":false,"channels":2,"rates":[96000,88200,48000,44100],"integer_bits":[24],"float":false,"volume":{"control":"main","db_min":-64.00,"db_max":0.00,"mute":true},"exclusive_owner":-1,"current_rate":44100,"current_format":"24-bit integer"}
+		""").first!
+}
+// a Mac output with no volume control (HDMI to a display)
+var hdmi: DeviceCaps {
+	DeviceCaps.parseList("""
+		{"uid":"HDMI-1","name":"LG TV","manufacturer":"LG","transport":"hdmi","default":false,"channels":2,"rates":[48000,44100],"integer_bits":[24],"float":false,"volume":null,"exclusive_owner":-1,"current_rate":48000,"current_format":"24-bit integer"}
+		""").first!
+}
 
 func args(_ settings: Settings, _ device: DeviceCaps) -> [String] {
 	EngineArguments.build(settings: settings, device: device, mac: "02:00:4c:4d:50:01",
@@ -97,6 +109,72 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(value("-M", in: args(Settings(), fiio)) == "SqueezeLiteMac")
 	}
 
+	/// Fixed at 100%: the engine never moves the device's level, even on a device with a volume
+	/// control and an audg LMS sends before the agent has set it to fixed
+	@Test func fixedVolumeNeverTouchesTheDevice() {
+		var settings = Settings()
+		settings.devices[dragonfly.uid] = DeviceOptions(exclusive: true, dop: false, volume: .fixed)
+		#expect(!args(settings, dragonfly).contains("-V"))
+		// control: the device's own volume on the same device
+		settings.devices[dragonfly.uid]?.volume = .device
+		#expect(args(settings, dragonfly).contains("-V"))
+	}
+
+	/// the Settings window warns that Fixed is louder when the mode being left scales the samples:
+	/// software on any device, not only on one without a volume control (/code-review 2026-10-12,
+	/// finding 2: the warning followed the device, so software on the speakers got none)
+	@Test func fixedIsLouderOnlyAfterSoftwareVolume() {
+		#expect(VolumeMode.software.scalesSamples)
+		#expect(!VolumeMode.device.scalesSamples)
+		#expect(!VolumeMode.fixed.scalesSamples)
+		// the device's own volume saved on a device with no volume control is read as software, so
+		// it still warns (/code-review 2026-10-12 (2), finding 3: the rule lives in options(for:))
+		var saved = Settings()
+		saved.devices[fiio.uid] = DeviceOptions(exclusive: true, dop: false, volume: .device)
+		#expect(saved.options(for: fiio).volume.scalesSamples)
+		saved.devices[dragonfly.uid] = DeviceOptions(exclusive: true, dop: false, volume: .device)
+		#expect(!saved.options(for: dragonfly).volume.scalesSamples)
+		// the engine agrees: only the device's own volume passes -V, so software and fixed run alike
+		var settings = Settings()
+		settings.devices[dragonfly.uid] = DeviceOptions(exclusive: true, dop: false, volume: .software)
+		let software = args(settings, dragonfly)
+		settings.devices[dragonfly.uid]?.volume = .fixed
+		#expect(software == args(settings, dragonfly))
+	}
+
+	/// Simon, 2026-10-12: "block device volume as an option if it doesnt offer it, block fixed on MacOS
+	/// outputs" (every output that is not a DAC)
+	@Test func eachDeviceOffersOnlyWhatItHas() {
+		#expect(VolumeMode.offered(by: dragonfly) == [.device, .software, .fixed])
+		#expect(VolumeMode.offered(by: fiio) == [.software, .fixed])       // a DAC with no volume control
+		#expect(VolumeMode.offered(by: speakers) == [.device, .software])  // a Mac output: no Fixed
+		#expect(VolumeMode.offered(by: hdmi) == [.software])               // a Mac output with no control
+		// the defaults are always offered
+		for device in [dragonfly, fiio, speakers, hdmi] {
+			#expect(DeviceOptions.defaults(for: device).volume.isOffered(by: device))
+		}
+	}
+
+	/// a choice saved before it was blocked is read as the nearest one offered, by every reader
+	/// (Simon's choice), here the engine's arguments
+	@Test func aBlockedChoiceSavedIsReadAsOneOffered() {
+		var settings = Settings()
+		settings.devices[speakers.uid] = DeviceOptions(exclusive: false, dop: false, volume: .fixed)
+		settings.devices[fiio.uid] = DeviceOptions(exclusive: true, dop: true, volume: .device)
+		settings.devices[hdmi.uid] = DeviceOptions(exclusive: false, dop: false, volume: .fixed)
+		settings.devices[dragonfly.uid] = DeviceOptions(exclusive: true, dop: false, volume: .fixed)
+		#expect(settings.options(for: speakers).volume == .device)
+		#expect(args(settings, speakers).contains("-V"))
+		#expect(settings.options(for: fiio).volume == .software)
+		#expect(!args(settings, fiio).contains("-V"))
+		#expect(settings.options(for: hdmi).volume == .software)
+		// control: an offered choice is kept, and the rest of the options with it
+		#expect(settings.options(for: dragonfly).volume == .fixed)
+		#expect(settings.options(for: fiio).dop && settings.options(for: fiio).exclusive)
+		// LMS's fixed setting follows what is read: the speakers' saved Fixed turns it back on
+		#expect(FixedVolumeSync.value(for: settings.options(for: speakers).volume) == 1)
+	}
+
 	@Test func sameInputsGiveTheSameArguments() {
 		#expect(args(Settings(), fiio) == args(Settings(), fiio))
 		#expect(args(Settings(), fiio) != args(Settings(), speakers))
@@ -114,7 +192,8 @@ func value(_ option: String, in a: [String]) -> String? {
 	@Test func roundTrip() throws {
 		var settings = Settings()
 		settings.outputDevice = fiio.uid
-		settings.devices[fiio.uid] = DeviceOptions(exclusive: true, dop: true, volume: .software)
+		settings.devices[fiio.uid] = DeviceOptions(exclusive: true, dop: true, volume: .fixed)
+		settings.devices[speakers.uid] = DeviceOptions(exclusive: false, dop: false, volume: .software)
 		let url = FileManager.default.temporaryDirectory.appendingPathComponent("lyrionplay-settings-\(UUID()).json")
 		defer { try? FileManager.default.removeItem(at: url) }
 		try settings.save(to: url)
@@ -254,6 +333,79 @@ func value(_ option: String, in a: [String]) -> String? {
 	}
 }
 
+/// The menu showed 176.4 kHz for DSD64: the engine says what plays, and the menu shows the DSD rate.
+@Suite struct FormatReports {
+	@Test func parsesTheEngineLine() {
+		#expect(FormatReport(line: "lyrionplay:format 176400 dop") == FormatReport(rate: 176400, dop: true))
+		#expect(FormatReport(line: "lyrionplay:format 44100 pcm") == FormatReport(rate: 44100, dop: false))
+	}
+
+	@Test func otherLinesAreNotReports() {
+		#expect(FormatReport(line: "lyrionplay:format") == nil)
+		#expect(FormatReport(line: "lyrionplay:format 176400") == nil)
+		#expect(FormatReport(line: "lyrionplay:format 0 dop") == nil)
+		#expect(FormatReport(line: "lyrionplay:format 176400 dsd") == nil)
+		#expect(FormatReport(line: "lyrionplay:volume -30.00 0 1") == nil)
+		#expect(VolumeReport(line: "lyrionplay:format 176400 dop") == nil)
+	}
+
+	@Test func dopAtTheDevicesRateIsDSD() {
+		#expect(FormatReport(rate: 176400, dop: true).dsdRate(deviceRate: 176400) == 2_822_400)
+		#expect(FormatReport(rate: 352800, dop: true).dsdRate(deviceRate: 352800) == 5_644_800)
+		// a DAC offering 705.6k / 1411.2k takes DSD256 / DSD512 as DoP (dsd.c: rate / 16 <= its top rate)
+		#expect(FormatReport(rate: 705600, dop: true).dsdRate(deviceRate: 705600) == 11_289_600)
+		#expect(FormatReport(rate: 1_411_200, dop: true).dsdRate(deviceRate: 1_411_200) == 22_579_200)
+		// DSD256 on the FiiO is converted to 352.8k PCM (DSD256 IS PCM ON THE FIIO): a kHz rate
+		#expect(FormatReport(rate: 352800, dop: false).dsdRate(deviceRate: 352800) == nil)
+	}
+
+	@Test func aDeviceThatMovedIsNotRelabelled() {
+		// released after DSD64, then another app set 48k: the old report says nothing of that
+		#expect(FormatReport(rate: 176400, dop: true).dsdRate(deviceRate: 48000) == nil)
+		#expect(FormatReport(rate: 176400, dop: true).dsdRate(deviceRate: nil) == nil)
+	}
+
+	/// /code-review 2026-10-12, finding 3: a DAC keeps DoP's rate after the idle release, so only the
+	/// engine's release line can drop the report (the device-rate rule cannot see it)
+	@Test func theReleaseDropsTheReport() {
+		#expect(FormatLine(line: "lyrionplay:format idle") == .idle)
+		#expect(FormatLine(line: "lyrionplay:format idle")?.report == nil)
+		#expect(FormatLine(line: "lyrionplay:format 176400 dop")?.report == FormatReport(rate: 176400, dop: true))
+		#expect(FormatReport(line: "lyrionplay:format idle") == nil)
+		#expect(FormatLine(line: "lyrionplay:format idle now") == nil)
+		#expect(FormatLine(line: "lyrionplay:volume -30.00 0 1") == nil)
+		#expect(VolumeReport(line: "lyrionplay:format idle") == nil)
+		// control: the rate rule alone keeps DSD64 on the released DAC, still at 176.4k
+		#expect(FormatReport(rate: 176400, dop: true).dsdRate(deviceRate: 176400) == 2_822_400)
+	}
+
+	/// every DSD rate, both families, as given (Simon, 2026-10-12): another user's DAC may take any
+	/// of them as DoP (DSD512 at 1411.2k, a 48 kHz-family DAC at 192k for DSD64)
+	@Test func dsdLabels() {
+		#expect(DeviceCaps.dsd(2_822_400) == "DSD64 (2.8224 MHz)")
+		#expect(DeviceCaps.dsd(5_644_800) == "DSD128 (5.6448 MHz)")
+		#expect(DeviceCaps.dsd(11_289_600) == "DSD256 (11.2896 MHz)")
+		#expect(DeviceCaps.dsd(22_579_200) == "DSD512 (22.5792 MHz)")
+		#expect(DeviceCaps.dsd(45_158_400) == "DSD1024 (45.1584 MHz)")
+		#expect(DeviceCaps.dsd(3_072_000) == "DSD64 (3.0720 MHz)")
+		#expect(DeviceCaps.dsd(6_144_000) == "DSD128 (6.1440 MHz)")
+		#expect(DeviceCaps.dsd(12_288_000) == "DSD256 (12.2880 MHz)")
+		#expect(DeviceCaps.dsd(24_576_000) == "DSD512 (24.5760 MHz)")
+		#expect(DeviceCaps.dsd(49_152_000) == "DSD1024 (49.1520 MHz)")
+	}
+
+	@Test func aStatusWrittenBeforeTheFieldStillLoads() throws {
+		let old = FileManager.default.temporaryDirectory.appendingPathComponent("status-\(UUID()).json")
+		defer { try? FileManager.default.removeItem(at: old) }
+		try Data("""
+			{"updated":"2026-10-11T20:00:00Z","agentPID":1,"engineRunning":true,"exclusive":true,"connected":true,
+			 "currentRate":176400,"devices":[]}
+			""".utf8).write(to: old)
+		let status = try #require(AgentStatus.load(from: old))
+		#expect(status.currentRate == 176400 && status.dsdRate == nil)
+	}
+}
+
 /// counts the questions the push asks LMS
 final class FakeLMS: @unchecked Sendable {
 	var fixed: Bool?
@@ -308,6 +460,104 @@ final class FakeLMS: @unchecked Sendable {
 		// LMS not answering does not block the push
 		let silent = FakeLMS(fixed: nil, volume: nil)
 		#expect(await silent.command(VolumeReport(dB: -28.72, muted: false, lms: .unknown)) == ["mixer", "volume", "42"])
+	}
+}
+
+/// "Fixed at 100%" per DAC (Simon, 2026-10-11): LMS's digitalVolumeControl follows the setting of
+/// the device the engine plays to, both ways, and LyrionPlay owns it.
+@Suite struct FixedAtFullPerDAC {
+	let fixed = ["playerpref", "digitalVolumeControl", "0"]
+	let control = ["playerpref", "digitalVolumeControl", "1"]
+
+	@Test func aFixedDACSetsLMSFixedOnce() {
+		var sync = FixedVolumeSync()
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 1) == fixed)
+		let refused = sync.recordRefusal(device: fiio.uid, mode: .fixed, lmsAfter: 0)
+		#expect(!refused)
+		// LMS took it: the next check sends nothing
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 0) == nil)
+	}
+
+	/// the other modes turn LMS's volume control back on, so leaving a fixed DAC lands right
+	@Test func anotherDACTurnsVolumeControlBackOn() {
+		var sync = FixedVolumeSync()
+		#expect(sync.checked(device: speakers.uid, mode: .device, lms: 0) == control)
+		#expect(sync.checked(device: fiio.uid, mode: .software, lms: 0) == control)
+		// control: already on, nothing to send
+		#expect(sync.checked(device: speakers.uid, mode: .device, lms: 1) == nil)
+		#expect(sync.checked(device: fiio.uid, mode: .software, lms: 1) == nil)
+	}
+
+	/// LyrionPlay owns the pref: a change made in LMS or Material is put back at the next check
+	@Test func aChangeInLMSIsPutBack() {
+		var sync = FixedVolumeSync()
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 1) == fixed)
+		let refused = sync.recordRefusal(device: fiio.uid, mode: .fixed, lmsAfter: 0)
+		#expect(!refused)
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 0) == nil)
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 1) == fixed) // turned back on in Material
+	}
+
+	/// a value LMS will not keep is said once, and not sent at every check after
+	@Test func aRefusalIsNotALoop() {
+		var sync = FixedVolumeSync()
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 1) == fixed)
+		let refused = sync.recordRefusal(device: fiio.uid, mode: .fixed, lmsAfter: 1)
+		#expect(refused)
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 1) == nil)
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 1) == nil)
+		// another device, or another mode, is tried
+		#expect(sync.checked(device: speakers.uid, mode: .fixed, lms: 1) == fixed)
+		// LMS later at the wanted value (set by hand) clears the refusal
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 0) == nil)
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 1) == fixed)
+	}
+
+	/// no answer to the read after a send is not a refusal: the next check tries again
+	@Test func noReadBackIsNotARefusal() {
+		var sync = FixedVolumeSync()
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 1) == fixed)
+		let refused = sync.recordRefusal(device: fiio.uid, mode: .fixed, lmsAfter: nil)
+		#expect(!refused)
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: 1) == fixed)
+	}
+
+	/// LMS's change hook saves a faded (temporary) volume as the real one: 50 became 0 on the rig,
+	/// 2026-10-11. It is put back.
+	@Test func aFadedVolumeLMSSavedIsPutBack() {
+		#expect(FixedVolumeSync.volumeRestore(before: 50, after: 0) == ["mixer", "volume", "50"])
+		// mid-fade, LMS's temporary volume is a fraction
+		#expect(FixedVolumeSync.volumeRestore(before: 50, after: 23.4567) == ["mixer", "volume", "50"])
+		#expect(FixedVolumeSync.volumeRestore(before: 37.5, after: 0) == ["mixer", "volume", "37.5"])
+		// control: the hook left it alone, or LMS did not answer
+		#expect(FixedVolumeSync.volumeRestore(before: 50, after: 50) == nil)
+		#expect(FixedVolumeSync.volumeRestore(before: nil, after: 0) == nil)
+		#expect(FixedVolumeSync.volumeRestore(before: 50, after: nil) == nil)
+	}
+
+	/// a muted player's volume is negative, and `mixer volume -42` would turn it DOWN by 42
+	@Test func aMutedVolumeIsNeverPutBack() {
+		#expect(FixedVolumeSync.volumeRestore(before: -42, after: 0) == nil)
+		// control: 0 is a level, not muted
+		#expect(FixedVolumeSync.volumeRestore(before: 0, after: 12) == ["mixer", "volume", "0"])
+	}
+
+	@Test func lmsNotSayingSendsNothing() {
+		var sync = FixedVolumeSync()
+		#expect(sync.checked(device: fiio.uid, mode: .fixed, lms: nil) == nil)
+	}
+
+	/// status as LMS 9.1 gives it on the rig (an integer), and a string to be safe
+	@Test func statusCarriesThePref() {
+		#expect(LMSClient.PlayerState.digitalVolumeControl(in: ["digital_volume_control": 1, "mode": "stop"]) == 1)
+		#expect(LMSClient.PlayerState.digitalVolumeControl(in: ["digital_volume_control": "0"]) == 0)
+		#expect(LMSClient.PlayerState.digitalVolumeControl(in: ["mode": "stop"]) == nil)
+	}
+
+	@Test func aSettingsFileWithFixedLoads() throws {
+		let json = #"{"devices":{"x":{"exclusive":true,"dop":false,"volume":"fixed","rateSwitchDelayMs":0}}}"#
+		let settings = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+		#expect(settings.devices["x"]?.volume == .fixed)
 	}
 }
 

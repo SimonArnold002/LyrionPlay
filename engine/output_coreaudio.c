@@ -5,6 +5,7 @@
  *      Ralph Irving 2015-2025, ralph_irving@hotmail.com
  *
  *  output_coreaudio.c - native macOS CoreAudio (HAL) output, written for LyrionPlay
+ *  (c) 2026 CrystalGipsy (this file); squeezelite's authors above for the program it is part of
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -948,6 +949,42 @@ static OSStatus ioproc(AudioObjectID dev, const AudioTimeStamp *now, const Audio
 
 	if (tap.on) tap_push(out, wanted);
 	return noErr;
+}
+
+// ---------------------------------------------------------------------------------------------
+// What plays -> the agent's menu. CoreAudio sees DoP as PCM at the DSD rate / 16 and has no DoP
+// property (repo ledger, NO DOP PROPERTY IN COREAUDIO), so only the engine can say that 176.4 kHz is
+// DSD64. From the last track start the IOProc took (ca.track_rate, ca.track_fmt), one stdout line
+// per change while the device is open,
+//   lyrionplay:format <rate> <pcm|dop>
+// and one when it closes (the idle release, a lost device), as a DAC keeps its rate after we let go
+// and another app may then play PCM at it (/code-review 2026-10-12, finding 3),
+//   lyrionplay:format idle
+// <rate> is the device rate the track plays at; dop: any non-PCM output, which the agent's bare -D
+// makes DoP. Called by the slimproto thread every ~100 ms, outside the output lock: printf can
+// block on the pipe, and the IOProc is a real-time thread.
+void ca_report_format(void) {
+	static unsigned said_rate;
+	static bool said_dop, said_open;
+	unsigned rate;
+	bool dop = false, open;
+	LOCK;
+	rate = ca.track_rate;
+	IF_DSD( dop = ca.track_fmt != PCM; )
+	open = ca.dev != kAudioObjectUnknown;
+	UNLOCK;
+	if (!open) {
+		if (!said_open) return;
+		said_open = false;
+		printf("lyrionplay:format idle\n");
+	} else {
+		if (!rate || (said_open && rate == said_rate && dop == said_dop)) return;
+		said_open = true;
+		said_rate = rate;
+		said_dop = dop;
+		printf("lyrionplay:format %u %s\n", rate, dop ? "dop" : "pcm");
+	}
+	fflush(stdout);
 }
 
 // ---------------------------------------------------------------------------------------------

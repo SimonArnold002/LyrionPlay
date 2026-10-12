@@ -11,10 +11,10 @@ ordinary squeezelite player. It lives in your menu bar, and its player runs in t
 |---|---|
 | **Bit-perfect on a DAC** | Exclusive (hog) mode, with the DAC switched to each track's sample rate. Samples reach the DAC unchanged at full volume. |
 | **Told about your DAC** | LMS learns your DAC's highest sample rate and transcodes anything above it. Rates the DAC lacks below that are resampled in the player, only when needed. |
-| **DSD** | Sent as DoP to DACs that accept it, and converted to PCM for those that don't. |
+| **DSD** | Sent as DoP to DACs you switch DoP on for (macOS can't tell which accept it), and converted to PCM for the rest. |
 | **LMS replay gain** | Applied by the player, exactly as LMS sends it. |
-| **Volume both ways** | The LMS slider moves your Mac's volume, or your DAC's hardware volume, and your Mac's volume keys move the LMS slider. LMS's "fixed at 100%" leaves the device alone. |
-| **Menu bar app** | Switch the player on and off, see what it's doing, and choose the output device and its options. |
+| **Volume, your choice per device** | *Device's own volume*: the LMS slider moves your Mac's volume or your DAC's hardware volume, and a change made on the Mac moves the LMS slider (the volume keys when the output is the Mac's built-in speakers or Follow the macOS output). *Software*: the player scales the samples. *Fixed at 100%*, on a DAC: LyrionPlay sets LMS's fixed output level for you, and you use the DAC's or amplifier's own volume. |
+| **Menu bar app** | Switch the player on and off, see what it's doing (the server, the device and the rate it plays at, the DSD rate for DoP), and choose the output device and its options. |
 | **Signed by you** | Every user signs their own copy with a certificate made on their own Mac, so no Apple developer account is involved. |
 
 ## Requirements
@@ -30,8 +30,8 @@ Download the [latest release](https://github.com/SimonArnold002/LyrionPlay/relea
 
 | part | what it does |
 |---|---|
-| `engine/` | squeezelite with a native CoreAudio output added (`output_coreaudio.c`): exclusive mode, per-track rate and format switching, DoP, and the device's volume in both directions. |
-| `app/Sources/Agent` | A background launch agent. It reads the device's abilities from the engine, builds the engine's arguments, keeps the engine running, and passes volume changes made on the Mac to LMS. |
+| `engine/` | squeezelite with a native CoreAudio output added (`output_coreaudio.c`): exclusive mode, per-track rate and format switching, DoP, the device's volume in both directions, and a report of what it plays for the menu. |
+| `app/Sources/Agent` | A background launch agent. It reads the device's abilities from the engine, builds the engine's arguments, keeps the engine running, passes volume changes made on the Mac to LMS, and keeps LMS's fixed-volume setting in step with each device's choice. |
 | `app/Sources/App` | The menu bar app: On/Off, status, settings. |
 | `scripts/` | `build.sh` builds the app and the release. `test.sh` is the regression suite. `install.sh` and `uninstall.sh` are what users run. |
 
@@ -43,7 +43,7 @@ system-wide.
 ```
 scripts/build.sh            # build and check
 scripts/build.sh --install  # build, then install with your own certificate
-scripts/build.sh --release  # build the release zip into dist/
+scripts/build.sh --release  # build the two release zips (app, codec source) into dist/
 scripts/test.sh             # the regression suite on its own
 ```
 
@@ -80,13 +80,15 @@ Also used:
   [LMS-Material](https://github.com/CDrummond/lms-material) by Craig Drummond (MIT).
 - **[Lyrion Music Server](https://lyrion.org)** and its community.
 
-Full notices ship inside the app, in `LyrionPlay.app/Contents/Resources/NOTICES.txt`.
+Full notices ship inside the app, in `LyrionPlay.app/Contents/Resources/NOTICES.txt`, with the full text of each licence in the `licences` folder beside it.
 
 LyrionPlay is not affiliated with the Lyrion Music Server project.
 
 ## Licence
 
-- **The engine (`engine/`):** squeezelite's licence, the
-  [GNU General Public License v3](engine/LICENSE.txt).
+- **The engine (`engine/`):** squeezelite's licence ([engine/LICENSE.txt](engine/LICENSE.txt)), the
+  [GNU General Public License v3](app/Resources/licences/GPL-3.0.txt). The codec libraries linked
+  into it keep their own licences (NOTICES.txt). Each release has its source under its tag
+  `v<version>`, and the codecs' source as `LyrionPlay-<version>-codec-sources.zip` on its release page.
 - **Everything else** (the menu bar app, the agent, the scripts and tools): the
   [MIT licence](LICENSE).

@@ -1,4 +1,7 @@
 /*
+ * (c) 2026 CrystalGipsy, for LyrionPlay. GNU General Public License v3 or later, as the
+ * engine it tests (../LICENSE.txt).
+ *
  * Exhaustive check of ca_s32_to_float() (output_coreaudio_conv.h): every one of the 2^24
  * possible 24-bit samples, left-justified in 32 bits as squeezelite holds them, must come back
  * exactly from the Float32 the HAL receives -- both as a 24-bit integer (what an int24 DAC
