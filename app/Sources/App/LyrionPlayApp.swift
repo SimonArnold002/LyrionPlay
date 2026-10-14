@@ -231,10 +231,10 @@ final class PlayerModel {
 	@discardableResult
 	func save(_ draft: PlayerCore.Settings) -> Bool {
 		// a saved volume choice a device does not offer is read as one it does (Settings.player);
-		// write that, for the players shown here
+		// write that, for the players shown here, but Follow's as saved (Settings.forSaving)
 		var draft = draft
 		for row in rows where draft.players[row.key] != nil {
-			draft.players[row.key] = draft.player(row.key, device: row.device)
+			draft.players[row.key] = draft.forSaving(row.key, device: row.device)
 		}
 		for row in rows {
 			guard let device = row.device, device.volume != nil, draft.players[row.key] != nil else { continue }
@@ -454,7 +454,7 @@ struct PlayerRowView: View {
 			Toggle("On", isOn: Binding(
 				get: { model.draft.isOn(row.key) },
 				set: { on in
-					var player = model.draft.player(row.key, device: row.device)
+					var player = model.draft.forSaving(row.key, device: row.device)
 					player.enabled = on
 					model.draft.players[row.key] = player
 				}))
@@ -503,7 +503,7 @@ struct PlayerSettingsView: View {
 							switch mode {
 							case .device: Text("Device's own volume").tag(mode)
 							case .software: Text("Software (scales the samples)").tag(mode)
-							case .fixed: Text("Fixed at 100%").tag(mode)
+							case .fixed: Text("Fixed").tag(mode)
 							}
 						}
 					}
@@ -539,9 +539,8 @@ struct PlayerSettingsView: View {
 		case .device: // offered only with a volume control (VolumeMode.offered)
 			// "fixed" is never said here: nothing is fixed in these modes (Simon, 2026-10-12)
 			return "The LMS volume slider sets \(device.name)'s own volume." + keys
-		case .software:
+		case .software: // offered only without a volume control (VolumeMode.offered), so no keys note
 			return "The LMS volume slider scales the samples; \(device.name)'s own volume stays where it is."
-				+ (device.volume != nil ? keys : "")
 		case .fixed:
 			break
 		}
@@ -554,7 +553,7 @@ struct PlayerSettingsView: View {
 			caption = model.heldNote[row.key] ?? "Choose Fixed again to read the volume LMS has for this player."
 		}
 		if model.settings.player(row.key, device: device).volume.scalesSamples {
-			caption += " From software volume this is louder: turn it down before saving."
+			caption += " From software volume this is louder."
 		}
 		return caption
 	}
@@ -563,7 +562,7 @@ struct PlayerSettingsView: View {
 		Binding(
 			get: { model.draft.player(row.key, device: row.device)[keyPath: key] },
 			set: { value in
-				var player = model.draft.player(row.key, device: row.device)
+				var player = model.draft.forSaving(row.key, device: row.device)
 				player[keyPath: key] = value
 				model.draft.players[row.key] = player
 			})

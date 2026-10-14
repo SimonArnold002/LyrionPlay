@@ -9,7 +9,8 @@ It is built for macOS:
 - DSD as DoP;
 - LMS replay gain;
 - LMS volume, chosen per player: the device's own volume (the Mac's volume or the DAC's
-  hardware volume, both ways), software, or Fixed at 100% on a DAC (LyrionPlay sets LMS's pref;
+  hardware volume, both ways), software where the Mac can't set the device's volume, or Fixed on a
+  DAC (LyrionPlay sets LMS's pref;
   a DAC whose volume the Mac sets holds the level LMS had, `FIXED HOLDS THE LMS VOLUME`);
 - one player per output (`ONE PLAYER PER DAC`, built 2026-10-12): *Follow the macOS output*, and
   one for each other device, each its own squeezelite and its own LMS player.
@@ -181,7 +182,7 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "a stop inside the open leaves the delay mark for a later album" (CODE-REVIEW 2026-10-11 finding 3's path) | **NARROWER** (§A3): the next album's own strm q clears it, unless the output went off between | `A NEW ALBUM'S FLUSH CLEARS THE MARK` |
 | "the engine starts with its device absent and waits for it" (`volume_pending`, REVIEW 2026-10-10 finding 7) | **ONLY WITH -r** (§A3): without a rate delay, `output_init_common` exits on `test_open` | `AN ABSENT DEVICE AT START EXITS THE ENGINE` |
 | the menu's output line showing DoP's PCM rate (176.4 kHz) for DSD64; `ca_report_format`, `lyrionplay:format`, `FormatReport`, `FormatLine` (`lyrionplay:format idle`, since CODE-REVIEW 2026-10-12), `AgentStatus.dsdRate`, `DeviceCaps.dsd`, `engineFormat` | **BUILT 2026-10-11** (Simon: "when playing DSD the helper app shows the PCM rate when its DoP this should show the DSD Rate"); suite PASS, **INSTALLED as 0.2.11** 2026-10-11 22:03Z, **VERIFIED LIVE by Simon** ("it works correctly") (§B) | `DSD RATE IN THE MENU` |
-| volume choices a device offers; `VolumeMode.isOffered`/`offered(by:)`/`nearestOffered(on:)` (was `offered(on:)`), `Settings.options(for:)`, the LMS volume picker; Fixed on the speakers / Bluetooth / AirPlay / HDMI; "Device's own volume" on a device with no volume control | **DECIDED by Simon 2026-10-12**: device volume only with a control, Fixed only on a DAC (`isExternal`); a blocked choice already saved is read as the nearest offered | `ONLY WHAT A DEVICE OFFERS` |
+| volume choices a device offers; `VolumeMode.isOffered`/`offered(by:)`/`nearestOffered(on:)` (was `offered(on:)`), `Settings.options(for:)`, the LMS volume picker; Fixed on the speakers / Bluetooth / AirPlay / HDMI; "Device's own volume" on a device with no volume control | **DECIDED by Simon 2026-10-12**: device volume only with a control, Fixed only on a DAC (`isExternal`); a blocked choice already saved is read as the nearest offered; since 2026-10-14 Software only without a control (`SOFTWARE ONLY WITHOUT A VOLUME CONTROL`) | `ONLY WHAT A DEVICE OFFERS` |
 | Settings window buttons; "Save and Close", `dismissWindow`, `PlayerModel.save` returning Bool, `saveError` | **BUILT 2026-10-12 at Simon's request** ("can we add a save and close option as well as save"); INSTALLED 0.3.5, **VERIFIED LIVE by Simon** ("works") | `SAVE AND CLOSE` |
 | /code-review 2026-10-12 of 0.2.11-0.3.1: Fixed caption "the Mac's volume keys set it" (hog moves the default output); the "louder" warning keyed on `device.volume == nil` (now `VolumeMode.scalesSamples`, `volumeCaption`); `dsdRate` after the idle release (now `FormatLine`, `lyrionplay:format idle`); `_ = await client.call` (send result ignored); `volumeRestore` with a failed read; `lastLMSCheck` after a settings change; `ca_report_format`'s second lock; the redundant `lastLMSCheck = .distantPast`; the format test's statics; stale ledger lines; the `fixedVolume` lock comment | **ALL 11 CHECKED 2026-10-12** (Simon: "verify all of them before recommending fixing"): 2, 3 VERIFIED + FIXED (each pinned: anti-run / mutant); 6, 10, 11 VERIFIED, prose FIXED; 1 CONFIRMED by Simon (the keys act on the macOS output only), wording FIXED, CLOSED (§B); 4, 5 DROPPED (`A STALLED SERVER IS NOT A FINDING`); 7, 8 DECLINED; 9 WRONG (§A3). **INSTALLED as 0.3.2** 2026-10-12 09:05Z, NOT live-tested (§C) | `CODE-REVIEW 2026-10-12` |
 | the menu's format report straight after a reopen (`ca_report_format` saying the last track's `ca.track_rate`/`ca.track_fmt`, "176400 dop" for a PCM track after the idle release, `said_open`); the idle-release test replaying the same DSD64; ANY lag of the report or the menu behind the DAC (the "every ~100 ms" comment, `wait_readwake(ehandles, 1000)`, no `wake_controller` at a same-rate gapless start: up to ~1 s) | **NOT A FINDING — DECIDED by Simon 2026-10-12** ("this is how dacs work the change will happen when output hits the dac not before"; on the lag, /code-review (6): "I dont care about the lag"): the report follows what reaches the DAC, and a new track's format reaches it only at its start. Skip it in reviews | `THE FORMAT CHANGES WHEN OUTPUT HITS THE DAC` |
@@ -208,7 +209,10 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "the HAL's dB property always follows the volume"; "ScalarToDecibels equals the dB property" (`read_device_db`, `kAudioDevicePropertyVolumeDecibels`, `kAudioDevicePropertyVolumeScalarToDecibels`) | **WRONG, both** (§A3, measured 2026-10-14) | `A DB PROPERTY CAN BE STUCK` |
 | "a `mixer volume` reaches Material at once"; `statusQuery_filter`, `LatestValueSender(interval: 0.15)`, Material standing still during a Mac drag | **WRONG** (§A3, measured 2026-10-14): LMS debounces status 0.3 s per volume change, restarted by each; ~0.5 s per change is LMS's floor. A 350 ms push pace (Material follows a drag) **DECLINED by Simon 2026-10-14**: the remaining lag is NOT A FINDING | `LMS DELAYS STATUS FOR A VOLUME CHANGE` |
 | a player switched to Fixed inside a sync group not shown as fixed in Material until regrouped | **UNVERIFIED, stood down by Simon 2026-10-14** (§B) | `SYNC GROUP: FIXED NOT SHOWN IN MATERIAL` |
-| switching *Device's own volume* to *Software* while paused leaves a DAC with a volume control muted at its minimum | **KNOWN LIMITATION, NOT FIXING — Simon 2026-10-12** (§A2) | `SOFTWARE AFTER A PAUSED -V DAC` |
+| switching *Device's own volume* to *Software* while paused leaves a DAC with a volume control muted at its minimum | **KNOWN LIMITATION, NOT FIXING — Simon 2026-10-12** (§A2); unreachable since 2026-10-14 (no Software on such a device) | `SOFTWARE AFTER A PAUSED -V DAC` |
+| *Software* on a device with a volume control (`VolumeMode.isOffered`, `.software`); one choice for *Follow the macOS output*; removing Fixed from such DACs too, Fixed set by hand in LMS | **DECIDED by Simon 2026-10-14**: Software only where the device has no volume control; a saved Software there read as its own volume; Fixed KEPT (the paused traps were put to him first); **INSTALLED as 0.4.3** (§A2) | `SOFTWARE ONLY WITHOUT A VOLUME CONTROL` |
+| the picker's *Fixed at 100%* label (`Text("Fixed")`, INSTALL.md); LMS's own "Output level is fixed at 100%" | **DECIDED by Simon 2026-10-14**: the choice is *Fixed* (it holds LMS's level on a DAC with a volume control); LMS's setting keeps its own name; **INSTALLED as 0.4.3** (§A2) | `FIXED, NOT FIXED AT 100%` |
+| inline review of 0.4.0-0.4.2 (15fa252..b6b929f): `PlayerModel.save` / the switch / the cog writing *Follow the macOS output*'s volume as its device of the moment offers it (`Settings.forSaving`); the Fixed caption's "turn it down before saving" (`volumeCaption`, INSTALL.md) | **1 VERIFIED + FIXED 2026-10-14** (Simon: "yes fix that"), pinned + 2 mutants; **2 FIXED by Simon's wording** ("just remove the turn it down bit all is correct up to that"); **INSTALLED as 0.4.3**, not live-tested (§C) | `INLINE REVIEW 2026-10-14` |
 
 ### HOW TO LOG A VERDICT so the next round finds it
 Every new decision goes in §A2 (declined or by design), §A3 (a belief a measurement killed), §B
@@ -508,6 +512,17 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
       LMS 48's own level (gain 3328), not the -25.64 dB the Mac last reported (20:11:27Z, on 0.4.1). Most
       likely 0.4.1 put LMS's answer on right after that report (the defect fixed here), and 0.4.2's start
       took the device as it was (its level gives 48); this read cannot tell the two apart. NOT live-tested.
+    - **0.4.3** (Simon: "buld and install", "0.4.3" to version up, 2026-10-14): `INLINE REVIEW 2026-10-14`
+      (Follow's saved volume, `Settings.forSaving`; the shorter Fixed warning), `SOFTWARE ONLY WITHOUT A
+      VOLUME CONTROL`, `FIXED, NOT FIXED AT 100%`, and the docs to match (README.md, INSTALL.md, pages).
+      Checked first: prodmac46 and the DragonFly's player connected, both PAUSED (the agent restart
+      stops a paused player; said beforehand). `bump-version.sh patch`; `build.sh --install`, suite PASS
+      inside it (engine output 69/69, swift 93 in 21 suites, install.sh 3/3). INSTALLED 21:33Z:
+      install.sh "version 0.4.3 (was 0.4.2)", "stopped the old player"; agent.log "agent started:
+      LyrionPlay 0.4.3 (202610142232)", the DragonFly's engine `-a 0:1 … -V` (saved Device's own volume,
+      Simon set it back at 21:04Z), prodmac46 on the MacBook Pro Speakers `-a 0:0 … -V`, "LMS: using Simons
+      Music". LMS after: both connected, stopped (volume 37 and 13). The picker label, the one-choice
+      lists and Follow's Save NOT yet seen live.
 - **APPLE SILICON ONLY — Simon, 2026-10-09.** arm64 only, macOS 14+. No universal builds.
 - **NO VIRTUAL AUDIO DRIVERS — Simon, 2026-10-09.**
   - Simon: "we dont need blackhole it messes up things last time i installed it and was hard to
@@ -642,9 +657,11 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
   doesnt offer it, block fixed on MacOS outputs"; then, asked: "Everything not a DAC", and a blocked
   choice already saved "Treat as allowed choice").
   - `VolumeMode.isOffered(by:)`: *Device's own volume* only with a volume control the Mac can set
-    (`device.volume`); *Fixed at 100%* only on a DAC (`DeviceCaps.isExternal`: usb, thunderbolt,
+    (`device.volume`); *Fixed* (labelled *Fixed at 100%* until 2026-10-14) only on a DAC
+    (`DeviceCaps.isExternal`: usb, thunderbolt,
     firewire, pci, avb, the test that already sets exclusive mode's default), so never on built-in,
-    Bluetooth, AirPlay or HDMI; *Software* everywhere. The picker lists only those (`offered(by:)`); the
+    Bluetooth, AirPlay or HDMI; *Software* everywhere (since 2026-10-14 only without a volume control:
+    `SOFTWARE ONLY WITHOUT A VOLUME CONTROL`). The picker lists only those (`offered(by:)`); the
     old "Device volume (none here: software is used)" label is gone.
   - A saved choice the device does not offer is read as the nearest offered (`nearestOffered(on:)`, was `offered(on:)`) in
     `Settings.options(for:)`, which EVERY reader uses (engine arguments, the agent's LMS sync, the
@@ -727,7 +744,40 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
   DAC with a volume control (the DragonFly) muted at its minimum, where LMS's pause fade put it
   (`apply_volume` mutes at gain 0). Software never touches the device's own volume, so it plays into
   that until the device's volume is raised (Audio MIDI Setup, or a switch back). Do not report it, and
-  do not propose setting the DAC's volume for Software.
+  do not propose setting the DAC's volume for Software. **Unreachable since 2026-10-14**: Software is no
+  longer offered on a device with a volume control (`SOFTWARE ONLY WITHOUT A VOLUME CONTROL`).
+- **SOFTWARE ONLY WITHOUT A VOLUME CONTROL — DECIDED by Simon 2026-10-14, INSTALLED as 0.4.3, not
+  live-tested** ("can we remove software then please as that is pointless on volume control dacs its
+  purely to add control when there is nothing at all"). `VolumeMode.isOffered(by:)`: *Software* only on
+  a device with no volume control the Mac can set, so every device offers exactly one of *Device's own
+  volume* and *Software*, plus *Fixed* on a DAC: the DragonFly device/fixed, the FiiO
+  software/fixed, the speakers device, HDMI software; *Follow the macOS output* one choice wherever it is.
+  - Software already saved on a device with a control is read as its own volume by the existing
+    `nearestOffered(on:)` (no migration): `-V`, LyrionPlay turns LMS's volume control on (it was on for
+    Software too), no "louder" warning. Simon's DragonFly, saved Software by the caption check of
+    `INLINE REVIEW 2026-10-14`, reads as its own volume. A Follow record saved Software by that round's
+    finding 1 is read as its own volume on any output with a control.
+  - First asked (same day): remove Fixed AND Software where the device has a control, Fixed to be set
+    by hand in LMS. Put to Simon: the agent puts LMS's fixed setting back in the other modes (`FIXED AT
+    100% PER DAC`); set while paused, LMS's fixed leaves a `-V` DAC muted at its minimum (`FIXED VOLUME
+    LEAVES THE DEVICE ALONE`, `FIXED SET UP WHILE PAUSED`) and LMS saves its faded volume (`THE DVC HOOK
+    SAVES A FADED VOLUME`). Simon then chose Software only: Fixed and its hold stay as built.
+  - Tests: `eachDeviceOffersOnlyWhatItHas` (new table + one-of-the-two rule),
+    `aBlockedChoiceSavedIsReadAsOneOffered` (Software saved on the DragonFly and on Follow at the
+    speakers read as own volume with `-V`), `fixedIsLouderOnlyAfterSoftwareVolume`, the Software control
+    in the Fixed arguments test moved to the FiiO. MUTANT: the old rule (Software everywhere) FAILS 10
+    expectations in 3 tests. Suite PASS; `swift build` of every target, the one known warning. INSTALL.md
+    says when each choice is offered; the Software caption's keys note (dead now) removed.
+  - Saved settings need no carrying over (Simon: "no migration needed fresh settings is all that is
+    required this isnt out in the field"): never raise an old saved choice as a finding. `nearestOffered`
+    stays because *Follow the macOS output* needs it at every output it moves to.
+- **FIXED, NOT FIXED AT 100% — DECIDED by Simon 2026-10-14, INSTALLED as 0.4.3** ("lets
+  drop 100% as its not with a volume control dac as yo have to manualy set it full volume as fixed sets
+  no change from LMS not what the level is"). The LMS volume picker says *Fixed* (was *Fixed at 100%*),
+  and every doc with it (Simon: "enure all docs reference it as fixed"): INSTALL.md, README.md (before
+  the merge to main, as asked; its Software clause corrected in the same line), the regenerated pages: on a DAC with a volume control Fixed holds the level LMS had (`FIXED HOLDS THE
+  LMS VOLUME`), so "100%" was wrong there. LMS's own setting keeps its name, "Output level is fixed at
+  100%" (INSTALL.md, the agent's log line and comments quote it). Never put "at 100%" back on the choice.
 - **THE BOUNDARY AND THE REOPEN FLAG — by design, 2026-10-09.** Two places where the CoreAudio
   path deliberately differs from `output_pa.c`:
   - **The boundary.** `pa_callback` keeps calling `_output_frames` after a track start that
@@ -1410,6 +1460,43 @@ evidence it cites.
 
 Each entry records that a defect, as described, was fixed. It does not cover the code written to
 fix it (see HOW TO LOG).
+
+- **INLINE REVIEW 2026-10-14 — of 0.4.0-0.4.2, FIXED, INSTALLED as 0.4.3, not live-tested** (Simon: "lets do an
+  inline review of lyrionplay"). Scope `origin/dev` 7faf2f8..b6b929f, tree clean; rounds 2026-10-12
+  (1)-(7) had covered up to 15fa252, so the new code was 15fa252..b6b929f (engine, agent, PlayerCore,
+  app, INSTALL.md). Two findings:
+  1. **Save turned *Follow the macOS output*'s "Device's own volume" into Software** — VERIFIED with
+     PlayerCore built in a scratch package, the save loop verbatim, the suite's FiiO fixture as the
+     macOS output: saved `device` was written `software`; back on the speakers Follow read software and
+     its engine had no `-V` (the Mac's slider no longer reached LMS); unsaved control: `device`, `-V`.
+     Cause: `PlayerModel.save`, a player's switch and the cog's fields wrote `Settings.player(_:device:)`,
+     the choice corrected for the device of the moment. Right for a device's own player (`ONLY WHAT A
+     DEVICE OFFERS`, its device never changes); since 0.4.0 Follow is ONE record across every output it
+     follows. Writer: any output with no Mac volume control as the macOS output, its own player off
+     (the FiiO, HDMI). FIXED (Simon: "yes fix that"): `Settings.forSaving(_:device:)` is what the window
+     writes (Follow's volume as saved; a device's own player corrected as before), `player(_:device:)`
+     still reads every choice as offered; `chooseVolume` unchanged (it sets the user's pick). Test
+     `followKeepsItsVolumeChoiceWhateverItFollows`; MUTANTS: the old rule FAILS it (4 expectations, `-V`
+     among them), no correction for a device's own player FAILS its control. A Follow record already
+     saved as Software by this cannot be told from a choice: not migrated.
+  2. **The Fixed caption's "turn it down before saving"** — since 0.4.0 Fixed on a DAC whose volume
+     the Mac sets restarts its engine (`-a 0:1` -> `0:1:1:<dB>`) and the hold overwrites the DAC's level
+     (live: "held at -25.6 dB (was -64.0 dB, muted)"), so turning it down first changed nothing. Shown
+     only when the SAVED mode is Software and Fixed is picked before saving (Simon could not find it
+     until the DragonFly was saved as Software; a screenshot settled it). FIXED to Simon's wording:
+     "just remove the turn it down bit all is correct up to that": the caption ends "From software
+     volume this is louder."; INSTALL.md "Coming from *Software*, this is louder." (also for a DAC
+     with no Mac volume, whose caption already says to set the volume on the DAC or amplifier).
+  - Dropped at the gates: a Mac move within 500 ms of an LMS level not reported (a residual stated to
+    Simon, `THE DEVICE STAYS WHERE THE MAC PUT IT`); Follow's DoP/exclusive carried across the outputs
+    it follows (Simon's per-player settings, `ONE PLAYER PER DAC`); a held level put back at every
+    engine start (`FIXED HOLDS THE LMS VOLUME`).
+  - Read and cleared: `put_lms_level`'s echo/same/restore/first rules, `lv.lock` order, `_ca_open`'s
+    hold, `EnginePlan` stopping before starting, the orphan sweep, per-player `LatestValueSender`s.
+  - After: `scripts/test.sh` PASS (engine output 69/69, swift 93 in 21 suites, install.sh 3/3);
+    `swift build` of every target, the one warning the known `SendableClosureCaptures`. No suite covers
+    the app's UI: the three call sites are pinned only through `forSaving`. Simon's DragonFly was left
+    saved as Software by the caption check (settings.json 21:54:15).
 
 - **A MAC MOVE UNMUTES LMS AT ITS LEVEL — 2026-10-14, BUILT, INSTALLED as 0.4.2 the same day, VERIFIED
   LIVE by Simon** ("all works") (Simon: "2nd one does happen, so we need to fix that and it should

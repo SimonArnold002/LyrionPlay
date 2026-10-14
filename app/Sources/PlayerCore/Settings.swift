@@ -5,7 +5,9 @@ public enum VolumeMode: String, Codable, Sendable, CaseIterable {
 	/// DAC's hardware volume. Offered only on a device with a volume control the Mac can set; a
 	/// saved choice on one without is read as software (`nearestOffered(on:)`, ONLY WHAT A DEVICE OFFERS).
 	case device
-	/// LMS volume scales the samples (not bit-perfect below 100%)
+	/// LMS volume scales the samples (not bit-perfect below 100%). Offered only on a device with no
+	/// volume control the Mac can set, where it is the only way LMS sets the level; a saved choice on
+	/// one with a control is read as the device's own volume (SOFTWARE ONLY WITHOUT A VOLUME CONTROL).
 	case software
 	/// LMS's "Output level fixed at 100%" for this player, set by the agent (FixedVolumeSync). The
 	/// engine plays at full scale whatever LMS sends. On a DAC whose volume the Mac sets (the
@@ -23,13 +25,14 @@ public enum VolumeMode: String, Codable, Sendable, CaseIterable {
 
 	/// What a device offers (Simon, 2026-10-12: "block device volume as an option if it doesnt offer
 	/// it, block fixed on MacOS outputs"): its own volume only with a volume control the Mac can set;
-	/// Fixed at 100% only on a DAC (`DeviceCaps.isExternal`), never on the Mac's own outputs (built-in,
+	/// Fixed only on a DAC (`DeviceCaps.isExternal`), never on the Mac's own outputs (built-in,
 	/// Bluetooth, AirPlay, HDMI), and never for *Follow the macOS output* (Simon, 2026-10-12: "MacOS 2
-	/// options"); software on every device.
+	/// options"); software only without a volume control (Simon, 2026-10-14: "pointless on volume
+	/// control dacs its purely to add control when there is nothing at all").
 	public func isOffered(by device: DeviceCaps, follow: Bool = false) -> Bool {
 		switch self {
 		case .device: return device.volume != nil
-		case .software: return true
+		case .software: return device.volume == nil
 		case .fixed: return !follow && device.isExternal
 		}
 	}
@@ -40,7 +43,8 @@ public enum VolumeMode: String, Codable, Sendable, CaseIterable {
 
 	/// A saved choice the device does not offer, read as the nearest one it does (Simon's choice): the
 	/// device's own volume without a control as software (what the engine already played it as),
-	/// Fixed where it is not offered as the device's own volume, or software without a control.
+	/// software with a control as the device's own volume, and Fixed where it is not offered as
+	/// whichever of the two the device has.
 	public func nearestOffered(on device: DeviceCaps, follow: Bool = false) -> VolumeMode {
 		isOffered(by: device, follow: follow) ? self : device.volume != nil ? .device : .software
 	}
@@ -138,10 +142,23 @@ public struct Settings: Codable, Equatable, Sendable {
 	/// as one it does. `device`: the device the player plays to; nil when it is not connected.
 	public func player(_ key: String, device: DeviceCaps?) -> PlayerSettings {
 		let follow = key == PlayerKey.follow
+		var player = forSaving(key, device: device)
+		if follow, let device { player.volume = player.volume.nearestOffered(on: device, follow: true) }
+		return player
+	}
+
+	/// What the Settings window writes for a player (its Save, a player's switch, a field behind the
+	/// cog). A device's own player: as `player(_:device:)` reads it, so a choice its device does not
+	/// offer is saved as the one offered (ONLY WHAT A DEVICE OFFERS); its device never changes. *Follow
+	/// the macOS output*: its volume choice as saved, because the device it follows changes. Corrected
+	/// for an output with no volume control (the FiiO, HDMI), Save wrote Software, and Follow stayed on
+	/// Software back on the speakers, without -V (inline review 2026-10-14, finding 1).
+	public func forSaving(_ key: String, device: DeviceCaps?) -> PlayerSettings {
+		let follow = key == PlayerKey.follow
 		var player = players[key]
 			?? (follow ? .followDefaults : device.map { PlayerSettings.defaults(for: $0) })
 			?? PlayerSettings(enabled: false, name: key, exclusive: false, dop: false, volume: .software)
-		if let device { player.volume = player.volume.nearestOffered(on: device, follow: follow) }
+		if !follow, let device { player.volume = player.volume.nearestOffered(on: device) }
 		return player
 	}
 

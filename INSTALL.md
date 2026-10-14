@@ -131,9 +131,10 @@ it.
   352.8 kHz. DSD faster than your DAC's top PCM rate allows is converted to PCM.
 
 **LMS volume.**
-Each player offers only the choices its device can take: *Device's own volume* only when the Mac can
-set its volume, and *Fixed at 100%* only on a DAC, not on the Mac's own outputs (built-in speakers
-and headphones, Bluetooth, AirPlay, HDMI), and not for *Follow the macOS output*.
+Each player offers only the choices its device can take: *Device's own volume* when the Mac can
+set its volume, *Software* when it can't, and *Fixed* only on a DAC, not on the Mac's own
+outputs (built-in speakers and headphones, Bluetooth, AirPlay, HDMI), and not for *Follow the macOS
+output*.
 
 - *Device's own volume*: the LMS volume slider and your Mac's volume follow each other. Move the
   LMS slider and your Mac's volume (built-in speakers, headphones) or the DAC's hardware volume
@@ -150,8 +151,8 @@ and headphones, Bluetooth, AirPlay, HDMI), and not for *Follow the macOS output*
   - A device that can't go as quiet as LMS shows its quietest setting as a higher LMS volume, for
     example 23 for headphones whose quietest is -40 dB. Below that, the LMS slider leaves the
     device at its quietest.
-- *Software*: LyrionPlay scales the samples instead.
-- *Fixed at 100%*: LMS sends the music at full level, for an amplifier, and LyrionPlay ignores the
+- *Software*, on a device whose volume the Mac can't set: LyrionPlay scales the samples instead.
+- *Fixed*: LMS sends the music at full level, for an amplifier, and LyrionPlay ignores the
   LMS volume slider for this player. LyrionPlay sets the player's **Output level is fixed at 100%**
   in LMS for you, and turns LMS's volume control back on if you choose one of the other two.
   - On a DAC with its own knob, or no volume the Mac can set, you set the volume on the DAC or your
@@ -161,7 +162,7 @@ and headphones, Bluetooth, AirPlay, HDMI), and not for *Follow the macOS output*
     volume 17 (-48.8 dB)*. The DAC stays at that level, playing or paused, and after it is unplugged
     and plugged back in. To change it, choose *Device's own volume*, set the volume in LMS, then
     Fixed again. LMS shows the player fixed at 100 meanwhile.
-  - Coming from *Software*, this is louder: turn the DAC down before you save.
+  - Coming from *Software*, this is louder.
 
   LMS's own Volume Control setting for the player follows the choice here: change it in LMS or
   Material, and LyrionPlay puts it back within a few seconds.
@@ -172,7 +173,7 @@ track gets clipped, add a little silence here.
 ### For bit-perfect playback
 
 - **Use your DAC's or amplifier's own volume control.** In LyrionPlay's Settings, open the DAC's
-  player (its cog) and set **LMS volume** to **Fixed at 100%**.
+  player (its cog) and set **LMS volume** to **Fixed**.
 - **Replay gain** is set in LMS, under the player's settings → Audio. LyrionPlay applies it, but it
   changes the level, so tracks played with replay gain are not bit-perfect.
 

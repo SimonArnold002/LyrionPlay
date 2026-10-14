@@ -131,18 +131,19 @@ func value(_ option: String, in a: [String]) -> String? {
 		// a DAC with no volume control holds nothing: its knob sets the level
 		settings.players[fiio.uid] = player(fiio, volume: .fixed, held: 17)
 		#expect(value("-a", in: args(settings, fiio)) == "0:1:1")
-		// controls: the device's own volume, and software, are not fixed
+		// controls: the device's own volume, and software (on a DAC with no volume control), are not fixed
 		settings.players[dragonfly.uid] = player(dragonfly, volume: .device, held: 17)
 		#expect(args(settings, dragonfly).contains("-V"))
 		#expect(value("-a", in: args(settings, dragonfly)) == "0:1")
-		settings.players[dragonfly.uid]?.volume = .software
-		#expect(!args(settings, dragonfly).contains("-V"))
-		#expect(value("-a", in: args(settings, dragonfly)) == "0:1")
+		settings.players[fiio.uid] = player(fiio, volume: .software)
+		#expect(!args(settings, fiio).contains("-V"))
+		#expect(value("-a", in: args(settings, fiio)) == "0:1")
 	}
 
-	/// the Settings window warns that Fixed is louder when the mode being left scales the samples:
-	/// software on any device, not only on one without a volume control (/code-review 2026-10-12,
-	/// finding 2: the warning followed the device, so software on the speakers got none)
+	/// the Settings window warns that Fixed is louder when the mode being left scales the samples
+	/// (/code-review 2026-10-12, finding 2: it had followed the device, not the mode). Since 2026-10-14
+	/// software is offered only without a volume control, and saved on one with a control it is read as
+	/// the device's own volume, so it no longer warns there.
 	@Test func fixedIsLouderOnlyAfterSoftwareVolume() {
 		#expect(VolumeMode.software.scalesSamples)
 		#expect(!VolumeMode.device.scalesSamples)
@@ -154,18 +155,25 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(saved.player(fiio.uid, device: fiio).volume.scalesSamples)
 		saved.players[dragonfly.uid] = player(dragonfly, volume: .device)
 		#expect(!saved.player(dragonfly.uid, device: dragonfly).volume.scalesSamples)
+		saved.players[dragonfly.uid] = player(dragonfly, volume: .software)
+		#expect(!saved.player(dragonfly.uid, device: dragonfly).volume.scalesSamples)
 	}
 
 	/// Simon, 2026-10-12: "block device volume as an option if it doesnt offer it, block fixed on MacOS
 	/// outputs" (every output that is not a DAC), and "MacOS 2 options": no Fixed for *Follow the
-	/// macOS output*, whatever it follows
+	/// macOS output*, whatever it follows. Simon, 2026-10-14: no software where the device has a volume
+	/// control ("pointless on volume control dacs its purely to add control when there is nothing at all")
 	@Test func eachDeviceOffersOnlyWhatItHas() {
-		#expect(VolumeMode.offered(by: dragonfly) == [.device, .software, .fixed])
+		#expect(VolumeMode.offered(by: dragonfly) == [.device, .fixed])    // a DAC with a volume control
 		#expect(VolumeMode.offered(by: fiio) == [.software, .fixed])       // a DAC with no volume control
-		#expect(VolumeMode.offered(by: speakers) == [.device, .software])  // a Mac output: no Fixed
+		#expect(VolumeMode.offered(by: speakers) == [.device])             // a Mac output: no Fixed
 		#expect(VolumeMode.offered(by: hdmi) == [.software])               // a Mac output with no control
-		#expect(VolumeMode.offered(by: dragonfly, follow: true) == [.device, .software])
+		#expect(VolumeMode.offered(by: dragonfly, follow: true) == [.device])
 		#expect(VolumeMode.offered(by: fiio, follow: true) == [.software])
+		// every device offers exactly one of its own volume and software
+		for device in [dragonfly, fiio, speakers, hdmi] {
+			#expect(VolumeMode.device.isOffered(by: device) != VolumeMode.software.isOffered(by: device))
+		}
 		// the defaults are always offered
 		for device in [dragonfly, fiio, speakers, hdmi] {
 			#expect(PlayerSettings.defaults(for: device).volume.isOffered(by: device))
@@ -186,6 +194,15 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(settings.player(fiio.uid, device: fiio).volume == .software)
 		#expect(!args(settings, fiio).contains("-V"))
 		#expect(settings.player(hdmi.uid, device: hdmi).volume == .software)
+		// software saved on a device with a volume control (before 2026-10-14): its own volume, with -V
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .software)
+		#expect(settings.player(dragonfly.uid, device: dragonfly).volume == .device)
+		#expect(args(settings, dragonfly).contains("-V"))
+		settings.players[PlayerKey.follow] = player(speakers, exclusive: false, volume: .software)
+		#expect(settings.player(PlayerKey.follow, device: speakers).volume == .device)
+		#expect(args(settings, speakers).contains("-V"))
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .fixed, held: 17)
+		settings.players[PlayerKey.follow] = player(speakers, exclusive: false, volume: .fixed)
 		// the follow player saved as Fixed, now following the DragonFly: its own volume, never Fixed
 		#expect(settings.player(PlayerKey.follow, device: dragonfly).volume == .device)
 		#expect(value("-a", in: args(settings, dragonfly, key: PlayerKey.follow)) == "0:0")
@@ -194,6 +211,34 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(settings.player(fiio.uid, device: fiio).dop && settings.player(fiio.uid, device: fiio).exclusive)
 		// LMS's fixed setting follows what is read: the follow player's saved Fixed turns it back on
 		#expect(FixedVolumeSync.value(for: settings.player(PlayerKey.follow, device: speakers).volume) == 1)
+	}
+
+	/// inline review 2026-10-14, finding 1: the Settings window wrote Follow's choice as the device it
+	/// followed then offered it. Following an output with no volume control (the FiiO as the macOS
+	/// output), its own volume was saved as Software, and back on the speakers Follow had no -V.
+	@Test func followKeepsItsVolumeChoiceWhateverItFollows() {
+		let saved = Settings() // Follow: its own volume
+		// what Save, a switch or a field behind the cog writes while Follow plays to the FiiO
+		var written = saved
+		written.players[PlayerKey.follow] = saved.forSaving(PlayerKey.follow, device: fiio)
+		#expect(written.players[PlayerKey.follow]?.volume == .device)
+		// back on the speakers: its own volume, the Mac's slider both ways
+		#expect(written.player(PlayerKey.follow, device: speakers).volume == .device)
+		#expect(args(written, speakers).contains("-V"))
+		// while it follows the FiiO it still plays as the FiiO offers
+		#expect(written.player(PlayerKey.follow, device: fiio).volume == .software)
+		#expect(!args(written, fiio, key: PlayerKey.follow).contains("-V"))
+		// no record yet (a switch flipped before any Save): the default, not the FiiO's choice
+		var empty = Settings()
+		empty.players = [:]
+		#expect(empty.forSaving(PlayerKey.follow, device: fiio).volume == .device)
+		// control: a device's own player is still written as its device offers (ONLY WHAT A DEVICE
+		// OFFERS), with the rest of its settings
+		var own = Settings()
+		own.players[fiio.uid] = player(fiio, dop: true, volume: .device)
+		#expect(own.forSaving(fiio.uid, device: fiio).volume == .software)
+		#expect(own.forSaving(fiio.uid, device: fiio).dop)
+		#expect(own.forSaving(fiio.uid, device: fiio) == own.player(fiio.uid, device: fiio))
 	}
 
 	@Test func sameInputsGiveTheSameArguments() {
