@@ -158,6 +158,7 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "bit-perfect needs volume-code changes"; `_apply_gain`, `FIXED_ONE` | **WRONG** (§A3): squeezelite already skips the gain at unity and for DoP/DSD | `BIT-PERFECT IS ALREADY HANDLED` |
 | "upstream squeezelite already does hog mode / `-V` on macOS"; `output_pa.c` | **WRONG** (§A3): PortAudio only; `-V`/`-X` are ALSA-only | `NO HOG MODE UPSTREAM` |
 | "macOS can say whether a DAC takes DoP" | **WRONG** (§A3): CoreAudio has no DoP property | `NO DOP PROPERTY IN COREAUDIO` |
+| "DoP needs exclusive mode"; DoP off or greyed out under *Follow the macOS output* / Exclusive off (`set_physical_format` only when `ca.hogged`) | **WRONG** (§A3, Simon on the FiiO 2026-10-14): DoP works in shared mode | `DOP WORKS WITHOUT EXCLUSIVE MODE` |
 | "Local Network approval is lost on every rebuild" | **WRONG** (§A3): it is tied to the certificate leaf | `APPROVAL SURVIVES A REBUILD` |
 | "BSD sockets are blocked under launchd" (Apple FB16131937) | **NOT REPRODUCED** (§A3) on macOS 26.7.1 | `FB16131937 NOT REPRODUCED` |
 | "LMS sends one volume on resume"; `fade_volume`, `_Resume`, `audg` | **WRONG** (§A3): an `audg` every 0.05 s while it fades in | `RESUME IS ONE AUDG` |
@@ -211,6 +212,9 @@ disproven belief or a cleared finding that is not written here will be re-report
 | a player switched to Fixed inside a sync group not shown as fixed in Material until regrouped | **UNVERIFIED, stood down by Simon 2026-10-14** (§B) | `SYNC GROUP: FIXED NOT SHOWN IN MATERIAL` |
 | switching *Device's own volume* to *Software* while paused leaves a DAC with a volume control muted at its minimum | **KNOWN LIMITATION, NOT FIXING — Simon 2026-10-12** (§A2); unreachable since 2026-10-14 (no Software on such a device) | `SOFTWARE AFTER A PAUSED -V DAC` |
 | *Software* on a device with a volume control (`VolumeMode.isOffered`, `.software`); one choice for *Follow the macOS output*; removing Fixed from such DACs too, Fixed set by hand in LMS | **DECIDED by Simon 2026-10-14**: Software only where the device has no volume control; a saved Software there read as its own volume; Fixed KEPT (the paused traps were put to him first); **INSTALLED as 0.4.3** (§A2) | `SOFTWARE ONLY WITHOUT A VOLUME CONTROL` |
+| Fixed for *Follow the macOS output* (`VolumeMode.isOffered` `.fixed`, `follow:`); "MacOS 2 options" | **DECIDED by Simon 2026-10-14**: offered only while Follow plays to a DAC with no volume control (the FiiO), never a held level; **INSTALLED as 0.4.4, VERIFIED LIVE** (§A2) | `FIXED ON FOLLOW, NO-CONTROL DACS ONLY` |
+| the Mac's volume keys / menu bar slider doing nothing to a DAC held in Exclusive mode (*Follow the macOS output* or a device player) | **AS INTENDED, Simon 2026-10-14**: macOS moves its output away from a held device; the keys note says "with Exclusive mode off" (§A2) | `THE MAC'S VOLUME AND EXCLUSIVE MODE` |
+| LMS's slider doing nothing to DSD sent as DoP on a *Software* player (`dopCaption`, upstream `output.c` FIXED_ONE for non-PCM) | **NOT A BUG**, said on screen at Simon's request 2026-10-14, **INSTALLED as 0.4.4, VERIFIED LIVE** (§A2) | `DOP PLAYS AT FULL LEVEL` |
 | the picker's *Fixed at 100%* label (`Text("Fixed")`, INSTALL.md); LMS's own "Output level is fixed at 100%" | **DECIDED by Simon 2026-10-14**: the choice is *Fixed* (it holds LMS's level on a DAC with a volume control); LMS's setting keeps its own name; **INSTALLED as 0.4.3** (§A2) | `FIXED, NOT FIXED AT 100%` |
 | inline review of 0.4.0-0.4.2 (15fa252..b6b929f): `PlayerModel.save` / the switch / the cog writing *Follow the macOS output*'s volume as its device of the moment offers it (`Settings.forSaving`); the Fixed caption's "turn it down before saving" (`volumeCaption`, INSTALL.md) | **1 VERIFIED + FIXED 2026-10-14** (Simon: "yes fix that"), pinned + 2 mutants; **2 FIXED by Simon's wording** ("just remove the turn it down bit all is correct up to that"); **INSTALLED as 0.4.3**, not live-tested (§C) | `INLINE REVIEW 2026-10-14` |
 
@@ -523,6 +527,19 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
       Simon set it back at 21:04Z), prodmac46 on the MacBook Pro Speakers `-a 0:0 … -V`, "LMS: using Simons
       Music". LMS after: both connected, stopped (volume 37 and 13). The picker label, the one-choice
       lists and Follow's Save NOT yet seen live.
+    - **0.4.4** (Simon: "build and install,", "0.4.4" to version up, 2026-10-14): `FIXED ON FOLLOW, NO-CONTROL
+      DACS ONLY`, `DOP PLAYS AT FULL LEVEL` (the DoP caption), INSTALL.md to match. Checked first: prodmac46
+      connected, PAUSED (said beforehand: the restart stops it); the DragonFly's player switched off.
+      `bump-version.sh patch`; `build.sh --install`, suite PASS inside it. INSTALLED 22:18Z: install.sh
+      "version 0.4.4 (was 0.4.3)"; agent.log "agent started: LyrionPlay 0.4.4 (202610142317)", prodmac46 on
+      the FiiO M11 Plus `-a 0:0 … -D` (Follow saved Software, DoP on), "LMS: using Simons Music"; LMS after:
+      connected, stopped, volume 47. VERIFIED LIVE by Simon the same day: "That all works and DoP works on
+      follow without Exclusive mode."
+    - **0.4.5** (Simon: "build and install", "0.4.5" to version up, 2026-10-14): the captions of `THE MAC'S
+      VOLUME AND EXCLUSIVE MODE` (menu app only). Checked first: prodmac46 connected, PAUSED. `build.sh
+      --install`, suite PASS inside it; install.sh "the player is unchanged: it keeps running", "version 0.4.5
+      (was 0.4.4)"; menu app restarted 22:33:55Z; prodmac46 still paused and connected after. The captions NOT
+      yet seen live.
 - **APPLE SILICON ONLY — Simon, 2026-10-09.** arm64 only, macOS 14+. No universal builds.
 - **NO VIRTUAL AUDIO DRIVERS — Simon, 2026-10-09.**
   - Simon: "we dont need blackhole it messes up things last time i installed it and was hard to
@@ -752,6 +769,8 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
   a device with no volume control the Mac can set, so every device offers exactly one of *Device's own
   volume* and *Software*, plus *Fixed* on a DAC: the DragonFly device/fixed, the FiiO
   software/fixed, the speakers device, HDMI software; *Follow the macOS output* one choice wherever it is.
+  So Follow's mode changes with the output it follows (the DragonFly or the speakers: its own volume; the
+  FiiO: Software, or Fixed since `FIXED ON FOLLOW, NO-CONTROL DACS ONLY`): checked by Simon 2026-10-14 ("it does but switches between dacs"), as intended, not a finding.
   - Software already saved on a device with a control is read as its own volume by the existing
     `nearestOffered(on:)` (no migration): `-V`, LyrionPlay turns LMS's volume control on (it was on for
     Software too), no "louder" warning. Simon's DragonFly, saved Software by the caption check of
@@ -778,6 +797,45 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
   the merge to main, as asked; its Software clause corrected in the same line), the regenerated pages: on a DAC with a volume control Fixed holds the level LMS had (`FIXED HOLDS THE
   LMS VOLUME`), so "100%" was wrong there. LMS's own setting keeps its name, "Output level is fixed at
   100%" (INSTALL.md, the agent's log line and comments quote it). Never put "at 100%" back on the choice.
+- **FIXED ON FOLLOW, NO-CONTROL DACS ONLY — DECIDED by Simon 2026-10-14, INSTALLED as 0.4.4, VERIFIED LIVE by
+  Simon the same day** ("That all works")
+  ("with not having fixed in Follow MacOS we cant set the FiiO as fixed"; then "yes" to the rule). Reverses
+  2026-10-12's no Fixed for *Follow the macOS output* ("MacOS 2 options") for a DAC with no volume control
+  only: `VolumeMode.isOffered` `.fixed` = `device.isExternal && (!follow || device.volume == nil)`. Follow on
+  the FiiO: Software or Fixed; on the DragonFly, the speakers: its own volume only; HDMI: Software.
+  - Why only there: such a DAC has nothing to hold, so Follow never holds a level (`FIXED HOLDS THE LMS
+    VOLUME` stays a device player's), and Follow's saved Fixed reads as each other output's one choice
+    (`nearestOffered`), so it is never carried to a DAC with a control or to the speakers.
+  - Every carrier: the engine gets `-a <f>:<e>:1` on the FiiO (full level at once, not waiting for LMS's
+    flag); `syncFixedVolume` sets LMS fixed for the FiiO and turns its volume control back on at the next
+    check (~5 s) when the macOS output moves to an output with a control, meanwhile a `-V` engine leaves the
+    device where the Mac has it (`FIXED VOLUME LEAVES THE DEVICE ALONE`), so no full-level blast; each
+    flip while paused saves LMS's faded volume, put back by `volumeRestore` as for any agent change;
+    `chooseVolume` reads no LMS level on a DAC without a control; Save's held-level check skips it.
+  - Tests: `eachDeviceOffersOnlyWhatItHas` (Follow on the FiiO `[.software, .fixed]`, speakers, HDMI),
+    `aBlockedChoiceSavedIsReadAsOneOffered` (Follow saved Fixed: the FiiO `-a 0:0:1`, no `-V`, LMS fixed;
+    the DragonFly its own volume, `0:0`). MUTANTS: the old rule FAILS 4 expectations; Fixed on every DAC
+    for Follow FAILS 3. Suite PASS; `swift build` of every target. INSTALL.md says where Follow offers it.
+- **THE MAC'S VOLUME AND EXCLUSIVE MODE — AS INTENDED, Simon 2026-10-14, wording INSTALLED as 0.4.5,
+  not seen live** (Simon: "When on follow MacOS when using a DAC and its set to exclusive it stops the mac volume
+  from doing anything this is as intended?"; then "yes was just checking"). Taking the DAC exclusively makes
+  macOS move its own sound output to another device (`HOG MOVES THE DEFAULT OUTPUT`), so the Mac's volume
+  keys and menu bar slider move that device, the engine (watching the DAC) reports nothing, and LMS does not
+  move; LMS's slider still sets the DAC (`A HOG DOES NOT HIDE THE VOLUME CONTROL`). Not a finding, and not
+  fixable while the device is held. The keys note under *LMS volume* (`volumeCaption`'s `keys`), INSTALL.md
+  (both places) and README.md now add "with Exclusive mode off". The caption under the *Exclusive mode* switch
+  adds (Simon: "update the text it displays in the app as well fof this so its clear"): "Meanwhile macOS
+  sends its own sound to another output, so the Mac's volume keys don't change <device>."
+- **DOP PLAYS AT FULL LEVEL — said on screen at Simon's request 2026-10-14, INSTALLED as 0.4.4, VERIFIED
+  LIVE by Simon** ("That all works") (Simon, on *Follow the macOS output* playing DSD to the FiiO: "you can still control the
+  volume but it doesnt do anything at all"; then "yes" to the caption). NOT A BUG: upstream `output.c`
+  sets the gain to FIXED_ONE for any output that is not PCM, because scaling DoP frames breaks the DSD
+  stream, so *Software* (LMS's slider scales the samples) cannot change DSD sent as DoP; *Device's own
+  volume* moves the DAC's own volume and still works, Fixed is full level anyway, DoP off converts DSD to
+  PCM, which the slider does scale. On a Software player with DoP on, the caption under the DoP switch
+  (`dopCaption`) and INSTALL.md add: "DSD sent as DoP always plays at full level: the LMS slider doesn't
+  change it. Use the DAC's own volume." Never report the inert slider as a defect. Turning LMS's fixed
+  setting on only while DSD plays was advised against, not built (`THE DVC HOOK SAVES A FADED VOLUME`).
 - **THE BOUNDARY AND THE REOPEN FLAG — by design, 2026-10-09.** Two places where the CoreAudio
   path deliberately differs from `output_pa.c`:
   - **The boundary.** `pa_callback` keeps calling `_output_frames` after a track start that
@@ -924,6 +982,7 @@ evidence it cites.
 | A HOG DOES NOT HIDE THE VOLUME CONTROL: while another process holds a device exclusively and plays to it, `squeezelite -l` run from a separate process reports no settable volume for it, so a probe taken during a play (the agent's reconcile, the Settings window's) reads a saved "Device's own volume" as Software and drops `-V` | **WRONG** (measured 2026-10-12 on the DragonFly Black v1.5, /code-review 2026-10-12 (3) findings 1 and 2; silent: prodmac46 `mode stop`, zeros at the DAC's own 48k / 24-bit, so no relock) | A scratch probe set `kAudioDevicePropertyHogMode` on the DragonFly to its own PID. In its own view, `kAudioDevicePropertyVolumeScalar` (output, main) was present and settable. Meanwhile `/Applications/LyrionPlay.app/Contents/MacOS/squeezelite -l` gave `"exclusive_owner":<probe PID>` and `"volume":{"control":"main","db_min":-64.00,"db_max":0.00,"mute":true}`. A second probe did the same with an IOProc running (`DeviceIsRunningSomewhere` 1, 404 IOProc calls of zeros in 4 s), and `-l` again gave the volume. So holding a device and playing to it leave its volume control visible and settable to every process. Not run: an LMS play under the engine itself, or any DAC but the DragonFly. Re-raise only with a named device whose `-l` loses `volume` while held. |
 | NO STRAY IDLE ON A REOPEN: `_ca_open` sets `ca.dev = kAudioObjectUnknown` and drops the output lock while it stops the old IOProc, so a `ca_report_format` tick during a mid-play reopen for a rate change sees the device closed and prints `lyrionplay:format idle` between two tracks | **WRONG** (source, 2026-10-12, /code-review 2026-10-12 (4)) | The rate-change reopen is `output.ca_reopen` -> `_ca_open()` on the slimproto thread (`slimproto.c:717-720`), and `ca_report_format()` is called later in the SAME loop iteration on the same thread (`slimproto.c:751`), so it can never run inside that window. The only other caller of `_ca_open` is the monitor thread (`monitor()`), which `_ca_open` starts only on `err` (the open failed, `ca.dev` already unknown). So the report has already said idle, correctly, before any monitor open. Re-raise only with a third `_ca_open` caller, or a report call moved off the slimproto thread. |
 | LMS FIXED IS A FLAG, NOT A LEVEL: LMS's "Output level is fixed at 100%" holds the level the player had when it was set, so setting the volume first and then fixed keeps that volume (Simon's manual method, 2026-10-12) | **WRONG** (LMS 9.1 + squeezelite source, read 2026-10-12 at Simon's request: "Check on how LMS sets the fixed value first before deciding as with the dragonfly this seems to vary") | `digitalVolumeControl` is read in only two places: `Squeezebox2::volume` (squeezelite is a `squeezeplay` device, `Slim::Player::SqueezePlay`, which inherits it) and the settings page (`Settings/Player/Audio.pm`). Every `audg` carries the CURRENT volume's gain (`dBToFixed(getVolume(volume))`, 0 at volume <= 0) with the pref as its `adjust` byte (Squeezebox2.pm:275-315); LMS does not refuse a volume change on a fixed player, it only flags it. LMS's own text: "You can fix the volume control at 100% if you are using the volume control on your amplifier … This affects both digital and analog volume." squeezelite ignores the gain when `adjust` is 0 and plays at 100% (`process_audg`, slimproto.c:450, as upstream). Upstream `output_alsa.c` with `-V` then sets its mixer to 0 dB (`set_volume(FIXED_ONE)` -> `set_mixer(.., 0, 0)`, output_alsa.c:229-250): full, whatever the volume was before. So on squeezelite a fixed player's level is 100%; only an amplifier or a DAC's own knob sets it. LyrionPlay differs on purpose (§A2 `FIXED VOLUME LEAVES THE DEVICE ALONE`): Fixed runs without `-V` and never touches the device, so the DragonFly's own level in Fixed is whatever was last put on it. That is why it varies: LMS's level from the last *Device's own volume* engine (agent.log 17:29:53Z and 17:33:08Z put back a saved volume of 100, so 0 dB), muted at -64 dB after a pause fade (`FIXED SET UP WHILE PAUSED`), or what macOS restores when it is plugged back in (17:31:50-17:32:07Z). LMS keeps ONE saved volume per player (`mixer volume ?` reads the pref), so it follows a change of output (`ONE PLAYER PER DAC`). |
+| DOP WORKS WITHOUT EXCLUSIVE MODE: DoP cannot reach a DAC in shared mode (*Follow the macOS output* with Exclusive off), since the engine sets an integer physical format only when it holds the device (`_configure`: `if (ca.hogged) set_physical_format`) and macOS's mixer would alter the DoP markers | **WRONG** (Simon, tested on the FiiO 2026-10-14) | My claim from the code, never tried on a DAC. Simon first saw no DoP through Follow; Follow's DoP switch was off ("My mistake it does work, i had. not enabled DoP on the MacOS player"). With it on, Exclusive off: engine-follow.log 22:55:03Z "exclusive: no", then "opened FiiO M11 Plus at 176400 Hz" and "at 352800 Hz" (DSD64, DSD128 as DoP), no "exclusive"; Simon: it works. Never tie DoP to Exclusive or take it off Follow on this belief. Confirmed again on 0.4.4 ("DoP works on follow without Exclusive mode"). Not tried: a device whose macOS volume is applied in software below full |
 
 ### B. KNOWN-OPEN AND ACCEPTED — do not re-report as new
 

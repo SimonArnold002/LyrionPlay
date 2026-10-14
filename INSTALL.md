@@ -11,7 +11,7 @@ It lives in your menu bar and offers:
 - **LMS replay gain.**
 - **Volume both ways:** with *Device's own volume*, the LMS slider and your Mac's volume keys move
   each other (the keys only when the output is the Mac's built-in speakers or Follow the macOS
-  output).
+  output, with Exclusive mode off).
 
 ## What you need
 
@@ -127,20 +127,24 @@ It lets go of the DAC 30 seconds after you stop. You can change that time in the
 **DAC accepts DSD over PCM (DoP).** Turn this on only if your DAC supports DoP; macOS cannot detect
 it.
 - With it off, DSD is converted to PCM, so it still plays.
+- With *Software* volume, DSD sent as DoP always plays at full level: the LMS slider doesn't change
+  it. Use the DAC's own volume.
 - DoP needs a PCM rate of a sixteenth of the DSD rate: DSD64 needs 176.4 kHz and DSD128 needs
   352.8 kHz. DSD faster than your DAC's top PCM rate allows is converted to PCM.
 
 **LMS volume.**
 Each player offers only the choices its device can take: *Device's own volume* when the Mac can
 set its volume, *Software* when it can't, and *Fixed* only on a DAC, not on the Mac's own
-outputs (built-in speakers and headphones, Bluetooth, AirPlay, HDMI), and not for *Follow the macOS
-output*.
+outputs (built-in speakers and headphones, Bluetooth, AirPlay, HDMI). *Follow the macOS output*
+offers *Fixed* only while it plays to a DAC whose volume the Mac can't set; on any other output it
+uses the one choice that output has.
 
 - *Device's own volume*: the LMS volume slider and your Mac's volume follow each other. Move the
   LMS slider and your Mac's volume (built-in speakers, headphones) or the DAC's hardware volume
   moves with it. Use your Mac's volume keys, or mute, and the LMS slider follows a moment later. The
   volume keys only work when the output is the Mac's built-in speakers or **Follow the macOS
-  output**.
+  output**, with Exclusive mode off: in exclusive mode macOS moves its own sound output to another
+  device, so the keys change that one. The LMS slider still sets the device.
   - The LMS slider moves in whole steps, so it shows the step nearest the level you set on the Mac.
     Your level stays as you set it: a track or album change, a pause and resume, or a restart of the
     player doesn't move it.

@@ -26,14 +26,17 @@ public enum VolumeMode: String, Codable, Sendable, CaseIterable {
 	/// What a device offers (Simon, 2026-10-12: "block device volume as an option if it doesnt offer
 	/// it, block fixed on MacOS outputs"): its own volume only with a volume control the Mac can set;
 	/// Fixed only on a DAC (`DeviceCaps.isExternal`), never on the Mac's own outputs (built-in,
-	/// Bluetooth, AirPlay, HDMI), and never for *Follow the macOS output* (Simon, 2026-10-12: "MacOS 2
-	/// options"); software only without a volume control (Simon, 2026-10-14: "pointless on volume
-	/// control dacs its purely to add control when there is nothing at all").
+	/// Bluetooth, AirPlay, HDMI); for *Follow the macOS output* only on a DAC with no volume control
+	/// (Simon, 2026-10-14: "with not having fixed in Follow MacOS we cant set the FiiO as fixed"; it was
+	/// never offered there, 2026-10-12 "MacOS 2 options"), so Follow never holds a level and its Fixed
+	/// reads as the device's own volume on any output with a control; software only without a volume
+	/// control (Simon, 2026-10-14: "pointless on volume control dacs its purely to add control when
+	/// there is nothing at all").
 	public func isOffered(by device: DeviceCaps, follow: Bool = false) -> Bool {
 		switch self {
 		case .device: return device.volume != nil
 		case .software: return device.volume == nil
-		case .fixed: return !follow && device.isExternal
+		case .fixed: return device.isExternal && (!follow || device.volume == nil)
 		}
 	}
 

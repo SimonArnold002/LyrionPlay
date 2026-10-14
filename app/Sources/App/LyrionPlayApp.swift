@@ -487,12 +487,15 @@ struct PlayerSettingsView: View {
 				TextField("Name", text: setting(\.name))
 				if let device = row.device {
 					Toggle("Exclusive mode", isOn: setting(\.exclusive))
-					Text(model.draft.idleSeconds == 0
-						 ? "Other apps cannot use \(device.name) while the player is on: it is never released (Shared)."
-						 : "Other apps cannot use \(device.name) while the player is playing.")
+					// macOS moves its own output away from a device held exclusively, so the keys move that one
+					// (HOG MOVES THE DEFAULT OUTPUT; THE MAC'S VOLUME AND EXCLUSIVE MODE, Simon 2026-10-14)
+					Text((model.draft.idleSeconds == 0
+						  ? "Other apps cannot use \(device.name) while the player is on: it is never released (Shared)."
+						  : "Other apps cannot use \(device.name) while the player is playing.")
+						 + " Meanwhile macOS sends its own sound to another output, so the Mac's volume keys don't change \(device.name).")
 						.font(.caption).foregroundStyle(.secondary)
 					Toggle("DAC accepts DSD over PCM (DoP)", isOn: setting(\.dop))
-					Text("Off: DSD is converted to PCM in the player, so it still plays.")
+					Text(dopCaption(device))
 						.font(.caption).foregroundStyle(.secondary)
 					// only what the device offers (VolumeMode.offered): no device volume without a control,
 					// no Fixed on the Mac's own outputs or for *Follow the macOS output*
@@ -527,13 +530,26 @@ struct PlayerSettingsView: View {
 		.frame(width: 460)
 	}
 
+	/// Under the DoP switch. DoP plays at full scale whatever LMS's level (upstream output.c: the gain
+	/// is FIXED_ONE for any output that is not PCM), so where LMS's volume scales the samples (software)
+	/// the slider does nothing to DSD sent as DoP (Simon, 2026-10-14: "you can still control the volume
+	/// but it doesnt do anything at all"). The device's own volume and Fixed are not affected.
+	private func dopCaption(_ device: DeviceCaps) -> String {
+		let player = model.draft.player(row.key, device: device)
+		let caption = "Off: DSD is converted to PCM in the player, so it still plays."
+		guard player.dop, player.volume.scalesSamples else { return caption }
+		return caption + " DSD sent as DoP always plays at full level: the LMS slider doesn't change it. Use the DAC's own volume."
+	}
+
 	/// Under "LMS volume". The Mac's volume keys change only the macOS output's level, in every mode
 	/// (LyrionPlay never sees a key), so where they work is said for any device with a volume control;
 	/// not under Fixed, where it would confuse (Simon, 2026-10-12). Fixed warns that it is louder only
 	/// when the saved mode scales the samples (software volume, VolumeMode.scalesSamples): from the
 	/// device's own volume it holds the level LMS had.
 	private func volumeCaption(_ device: DeviceCaps) -> String {
-		let keys = " The Mac's volume keys work only when the output is the Mac's built-in speakers or Follow the macOS output."
+		// exclusive mode moves the macOS output to another device, so the keys move that one (HOG MOVES
+		// THE DEFAULT OUTPUT; Simon, 2026-10-14)
+		let keys = " The Mac's volume keys work only when the output is the Mac's built-in speakers or Follow the macOS output, with Exclusive mode off."
 		let player = model.draft.player(row.key, device: device)
 		switch player.volume {
 		case .device: // offered only with a volume control (VolumeMode.offered)

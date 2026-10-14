@@ -169,7 +169,10 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(VolumeMode.offered(by: speakers) == [.device])             // a Mac output: no Fixed
 		#expect(VolumeMode.offered(by: hdmi) == [.software])               // a Mac output with no control
 		#expect(VolumeMode.offered(by: dragonfly, follow: true) == [.device])
-		#expect(VolumeMode.offered(by: fiio, follow: true) == [.software])
+		// Simon, 2026-10-14: Follow gets Fixed on a DAC with no volume control, so it never holds a level
+		#expect(VolumeMode.offered(by: fiio, follow: true) == [.software, .fixed])
+		#expect(VolumeMode.offered(by: speakers, follow: true) == [.device])
+		#expect(VolumeMode.offered(by: hdmi, follow: true) == [.software])
 		// every device offers exactly one of its own volume and software
 		for device in [dragonfly, fiio, speakers, hdmi] {
 			#expect(VolumeMode.device.isOffered(by: device) != VolumeMode.software.isOffered(by: device))
@@ -206,6 +209,11 @@ func value(_ option: String, in a: [String]) -> String? {
 		// the follow player saved as Fixed, now following the DragonFly: its own volume, never Fixed
 		#expect(settings.player(PlayerKey.follow, device: dragonfly).volume == .device)
 		#expect(value("-a", in: args(settings, dragonfly, key: PlayerKey.follow)) == "0:0")
+		// ...and following the FiiO, a DAC with no volume control: Fixed, full level, nothing held
+		#expect(settings.player(PlayerKey.follow, device: fiio).volume == .fixed)
+		#expect(value("-a", in: args(settings, fiio, key: PlayerKey.follow)) == "0:0:1")
+		#expect(!args(settings, fiio, key: PlayerKey.follow).contains("-V"))
+		#expect(FixedVolumeSync.value(for: settings.player(PlayerKey.follow, device: fiio).volume) == 0)
 		// control: an offered choice is kept, and the rest of the settings with it
 		#expect(settings.player(dragonfly.uid, device: dragonfly).volume == .fixed)
 		#expect(settings.player(fiio.uid, device: fiio).dop && settings.player(fiio.uid, device: fiio).exclusive)
