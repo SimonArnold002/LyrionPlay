@@ -15,7 +15,13 @@
  *   - removing a property listener waits for a call of it that is in flight (macOS 26.7.1,
  *     2026-10-10: 1001 ms for a listener that slept 1 s);
  *   - notifications arrive on the HAL's own thread, also for this process's own changes;
- *   - setting kAudioDevicePropertyHogMode toggles it (AudioHardware.h: the value is ignored).
+ *   - setting kAudioDevicePropertyHogMode toggles it (AudioHardware.h: the value is ignored);
+ *   - a device's dB property can read the top of its range at every level while its scalar moves,
+ *     and the HAL's scalar/dB conversion can follow another taper than the dB property, agreeing
+ *     only at the ends (2026-10-14: the Melomania P100's stuck 0.00 dB; the MacBook Pro Speakers'
+ *     -24.08 dB property against -39.03 dB converted; fdev stuck_db, curved_conversion);
+ *   - a change is announced to a property's listeners one at a time (notify), one per channel
+ *     control on a device with two (chan_volume).
  *
  * Two kinds of test:
  *   - named tests, one per behaviour or past finding;
@@ -193,10 +199,15 @@ typedef struct {
 	pid_t hog;                  // -1, or the process holding it
 	unsigned hog_taken;         // times this process took it
 	bool volume;                // a settable main-element volume
+	bool chan_volume;           // with volume: on channels 1 and 2, no main element (the Melomania P100)
+	bool stuck_db;              // its dB property reads db_max at every level (A DB PROPERTY CAN BE STUCK)
+	bool curved_conversion;     // the HAL's scalar/dB conversion follows another taper than the dB
+	                            // property, agreeing only at the ends (SCALAR TO DB IS NOT THE DB PROPERTY)
 	Float32 db, db_min, db_max;
 	Float32 step;               // levels move in steps of this many dB (0: exact)
 	bool mute_ctl;
 	UInt32 mute;
+	unsigned vol_writes;        // level and mute writes (VolumeDecibels, VolumeScalar, Mute)
 	bool virt_float32;          // the stream's virtual format is 32-bit float
 	AudioStreamBasicDescription phys;
 	int procs, started;
@@ -304,15 +315,21 @@ static void start_call(int slot, AudioObjectID obj, AudioObjectPropertySelector 
 #define WAIT_HAL(cond) ({ struct timespec _u; bool _ok = true; clock_gettime(CLOCK_REALTIME, &_u); _u.tv_sec += 2; \
 	while (cond) if (pthread_cond_timedwait(&calls_done, &hal, &_u)) { _ok = false; break; } _ok; })
 
-// a property changed: call its listeners and wait for them (bounded, so a stuck one is counted)
+// a property changed: call its listeners and wait for them (bounded, so a stuck one is counted).
+// One after another: a device with two channel controls has a listener on each, and macOS
+// announces each channel's change on its own (the Melomania P100, probe 2026-10-14), so two calls
+// racing each other for one change would be the fake's, not the HAL's.
 static unsigned notify_timeouts;
 static void notify(AudioObjectID obj, AudioObjectPropertySelector sel) {
 	struct batch *b = calloc(1, sizeof(*b)); // left allocated if a call never returns
+	bool ok = true;
 	pthread_mutex_lock(&hal);
-	for (int i = 0; i < 32; i++) {
-		if (listeners[i].used && listeners[i].obj == obj && listeners[i].sel == sel) start_call(i, obj, sel, b);
+	for (int i = 0; i < 32 && ok; i++) {
+		if (!listeners[i].used || listeners[i].obj != obj || listeners[i].sel != sel) continue;
+		start_call(i, obj, sel, b);
+		ok = WAIT_HAL(b->pending > 0);
 	}
-	if (WAIT_HAL(b->pending > 0)) free(b);
+	if (ok) free(b);
 	else notify_timeouts++;
 	pthread_mutex_unlock(&hal);
 }
@@ -364,7 +381,7 @@ static Boolean fake_HasProperty(AudioObjectID obj, const AudioObjectPropertyAddr
 	case kAudioDevicePropertyVolumeRangeDecibels:
 	case kAudioDevicePropertyVolumeScalarToDecibels:
 	case kAudioDevicePropertyVolumeDecibelsToScalar:
-		return d->volume && a->mElement == kAudioObjectPropertyElementMain;
+		return d->volume && (d->chan_volume ? a->mElement == 1 || a->mElement == 2 : a->mElement == kAudioObjectPropertyElementMain);
 	case kAudioDevicePropertyMute:
 		return d->mute_ctl;
 	default:
@@ -470,17 +487,18 @@ static OSStatus fake_GetPropertyData(AudioObjectID obj, const AudioObjectPropert
 		break;
 	case kAudioDevicePropertyNominalSampleRate: *(Float64 *)data = d->rate; break;
 	case kAudioDevicePropertyHogMode: *(pid_t *)data = d->hog; break;
-	case kAudioDevicePropertyVolumeDecibels: *(Float32 *)data = d->db; break;
+	case kAudioDevicePropertyVolumeDecibels: *(Float32 *)data = d->stuck_db ? d->db_max : d->db; break;
 	case kAudioDevicePropertyVolumeScalar: *(Float32 *)data = (d->db - d->db_min) / (d->db_max - d->db_min); break;
 	case kAudioDevicePropertyVolumeRangeDecibels: *(AudioValueRange *)data = (AudioValueRange){ d->db_min, d->db_max }; break;
 	case kAudioDevicePropertyVolumeScalarToDecibels: {
 		Float32 *v = data;
-		*v = d->db_min + *v * (d->db_max - d->db_min);
+		*v = d->db_min + (d->curved_conversion ? *v * *v : *v) * (d->db_max - d->db_min);
 		break;
 	}
 	case kAudioDevicePropertyVolumeDecibelsToScalar: {
 		Float32 *v = data;
 		*v = (*v - d->db_min) / (d->db_max - d->db_min);
+		if (d->curved_conversion) *v = sqrtf(*v);
 		break;
 	}
 	case kAudioDevicePropertyMute: *(UInt32 *)data = d->mute; break;
@@ -547,14 +565,17 @@ static OSStatus fake_SetPropertyData(AudioObjectID obj, const AudioObjectPropert
 		break;
 	case kAudioDevicePropertyVolumeDecibels:
 		d->db = quantise(d, *(const Float32 *)data);
+		d->vol_writes++;
 		changed = kAudioDevicePropertyVolumeScalar;
 		break;
 	case kAudioDevicePropertyVolumeScalar:
 		d->db = quantise(d, d->db_min + *(const Float32 *)data * (d->db_max - d->db_min));
+		d->vol_writes++;
 		changed = kAudioDevicePropertyVolumeScalar;
 		break;
 	case kAudioDevicePropertyMute:
 		d->mute = *(const UInt32 *)data;
+		d->vol_writes++;
 		changed = kAudioDevicePropertyMute;
 		break;
 	case kAudioStreamPropertyPhysicalFormat:
@@ -1378,9 +1399,9 @@ static void reports_carry_lms_state(void) {
 	user_set_mute(d, 0);
 	user_set_db(d, -45);
 	CHECK(nreports >= 3, "%u reports, not 3 or more", nreports);
-	CHECK(nreports >= 1 && !strcmp(reports[0], "lyrionplay:volume -30.00 0 -1"), "before any audg: '%s'", reports[0]);
-	CHECK(nreports >= 2 && !strcmp(reports[1], "lyrionplay:volume -40.00 0 1"), "after a level: '%s'", reports[1]);
-	CHECK(nreports >= 3 && !strcmp(reports[nreports - 1], "lyrionplay:volume -45.00 0 0"), "after LMS muted: '%s'",
+	CHECK(nreports >= 1 && !strcmp(reports[0], "lyrionplay:volume -30.00 0 -1 1"), "before any audg: '%s'", reports[0]);
+	CHECK(nreports >= 2 && !strcmp(reports[1], "lyrionplay:volume -40.00 0 1 1"), "after a level: '%s'", reports[1]);
+	CHECK(nreports >= 3 && !strcmp(reports[nreports - 1], "lyrionplay:volume -45.00 0 0 1"), "after LMS muted: '%s'",
 		  last_report());
 	stop();
 }
@@ -1395,6 +1416,109 @@ static void fixed_volume_leaves_the_device_alone(void) {
 	advance_ms(600);
 	user_set_db(d, -33);
 	CHECK(nreports == 0, "%u reports under fixed volume", nreports);
+	stop();
+}
+
+// FIXED HOLDS THE LMS VOLUME: in Fixed (-a <f>:<e>:1) LMS's level never reaches the samples, whatever
+// its adjust says. An audg with adjust 1 comes after an engine start before the agent sets LMS to
+// fixed, while the agent cannot reach LMS, or after a change in Material. Full scale from init, not
+// silence until LMS's first audg (started here without start(), which sets full scale itself).
+static void fixed_ignores_lms_level(void) {
+	static char p[] = "0:0:1";
+	static unsigned rates[MAX_SUPPORTED_SAMPLERATES];
+	fdev *d = add_dac();
+	output_init_coreaudio(lINFO, d->uid, OUTPUTBUF_SIZE, p, rates, 0, 0, false, false);
+	CHECK(output.gainL == FIXED_ONE && output.gainR == FIXED_ONE, "gain %u/%u at the start, not full scale", output.gainL,
+		  output.gainR);
+	set_volume(gain_for_db(-30), gain_for_db(-30));  // a level, adjust 1
+	CHECK(output.gainL == FIXED_ONE && output.gainR == FIXED_ONE, "LMS's -30 dB reached the samples (gain %u/%u)",
+		  output.gainL, output.gainR);
+	set_volume(gain_for_db(-45), gain_for_db(-45));  // a fade's step
+	set_volume(0, 0);                                // its end, or a mute
+	CHECK(output.gainL == FIXED_ONE && output.gainR == FIXED_ONE, "LMS's silence reached the samples (gain %u/%u)",
+		  output.gainL, output.gainR);
+	reopen();
+	CHECK(output.gainL == FIXED_ONE && output.gainR == FIXED_ONE, "a reopen left gain %u/%u", output.gainL, output.gainR);
+	stop();
+}
+
+// FIXED SET UP WHILE PAUSED: Fixed set up while LMS was paused found the DragonFly muted at its
+// minimum (LMS's pause fade, under -V) and left it there. With -a <f>:<e>:1:<dB> the engine puts the
+// held level on, unmuted, at once: with -C the device is not opened until LMS plays.
+static void held_level_put_on_at_the_start(void) {
+	fdev *d = add_speakers();
+	d->db = d->db_min;
+	d->mute = 1;
+	start(d->uid, "0:1:1:-48.84", 30, false, false);
+	CHECK(d->started == 0, "control: opened while off");
+	CHECK(fabsf(d->db - -48.84f) < 0.01f && d->mute == 0, "the device is at %.2f dB, mute %u, not -48.84 dB unmuted",
+		  d->db, d->mute);
+	CHECK(log_count("device volume held at -48.8 dB (was -63.5 dB, muted)") == 1, "no 'held at' line");
+	CHECK(log_count("device volume: fixed, holds -48.8 dB") == 1, "the init line does not say it holds");
+	stop();
+}
+
+// whatever LMS sends, the held level stays, and nothing goes to the agent
+static void held_level_is_never_moved_by_lms(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0:1:-30", 0, false, false);
+	set_volume(gain_for_db(-10), gain_for_db(-10));
+	set_volume(gain_for_db(-45), gain_for_db(-45));
+	set_volume(0, 0);
+	CHECK(fabsf(d->db - -30) < 0.01f && d->mute == 0, "LMS moved the held device to %.2f dB, mute %u", d->db, d->mute);
+	CHECK(nreports == 0, "%u volume reports", nreports);
+	stop();
+}
+
+// once per device ID: a level set on the device afterwards stays through a reopen; the same DAC
+// plugged in again (a new ID) is held again at its first open
+static void held_level_once_per_device(void) {
+	fdev *a = add_speakers(), *b;
+	start(a->uid, "0:0:1:-30", 0, false, false);
+	CHECK(fabsf(a->db - -30) < 0.01f, "control: not held at the start (%.2f dB)", a->db);
+	user_set_db(a, -25);
+	reopen();
+	CHECK(fabsf(a->db - -25) < 0.01f, "a reopen moved the user's -25 dB to %.2f dB", a->db);
+	a->present = false;
+	b = add_speakers();                               // same UID, new ID, at -20 dB
+	default_out = b->id;
+	reopen();
+	CHECK(fabsf(b->db - -30) < 0.01f, "the device plugged in again is at %.2f dB, not the held -30 dB", b->db);
+	stop();
+}
+
+// Fixed with no held level (a DAC with no volume control) leaves the device alone
+static void fixed_without_a_held_level_leaves_the_device_alone(void) {
+	fdev *d = add_speakers();
+	d->db = -50;
+	d->mute = 1;
+	start(d->uid, "0:0:1", 0, false, false);
+	set_volume(0, 0);
+	CHECK(fabsf(d->db - -50) < 0.01f && d->mute == 1, "the device moved to %.2f dB, mute %u", d->db, d->mute);
+	CHECK(log_count("held at") == 0, "a 'held at' line without a held level");
+	stop();
+}
+
+// controls: a held level needs Fixed, and without Fixed LMS's level scales the samples as before
+static void a_held_level_needs_fixed(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0:0:-30", 0, false, false);
+	CHECK(fabsf(d->db - -20) < 0.01f, "a held level without Fixed moved the device to %.2f dB", d->db);
+	set_volume(gain_for_db(-30), gain_for_db(-30));
+	CHECK(output.gainL == gain_for_db(-30), "without Fixed, LMS's -30 dB is not in the samples (gain %u)", output.gainL);
+	stop();
+}
+
+// -V with Fixed: Fixed wins, so LMS never sets the device and nothing watches it
+static void fixed_ignores_device_volume(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0:1", 0, true, false);
+	set_volume(gain_for_db(-30), gain_for_db(-30));
+	CHECK(fabsf(d->db - -20) < 0.01f, "-V with Fixed moved the device to %.2f dB", d->db);
+	CHECK(output.gainL == FIXED_ONE, "LMS's -30 dB reached the samples (gain %u)", output.gainL);
+	CHECK(log_count("fixed volume: -V ignored") == 1, "no '-V ignored' line");
+	user_set_db(d, -35);
+	CHECK(nreports == 0, "%u volume reports: the device is watched", nreports);
 	stop();
 }
 
@@ -1425,6 +1549,347 @@ static void user_change_reported_once_and_mute_reported(void) {
 	CHECK(nreports == 2 && sscanf(reports[1], "lyrionplay:volume %*f %d", &muted) == 1 && muted == 1, "mute: '%s'",
 		  nreports == 2 ? reports[1] : "(none)");
 	CHECK_FLUSHED();                          // notify waits for the listener, so its flush is done
+	stop();
+}
+
+// The Melomania P100 as measured 2026-10-14 (A DB PROPERTY CAN BE STUCK): Bluetooth, volume on
+// channels 1 and 2 only, -40..0 dB, a dB property that reads 0.00 at every level, writes that land
+// where DecibelsToScalar says; at scalar 0.478 (-20.88 dB), where Simon left it
+static fdev *add_melomania(void) {
+	fdev *d = add_dev("00-1F-F0-24-34-DF:output", "Melomania P100");
+	d->volume = d->chan_volume = d->stuck_db = true;
+	d->db_min = -40;
+	d->db_max = 0;
+	d->db = -20.88f;
+	d->mute_ctl = true;
+	if (!default_out) default_out = d->id;
+	return d;
+}
+
+// pins A DB PROPERTY CAN BE STUCK: on a device whose dB property reads the top of its range at every
+// level, the level is its scalar through the HAL's conversion, so the macOS slider reaches LMS at
+// its real level (it reached it not at all: Simon, 2026-10-14), and LMS's own level, written through
+// the dB property, is recorded as the engine's and not reported back
+static void a_stuck_db_reading_is_read_through_the_scalar(void) {
+	fdev *d = add_melomania();
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -30);                      // the macOS slider: the scalar moves, the dB property stays 0.00
+	CHECK(nreports == 1 && !strcmp(reports[0], "lyrionplay:volume -30.00 0 -1 1"), "the slider: %u report(s), '%s'",
+		  nreports, last_report());
+	set_volume(gain_for_db(-25), gain_for_db(-25));   // LMS's level
+	CHECK(fabsf(d->db - -25) < 0.01f, "control: LMS's level landed at %.2f dB, not -25", d->db);
+	advance_ms(600);                          // past the settle window
+	notify(d->id, kAudioDevicePropertyVolumeScalar);  // a late notification of LMS's own change
+	CHECK(nreports == 1, "LMS's own level reported back as the user's: '%s'", last_report());
+	user_set_db(d, -35);
+	CHECK(nreports == 2 && !strcmp(reports[1], "lyrionplay:volume -35.00 0 1 1"), "the slider again: '%s'", last_report());
+	user_set_db(d, 0);                        // full: the dB property's 0.00 is right there
+	CHECK(nreports == 3 && !strcmp(reports[2], "lyrionplay:volume 0.00 0 1 1"), "full: '%s'", last_report());
+	CHECK_FLUSHED();
+	stop();
+}
+
+// pins SCALAR TO DB IS NOT THE DB PROPERTY: a working dB property stays the level, whatever the HAL's
+// conversion says (on the speakers it says -39.03 dB where the property reads -24.08), so the stuck
+// rule changes nothing on the speakers or the DragonFly
+static void a_working_db_reading_stays_the_level(void) {
+	fdev *d = add_speakers();
+	d->curved_conversion = true;              // scalar 0.528 (-30 dB) converts to -45.8 dB
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -30);
+	CHECK(nreports == 1 && !strcmp(reports[0], "lyrionplay:volume -30.00 0 -1 1"), "mid-range: '%s'", last_report());
+	user_set_db(d, 0);
+	CHECK(nreports == 2 && !strcmp(reports[1], "lyrionplay:volume 0.00 0 -1 1"), "full: '%s'", last_report());
+	stop();
+}
+
+// pins: a DAC with no volume control (the FiiO) is never watched, read or reported, and LMS's level
+// is software gain, whatever -V asks; the stuck rule has no control there to look at (Simon,
+// 2026-10-14: "couldnt this get confused with a DAC that has no volume control")
+static void a_dac_with_no_volume_control_is_never_read_or_reported(void) {
+	fdev *d = add_dac();
+	int watched = 0;
+	start(d->uid, "0:1", 0, true, false);
+	CHECK(!ca.dev_has_volume, "control: the DAC reads as having a volume control");
+	pthread_mutex_lock(&hal);
+	for (int i = 0; i < 32; i++) {
+		watched += listeners[i].used && listeners[i].obj == d->id && listeners[i].sel == kAudioDevicePropertyVolumeScalar;
+	}
+	pthread_mutex_unlock(&hal);
+	CHECK(!watched, "%d volume listener(s) on a DAC with no volume control", watched);
+	set_volume(gain_for_db(-20), gain_for_db(-20));
+	CHECK(output.gainL == gain_for_db(-20) && output.gainR == gain_for_db(-20),
+		  "LMS's level is not software gain: %u/%u", output.gainL, output.gainR);
+	notify(d->id, kAudioDevicePropertyVolumeScalar);
+	CHECK(nreports == 0, "%u report(s) from a DAC with no volume control", nreports);
+	stop();
+}
+
+// LMS's answers, as the rig sent them (LMS 9.1.2, 2026-10-14, a silent stand-in player): the gain
+// of each whole volume, written here as measured, not computed, so the engine's arithmetic is checked
+// against LMS and not against itself. The agent asks for 40 at -29.60 and -29.40 dB, 41 at -29.11,
+// 42 at -28.61, 33 at -33.05 (LMSVolume.volume(forDB:), pinned in both suites).
+#define LMS_VOL33 1458u
+#define LMS_VOL40 2048u                  // -30.10 dB as LMS puts it on
+#define LMS_VOL41 2304u                  // 41 and 42 share it: LMS's own 8-bit rounding
+#define LMS_VOL42 2304u
+static void lms_sends(unsigned gain) { set_volume(gain, gain); }
+
+// pins: the whole volume the engine expects the agent to ask for, and LMS's gain for it. The dB ->
+// volume rows are the same as PlayerCoreTests `theAgentsWholeVolumeIsTheEnginesToo`: change both or
+// neither, or the engine no longer knows LMS's answers and puts them on again
+static void the_engine_knows_lms_answer_to_each_report(void) {
+	static const struct { float dB; int volume; } rows[] = {
+		{ -74.00f, 1 }, { -100.00f, 1 }, { -63.50f, 7 }, { -50.00f, 16 }, { -37.00f, 25 }, { -36.75f, 26 },
+		{ -33.05f, 33 }, { -30.00f, 39 }, { -29.60f, 40 }, { -29.40f, 40 }, { -29.35f, 41 }, { -29.11f, 41 },
+		{ -28.61f, 42 }, { -20.00f, 59 }, { -0.20f, 100 }, { 0.00f, 100 }, { 5.00f, 100 },
+		{ -29.3549f, 41 },             // printed -29.35, which the agent reads: 41; the level itself is nearer 40
+	};
+	for (unsigned i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+		int v = agent_volume(rows[i].dB);
+		CHECK(v == rows[i].volume, "%.2f dB: volume %d, the agent asks for %d", rows[i].dB, v, rows[i].volume);
+	}
+	CHECK(lms_gain(33) == LMS_VOL33 && lms_gain(40) == LMS_VOL40 && lms_gain(41) == LMS_VOL41 && lms_gain(42) == LMS_VOL42,
+		  "LMS's gains: 33 %u, 40 %u, 41 %u, 42 %u, not as the rig sent them", lms_gain(33), lms_gain(40), lms_gain(41),
+		  lms_gain(42));
+	CHECK(lms_gain(0) == 0, "volume 0 is silence, not %u", lms_gain(0));
+}
+
+// pins MAC SLIDER LAG AND THE BLUETOOTH HEADSET (the lag, measured 2026-10-14 on the Melomania): LMS's
+// answer to a reported level (two audgs) is not put on, so a drag is not pulled back to an older level
+// and no settle window swallows the moves after it; during a drag the answer to an older report comes
+// after a newer report
+static void lms_answer_to_a_reported_level_is_not_put_on(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -29.40f);                  // the macOS slider, between LMS's 40 and 41: reported
+	unsigned writes = d->vol_writes;
+	lms_sends(LMS_VOL40);
+	lms_sends(LMS_VOL40);                     // and its second audg
+	CHECK(fabsf(d->db - -29.40f) < 0.01f, "LMS's answer moved the device to %.2f dB", d->db);
+	CHECK(d->vol_writes == writes, "%u write(s) for LMS's answer", d->vol_writes - writes);
+	user_set_db(d, -33.05f);                  // a drag: two reports
+	user_set_db(d, -28.61f);
+	lms_sends(LMS_VOL33);
+	lms_sends(LMS_VOL33);                     // the answer to the older one, after the newer report
+	CHECK(fabsf(d->db - -28.61f) < 0.01f, "the drag was pulled back to %.2f dB", d->db);
+	lms_sends(LMS_VOL42);
+	lms_sends(LMS_VOL42);
+	CHECK(fabsf(d->db - -28.61f) < 0.01f && d->vol_writes == writes, "the drag ended at %.2f dB, %u write(s)",
+		  d->db, d->vol_writes - writes);
+	user_set_db(d, -20);                      // straight after: reported, not swallowed
+	CHECK(nreports == 4 && !strcmp(reports[3], "lyrionplay:volume -20.00 0 1 1"), "the move after the answers: %u report(s), '%s'",
+		  nreports, last_report());
+	stop();
+}
+
+// pins Simon's rule (2026-10-14: "What I dont want is to change again after a track change"): LMS
+// sends its saved level at every connect and stream start (LMS SENDS VOLUME ON CONNECT), and the
+// device does not move for it: not after a Mac move, not long after, not after Material's level
+static void a_track_or_album_change_puts_nothing_on(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -29.40f);
+	lms_sends(LMS_VOL40);
+	lms_sends(LMS_VOL40);
+	unsigned writes = d->vol_writes;
+	lms_sends(LMS_VOL40);                     // the next track's stream
+	advance_ms(6000);                         // past the time an answer is looked for
+	lms_sends(LMS_VOL40);                     // an album from stopped: _Stream, then play
+	lms_sends(LMS_VOL40);
+	CHECK(fabsf(d->db - -29.40f) < 0.01f, "a track change moved the device to %.2f dB (LMS's 40 is -30.10)", d->db);
+	CHECK(d->vol_writes == writes, "%u write(s) at the track changes", d->vol_writes - writes);
+	lms_sends(LMS_VOL33);                     // Material's slider
+	CHECK(fabsf(d->db - -33.06f) < 0.02f, "control: Material's level was not put on (%.2f dB)", d->db);
+	writes = d->vol_writes;
+	lms_sends(LMS_VOL33);                     // its second audg, then a track change
+	lms_sends(LMS_VOL33);
+	CHECK(d->vol_writes == writes, "%u write(s) for Material's level sent again", d->vol_writes - writes);
+	stop();
+}
+
+// pins: when the Mac's move did not reach LMS (the send failed), a track change still leaves the
+// device where the user put it; also when only an earlier report of a drag was answered
+static void a_track_change_leaves_a_move_lms_never_got(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -29.40f);
+	lms_sends(LMS_VOL40);
+	user_set_db(d, -25);                      // reported, never answered
+	advance_ms(6000);
+	lms_sends(LMS_VOL40);                     // the next track
+	CHECK(fabsf(d->db - -25) < 0.01f, "a track change moved the device to %.2f dB", d->db);
+	user_set_db(d, -33.05f);                  // a drag: two reports,
+	user_set_db(d, -28.61f);
+	lms_sends(LMS_VOL33);                     // only the first answered
+	lms_sends(LMS_VOL33);
+	advance_ms(6000);
+	lms_sends(LMS_VOL33);                     // the next track
+	CHECK(fabsf(d->db - -28.61f) < 0.01f, "a track change after a drag moved the device to %.2f dB", d->db);
+	stop();
+}
+
+// pins: after a pause and a resume (LMS fades to 0, then up to its saved level), the device ends
+// exactly where the Mac left it, not at LMS's rounded level
+static void a_resume_ends_where_the_mac_left_the_device(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -29.40f);
+	lms_sends(LMS_VOL40);
+	lms_sends(LMS_VOL40);
+	lms_sends(gain_for_db(-36));              // the pause fade
+	lms_sends(gain_for_db(-50));
+	lms_sends(0);
+	CHECK(d->mute == 1, "control: the pause fade did not mute");
+	lms_sends(0);                             // the resume: 0, then the fade up
+	lms_sends(gain_for_db(-50));
+	lms_sends(gain_for_db(-36));
+	lms_sends(LMS_VOL40);                     // its last step, the saved level
+	CHECK(fabsf(d->db - -29.40f) < 0.01f && d->mute == 0, "the resume ended at %.2f dB (mute %u), not the Mac's -29.40",
+		  d->db, d->mute);
+	stop();
+}
+
+// pins: every LMS level that is not an answer to a report is put on: Material's slider one LMS step
+// away (one 8-bit gain step: a level tolerance would have taken it for an answer), another level, a
+// mute; and back at the level the Mac set, the Mac's exact level
+static void every_other_lms_level_is_put_on(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -29.60f);
+	lms_sends(LMS_VOL40);
+	lms_sends(LMS_VOL41);                     // Material, one step up
+	CHECK(fabsf(d->db - -29.08f) < 0.02f, "Material's 41 was not put on: %.2f dB", d->db);
+	lms_sends(LMS_VOL33);
+	CHECK(fabsf(d->db - -33.06f) < 0.02f, "Material's 33 was not put on: %.2f dB", d->db);
+	lms_sends(0);
+	CHECK(d->mute == 1, "LMS's mute was not put on");
+	lms_sends(LMS_VOL40);                     // Material back to 40
+	CHECK(fabsf(d->db - -29.60f) < 0.01f && d->mute == 0, "back at 40: %.2f dB, mute %u", d->db, d->mute);
+	stop();
+}
+
+// pins: a level LMS put on between a report and its answer clears the reports, so the late answer is
+// put on: device and LMS end at the same level
+static void a_level_put_on_clears_the_reports(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -33.05f);                  // reported: LMS will answer 33
+	lms_sends(LMS_VOL41);                     // Material's level lands first
+	lms_sends(LMS_VOL33);                     // then the answer: LMS is at 33 now
+	CHECK(fabsf(d->db - -33.06f) < 0.02f, "the device stayed at %.2f dB while LMS is at 33", d->db);
+	stop();
+}
+
+// pins: a report LMS never answered is forgotten after ECHO_NS, so Material's slider set later to
+// that level is put on (taken for its answer, it was not heard: the device stayed at -20)
+static void a_report_never_answered_is_forgotten(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -33.05f);                  // reported: LMS would answer 33; the send failed
+	user_set_db(d, -20);                      // and this one too
+	advance_ms(6000);
+	lms_sends(LMS_VOL33);                     // Material's slider, to 33
+	CHECK(fabsf(d->db - -33.06f) < 0.02f, "Material's 33 was not put on: %.2f dB", d->db);
+	stop();
+}
+
+// pins: a level put on when the device opens (_ca_open's pending level) goes through the same rules
+static void a_pending_level_goes_through_the_same_rules(void) {
+	fdev *d = add_speakers();
+	sleep_us_per_s = 1000000;                 // the engine's own monitor stays out of the way
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -29.40f);
+	lms_sends(LMS_VOL40);
+	output.state = OUTPUT_OFF;
+	reopen();                                 // the idle release
+	d->present = false;
+	lms_sends(LMS_VOL40);                     // a stream start while it is away: pending
+	d->present = true;
+	output.state = OUTPUT_STOPPED;
+	unsigned writes = d->vol_writes;
+	reopen();                                 // as the monitor: the pending level
+	CHECK(fabsf(d->db - -29.40f) < 0.01f && d->vol_writes == writes, "the open moved the device to %.2f dB (%u write(s))",
+		  d->db, d->vol_writes - writes);
+	stop();
+}
+
+// pins: at an engine start, LMS's first level (sent at the connect) is not put on when it is the one
+// the device's own level gives: the device stays where the Mac left it
+static void an_engine_start_keeps_the_device_where_it_is(void) {
+	fdev *d = add_speakers();
+	d->db = -29.40f;
+	start(d->uid, "0:0", 0, true, false);
+	unsigned writes = d->vol_writes;
+	lms_sends(LMS_VOL40);                     // the connect
+	lms_sends(LMS_VOL40);                     // the first stream
+	CHECK(fabsf(d->db - -29.40f) < 0.01f && d->vol_writes == writes, "the start moved the device to %.2f dB (%u write(s))",
+		  d->db, d->vol_writes - writes);
+	stop();
+}
+
+// control: a level LMS changed while the engine was down is put on at the start, as before
+static void an_engine_start_puts_on_a_level_lms_changed(void) {
+	fdev *d = add_speakers();
+	d->db = -29.40f;
+	start(d->uid, "0:0", 0, true, false);
+	lms_sends(LMS_VOL33);
+	CHECK(fabsf(d->db - -33.06f) < 0.02f, "LMS's 33 was not put on at the start: %.2f dB", d->db);
+	stop();
+}
+
+// pins: a muted device at the start is not taken as LMS's level: LMS's level unmutes it
+static void an_engine_start_unmutes_a_muted_device(void) {
+	fdev *d = add_speakers();
+	d->db = -29.40f;
+	d->mute = 1;
+	start(d->uid, "0:0", 0, true, false);
+	lms_sends(LMS_VOL40);
+	CHECK(d->mute == 0, "LMS's level left the device muted");
+	stop();
+}
+
+// pins: a device back with a new ID starts afresh: what was known of the old ID is not used
+static void a_device_back_with_a_new_id_starts_afresh(void) {
+	fdev *a = add_speakers(), *b;
+	start(a->uid, "0:0", 0, true, false);
+	user_set_db(a, -29.40f);
+	lms_sends(LMS_VOL40);
+	a->present = false;
+	b = add_speakers();                       // same UID, new ID, at -20 dB as macOS left it
+	default_out = b->id;
+	reopen();
+	lms_sends(LMS_VOL40);                     // the next stream
+	CHECK(fabsf(b->db - -30.10f) < 0.02f, "the new ID is at %.2f dB, not LMS's 40 (-30.10)", b->db);
+	stop();
+}
+
+// pins Simon's fix (2026-10-14: a Mac move while LMS is muted "should unmute LMS and move it the
+// correct position"): with LMS muted the device sits at its minimum, muted; the Mac's unmute key
+// alone is reported as not moved (the agent asks LMS to unmute to its kept volume), a level the user
+// moves as moved (the agent sets LMS to it, which unmutes LMS); a slider that unmutes and moves at
+// once is one report, moved
+static void an_unmute_alone_is_not_a_moved_level(void) {
+	fdev *d = add_speakers();
+	start(d->uid, "0:0", 0, true, false);
+	lms_sends(LMS_VOL40);
+	lms_sends(0);                             // LMS mutes: the device at its minimum, muted
+	CHECK(d->mute == 1, "control: LMS's mute was not put on");
+	advance_ms(600);
+	user_set_mute(d, 0);                      // the Mac's unmute key
+	CHECK(nreports == 1 && !strcmp(reports[0], "lyrionplay:volume -63.50 0 0 0"), "the unmute: %u report(s), '%s'",
+		  nreports, last_report());
+	user_set_db(d, -30);                      // the Mac's slider
+	CHECK(nreports == 2 && !strcmp(reports[1], "lyrionplay:volume -30.00 0 0 1"), "the move: '%s'", last_report());
+	user_set_mute(d, 1);
+	pthread_mutex_lock(&hal);
+	d->mute = 0;                              // the slider moved on a muted device: unmuted and moved
+	d->db = -25;
+	pthread_mutex_unlock(&hal);
+	notify(d->id, kAudioDevicePropertyMute);
+	notify(d->id, kAudioDevicePropertyVolumeScalar);
+	CHECK(nreports == 4 && !strcmp(reports[3], "lyrionplay:volume -25.00 0 0 1"), "unmuted and moved: %u report(s), '%s'",
+		  nreports, last_report());
 	stop();
 }
 
@@ -2770,9 +3235,33 @@ static const struct { const char *name; void (*fn)(void); } tests[] = {
 	{ "a newer level wins over one being applied", newer_level_wins_over_one_being_applied },
 	{ "reports carry what the engine knows of LMS", reports_carry_lms_state },
 	{ "fixed volume leaves the device alone", fixed_volume_leaves_the_device_alone },
+	{ "Fixed ignores LMS's level", fixed_ignores_lms_level },
+	{ "a held level is put on at the start", held_level_put_on_at_the_start },
+	{ "a held level is never moved by LMS", held_level_is_never_moved_by_lms },
+	{ "a held level is put on once per device", held_level_once_per_device },
+	{ "Fixed without a held level leaves the device alone", fixed_without_a_held_level_leaves_the_device_alone },
+	{ "a held level needs Fixed", a_held_level_needs_fixed },
+	{ "Fixed ignores device volume", fixed_ignores_device_volume },
 	{ "own change with a coarse read-back is not reported", own_change_with_a_coarse_read_back_is_not_reported },
 	{ "user change reported once, mute reported", user_change_reported_once_and_mute_reported },
 	{ "linear mode reports nothing", linear_mode_reports_nothing },
+	{ "a stuck dB reading is read through the scalar", a_stuck_db_reading_is_read_through_the_scalar },
+	{ "a working dB reading stays the level", a_working_db_reading_stays_the_level },
+	{ "a DAC with no volume control is never read or reported", a_dac_with_no_volume_control_is_never_read_or_reported },
+	{ "the engine knows LMS's answer to each report", the_engine_knows_lms_answer_to_each_report },
+	{ "LMS's answer to a reported level is not put on", lms_answer_to_a_reported_level_is_not_put_on },
+	{ "a track or album change puts nothing on", a_track_or_album_change_puts_nothing_on },
+	{ "a track change leaves a move LMS never got", a_track_change_leaves_a_move_lms_never_got },
+	{ "a resume ends where the Mac left the device", a_resume_ends_where_the_mac_left_the_device },
+	{ "every other LMS level is put on", every_other_lms_level_is_put_on },
+	{ "a level put on clears the reports", a_level_put_on_clears_the_reports },
+	{ "a report never answered is forgotten", a_report_never_answered_is_forgotten },
+	{ "a pending level goes through the same rules", a_pending_level_goes_through_the_same_rules },
+	{ "an engine start keeps the device where it is", an_engine_start_keeps_the_device_where_it_is },
+	{ "an engine start puts on a level LMS changed", an_engine_start_puts_on_a_level_lms_changed },
+	{ "an engine start unmutes a muted device", an_engine_start_unmutes_a_muted_device },
+	{ "a device back with a new ID starts afresh", a_device_back_with_a_new_id_starts_afresh },
+	{ "an unmute alone is not a moved level", an_unmute_alone_is_not_a_moved_level },
 	{ "exclusive released when the output goes off", exclusive_released_when_the_output_goes_off },
 	{ "device follows the track rate", device_follows_the_track_rate },
 	{ "close while the monitor opens leaves nothing running", close_while_the_monitor_opens_leaves_nothing_running },

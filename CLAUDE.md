@@ -8,8 +8,11 @@ It is built for macOS:
   is bit-perfect;
 - DSD as DoP;
 - LMS replay gain;
-- LMS volume, chosen per device: the device's own volume (the Mac's volume or the DAC's
-  hardware volume, both ways), software, or Fixed at 100% on a DAC (LyrionPlay sets LMS's pref).
+- LMS volume, chosen per player: the device's own volume (the Mac's volume or the DAC's
+  hardware volume, both ways), software, or Fixed at 100% on a DAC (LyrionPlay sets LMS's pref;
+  a DAC whose volume the Mac sets holds the level LMS had, `FIXED HOLDS THE LMS VOLUME`);
+- one player per output (`ONE PLAYER PER DAC`, built 2026-10-12): *Follow the macOS output*, and
+  one for each other device, each its own squeezelite and its own LMS player.
 
 It runs as a background launchd agent, switched on and off from a menu bar app, signed with
 the hardened runtime.
@@ -19,8 +22,8 @@ Three parts in one app bundle:
 | part | language | licence | job |
 |---|---|---|---|
 | `engine/` | C | GPLv3 | squeezelite fork plus the new `output_coreaudio.c` |
-| agent (`app/Sources/Agent`) | Swift | MIT | probes devices, builds the engine's arguments, supervises the engine |
-| menu bar app (`app/Sources/App`) | Swift | MIT | On/Off, device picker, status, settings |
+| agent (`app/Sources/Agent`) | Swift | MIT | probes devices, builds each player's engine arguments, supervises one engine per player that is on |
+| menu bar app (`app/Sources/App`) | Swift | MIT | On/Off, each player's status, the player list (switch + cog) and settings |
 
 The approved plan, with phases and verification, is `~/.claude/plans/whimsical-bouncing-dawn.md`.
 Started 2026-10-09 under a working title. Named **LyrionPlay** by Simon on 2026-10-09 ("change it
@@ -121,6 +124,9 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "the agent's Local Network approval covers the programs it starts" | **WRONG** (§A3): each executable asks once | `EACH EXECUTABLE ASKS ONCE` |
 | "LMS can be told the DAC's rate list" | **WRONG** (§A3) | `NO RATE LIST` |
 | `set_volume` with LMS fixed volume (`output.volume_fixed`) leaves the device level alone | by design; differs from `output_alsa.c` `-V` | `FIXED VOLUME LEAVES THE DEVICE ALONE` |
+| Fixed on a DAC with a volume control holding LMS's saved volume, not 0 dB as upstream; Material showing fixed at 100 meanwhile; `-a <f>:<e>:<x>:<h>`, `ca.fixed`, `ca.hold`, `put_held_level`, `HeldVolume`, `PlayerSettings.heldVolume`, `chooseVolume`; Fixed ignoring LMS's level in the engine whatever `adjust` says | **DECIDED by Simon 2026-10-12, BUILT the same day, INSTALLED as 0.4.0**, NOT live-tested (§A2) | `FIXED HOLDS THE LMS VOLUME` |
+| settings.json from 0.3.x (no `version` 2) moved to settings-0.3.json and replaced by the defaults | **BY DESIGN, Simon 2026-10-12** ("no migration needed"; `Settings.setAsideOlder`) | `ONE PLAYER PER DAC` |
+| 0.3.x's `mac` and `player-name` taken over by *Follow the macOS output* (`PlayerIdentity.adoptOldPlayer`, `Paths.oldMAC`/`oldPlayerName`), so the 0.3.x LMS player carries on; device players are new LMS players | **DECIDED by Simon 2026-10-12** ("Keep the old ID"); my earlier row here called new MACs for every player "BY DESIGN, Simon" from "no migration needed", which was about SETTINGS: WRONG, corrected | `THE OLD PLAYER CARRIES ON` |
 | "Fixed at 100%" per DAC; `VolumeMode.fixed`, `FixedVolumeSync` (`checked`/`recordRefusal`, was `sent`), `syncFixedVolume`, `playerpref digitalVolumeControl`, `PlayerState.digitalVolumeControl`; LyrionPlay putting back a fixed/variable setting made in LMS or Material | **BUILT 2026-10-11, DECIDED by Simon** ("LyrionPlay, per DAC"): LyrionPlay OWNS the pref, both ways; **INSTALLED as 0.3.0** 2026-10-11, the put-back in 0.3.1; the switch BOTH WAYS **VERIFIED LIVE 2026-10-12** on the DragonFly (agent.log + LMS); still owed: a change made in Material put back, the FiiO on 0.3.1, the DragonFly's level after a switch (§B) | `FIXED AT 100% PER DAC` |
 | "a `digitalVolumeControl` set from outside takes effect only at the next track" | **WRONG** (§A3): LMS sends an audg at once | `SETTING DVC SENDS AN AUDG AT ONCE` |
 | "changing `digitalVolumeControl` leaves the player's volume alone"; `volumeRestore`, LMS volume 0 after a switch back from Fixed; a user's slider move between `volumeRestore`'s two reads undone | **WRONG** (§A3): LMS's hook saves a faded (temporary) volume; the slider-move window ACCEPTED (§A2 `FIXED AT 100% PER DAC`, "Volume put back"; re-reported by /code-review 2026-10-12 (4)); FOUND LIVE 2026-10-11 (50 -> 0), FIXED (put back), **INSTALLED as 0.3.1, VERIFIED LIVE 2026-10-12** both ways on the DragonFly (§B) | `THE DVC HOOK SAVES A FADED VOLUME` |
@@ -145,7 +151,7 @@ disproven belief or a cleared finding that is not written here will be re-report
 | the regression suite: `scripts/test.sh`, `engine/tests/test_output_coreaudio.c` (fake HAL), `scripts/tests/test_install.sh` (shims) | **BUILT 2026-10-10** at Simon's request ("we need a regression suite"); `build.sh` stops on a failure | `REGRESSION SUITE` |
 | inline review after 0.2.2: `apply_latest` with a stale device ID, `_ca_open` from two threads, hog re-taken on each retry, `OutputFollow`, `scripts/test.sh` on a fresh checkout; stale doc refs (`followDeferred`, `pushVolume`, `LyrionPlay-0.1.0` paths) | **CLOSED, NO code findings; doc refs FIXED** (§C) | `INLINE REVIEW AFTER 0.2.2` |
 | player model name; `EngineArguments.modelName`, `-M`, `ModelName`, Material player icon; the model name differing from the app name (`SqueezeLiteMac` vs `LyrionPlay`), "inconsistent branding" | **BY DESIGN, NOT A FINDING — DECIDED + VERIFIED 2026-10-10** (Simon: "Logo works"; "this isnt a bug or an issue its as planned for the logo to work"): `SqueezeLiteMac`, so Material shows its Apple icon; LMS `model` stays `squeezelite`. Never report the mismatch or propose `LyrionPlay` back | `MODEL NAME IS SqueezeLiteMac` |
-| several DACs as several LMS players, each with its own MAC and name | **PARKED 2026-10-10** (Simon's answers logged, not started): not a gap, a scope decision | `ONE PLAYER PER DAC` |
+| several DACs as several LMS players, each with its own MAC and name; ONE squeezelite for every output, so a change of output inherits LMS's volume and fixed setting; `PlayerSlot`, `EnginePlan`, `PlayerList`, `Settings.players`, `followDevice`, `Paths.player`/`slug`, `PlayerStatus` | **BUILT 2026-10-12** to the approved plan (`~/.claude/plans/immutable-purring-hoare.md`; Simon: "each DAC or output device needs its own Squeezlite instance"); suite PASS; **INSTALLED as 0.4.0** 2026-10-12 19:57Z, NOT live-tested (§B) | `ONE PLAYER PER DAC` |
 | "LMS limits DSD to the rates the player takes"; dsf/dff in `convert.conf` | **WRONG** (§A3): passthrough at any rate | `DSD IS PASSTHROUGH AT ANY RATE` |
 | "LMS applies replay gain"; `canDoReplayGain`, `next_replay_gain` | **WRONG** (§A3): the player applies it, from `strm` | `THE PLAYER APPLIES REPLAY GAIN` |
 | "bit-perfect needs volume-code changes"; `_apply_gain`, `FIXED_ONE` | **WRONG** (§A3): squeezelite already skips the gain at unity and for DoP/DSD | `BIT-PERFECT IS ALREADY HANDLED` |
@@ -154,7 +160,7 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "Local Network approval is lost on every rebuild" | **WRONG** (§A3): it is tied to the certificate leaf | `APPROVAL SURVIVES A REBUILD` |
 | "BSD sockets are blocked under launchd" (Apple FB16131937) | **NOT REPRODUCED** (§A3) on macOS 26.7.1 | `FB16131937 NOT REPRODUCED` |
 | "LMS sends one volume on resume"; `fade_volume`, `_Resume`, `audg` | **WRONG** (§A3): an `audg` every 0.05 s while it fades in | `RESUME IS ONE AUDG` |
-| "LMS sends the volume as soon as a player connects" | **WRONG** (§A3): only at a track start or a `mixer` command | `LMS SENDS VOLUME ON CONNECT` |
+| "LMS sends the volume as soon as a player connects" | was logged WRONG; that verdict is itself **WRONG, MEASURED 2026-10-14**: LMS sends its saved level ~5 ms after every connect AND reconnect (§A3) | `LMS SENDS VOLUME ON CONNECT` |
 | "a universal binary depends on Rosetta" | **WRONG** (§A3) | `UNIVERSAL IS NOT ROSETTA` |
 | /code-review after 0.2.2 (2026-10-10): `ServerChoice`/`refreshLMS` (a check begun before a server change), `monitor_opening`/`output_close_coreaudio` (close while the monitor opens); `rotate` comment; status.json every 2 s, blocking `LMSDiscovery.find`, `menuLog` duplicating `Log` | **1, 3, 4 VERIFIED + FIXED, each pinned by a test that FAILED on the old code; 1 and 3 VERIFIED LIVE (0.2.5); 7 prose FIXED; 6, 8, 9 CLEARED** (§C); 2 and 5 §A3 | `CODE-REVIEW AFTER 0.2.2` |
 | "LMS mute leaves a `-V` DAC audible at its minimum"; `apply_volume` with no `kAudioDevicePropertyMute` | **NO WRITER** (§A3): every device here with a volume control has a mute | `MUTE HAS A WRITER ONLY WITHOUT A MUTE CONTROL` |
@@ -184,6 +190,7 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "a `playerpref` set answers no result, so `call` returns nil for it"; "status's `mixer volume` is the temporary (faded) volume" | **WRONG** (§A3, measured / LMS 9.1 source 2026-10-12) | `A SET ANSWERS AN EMPTY RESULT` |
 | "the engine ignores SIGPIPE (`stream.c`), so its stdout lines (`lyrionplay:format`, `lyrionplay:volume`) are harmless after the agent dies" | **WRONG** (§A3, source 2026-10-12): an orphan dies at its next line; not a defect | `AN ORPHAN DIES AT ITS NEXT REPORT` |
 | "a mid-play reopen for a rate change makes `ca_report_format` print a stray `lyrionplay:format idle`" (`_ca_open` clears `ca.dev` and unlocks) | **WRONG** (§A3, source 2026-10-12, /code-review 2026-10-12 (4)) | `NO STRAY IDLE ON A REOPEN` |
+| "LMS fixes the level at the volume set before switching to fixed"; `digitalVolumeControl` 0, `audg` `adjust`, `process_audg`, `FIXED_ONE`, the DragonFly's level in Fixed varying | **WRONG** (§A3, LMS 9.1 + squeezelite source, 2026-10-12): fixed is a flag, the player plays at 100% | `LMS FIXED IS A FLAG, NOT A LEVEL` |
 | "a probe sees no volume control on a device another process holds exclusively"; `settable()`, `DeviceCaps.probe` / `squeezelite -l` while the engine holds the DAC | **WRONG** (§A3, measured on the DragonFly 2026-10-12) | `A HOG DOES NOT HIDE THE VOLUME CONTROL` |
 | /code-review 2026-10-12 (3) of 0.2.10-0.3.6: a reconcile probe while the engine holds the DAC turning a saved "Device's own volume" into Software (`options(for:)`, `-V`); `PlayerModel.save` writing the corrected choice for every listed device; `formats[nformats - 1]` in the format tests' messages; `FixedVolumeSync.sent` (now `recordRefusal`); `offered(by:)`/`offered(on:)` (now `nearestOffered(on:)`) | **1, 2 DISPROVEN 2026-10-12** (Simon: "verify 1 & 2 hold up under real world tests"): the hold does not hide the volume control (§A3), so neither has a writer; **3, 4, 5 VERIFIED + FIXED**; suite PASS; **INSTALLED as 0.3.7** 2026-10-12 10:53Z (§C) | `CODE-REVIEW 2026-10-12 (3)` |
 | docs pass of 0.3.7: README.md, INSTALL.md, NOTICES.txt, engine/UPSTREAM.md, the pages, build.sh's header, this file's overview/layout/install log; full licence texts of the bundled libraries not in the app | **DONE 2026-10-12** (Simon: "do a pass on all docs to ensure nothings missing or reported incorrecly"); UPSTREAM.md VERIFIED exact against the pinned archive; the licence texts BUILT (Simon: "yes"), INSTALLED as 0.3.10 (§C) | `DOCS PASS 2026-10-12` |
@@ -191,6 +198,17 @@ disproven belief or a cleared finding that is not written here will be re-report
 | /code-review 2026-10-12 (4) of 0.2.10-0.3.11: the codec-sources zip copied unchecked (`build.sh --release`, `fetch`, `.built-*` stamps); `volumeRestore` undoing a slider move; `DeviceCaps.dsd` "22.5 MHz" / "3.0 MHz" (`dsdLabels`); the `fixedVolume` comment's `sent`; the soxr licence loop | **ALL 5 VERIFIED 2026-10-12** (Simon: "verify all 5"): 1, 4, 5 FIXED (Simon: "fix them"); 2 a REPEAT (accepted, §A2); 3 FIXED (Simon: other users' DACs reach it): the full rate, "DSD64 (2.8224 MHz)"; **INSTALLED as 0.3.12** (§C) | `CODE-REVIEW 2026-10-12 (4)` |
 | /code-review 2026-10-12 (5) of 0.2.10-0.3.12: `build-deps.sh \| tail -15` hiding a failed codec build (also `make-icon`'s `\| grep … \|\| true`); `--release` writing the app zip before the codec-source checks (`check_codec_sources`, `codec_pins`); `ca_report_format`'s `!rate` guard unpinned, and its two `fflush(stdout)` (`CHECK_FLUSHED`, `fake_fflush`); the layout line's one zip; `volumeAfter`'s dead `?? "?"` | **ALL 5 VERIFIED + FIXED 2026-10-12** (Simon: "fix them all ensure no regressions check all carriers for the core audio"); a 14-mutant sweep of the engine code new since the last push: 14 of 14 killed after the flush pin; build.sh new vs old in an APFS clone; **INSTALLED as 0.3.13** (§C) | `CODE-REVIEW 2026-10-12 (5)` |
 | /code-review 2026-10-12 (6) of 0.2.10-0.3.13: a good `PlayerModel.save` wiping a switch-on error in `lastError`; the release stepper at 0 (`idleSeconds`, no `-C`) and the Exclusive caption; build.sh's "before anything is built" comment + the Layout line; the "every ~100 ms" report cadence; cleared: `digital_volume_control` in `status`, `-f` stderr only, `codec_pins` on macOS awk/shasum, the pages vs their `.md` | **1-3 VERIFIED + FIXED 2026-10-12** (Simon: "fix those"); **4 DISMISSED by Simon** ("I dont care about the lag", `THE FORMAT CHANGES WHEN OUTPUT HITS THE DAC`); suite PASS; **INSTALLED as 0.3.14** with the docs; fixes 1 and 2 VERIFIED LIVE by Simon (1 staged) (§C) | `CODE-REVIEW 2026-10-12 (6)` |
+| /code-review 2026-10-12 (7) of 0.2.10-0.3.14: a `-V` DAC switched to Fixed or Software while paused, left muted at `db_min` by LMS's pause fade (`EngineArguments` `-V`, `apply_volume`'s `kAudioDevicePropertyMute`, `fixedVolumeNeverTouchesTheDevice`); the idle release and the exit leaving that mute (`output_close_coreaudio`, `unhog`); a failed save then a good one losing a switch-on error (`lastError`, `saveError`, `clearSaveError`); `nearestOffered(on:)` repeating `DeviceOptions.defaults(for:)`'s volume default | **1 CONFIRMED by Simon** ("1 does happen"); two fixes BUILT, then REVERTED by Simon the same day (a put-back at exit; Fixed putting the DAC at 100%): the cause is one LMS player for every output, so the requirement moved to `ONE PLAYER PER DAC` (§B `FIXED SET UP WHILE PAUSED`); Software's case a KNOWN LIMITATION (§A2 `SOFTWARE AFTER A PAUSED -V DAC`); **3 DISMISSED** (§A2 `SAVE AND CLOSE`); 4 not answered; tree back at 15fa252 (§C) | `CODE-REVIEW 2026-10-12 (7)` |
+| the one-player-per-output build and the held Fixed (engine `-a` fields, PlayerCore v2, agent `PlayerSlot`, app player list + cog), its tests, mutants and matrix diff | **BUILT 2026-10-12**, suite PASS, **INSTALLED as 0.4.0**, live checks owed (§C) | `PLAYERS AND FIXED BUILT 2026-10-12` |
+| Mac slider -> Material lag under *Follow the macOS output*; a Bluetooth headset's slider never reaching LMS (`volume_listener`, `VOLUME_SETTLE_NS`, `apply_volume`, `LatestValueSender`) | **reported by Simon 2026-10-14, CLOSED the same day**: the lag's cause MEASURED (LMS's echo put back on the device + the settle window) and FIXED, INSTALLED as 0.4.2, VERIFIED LIVE (§C `THE DEVICE STAYS WHERE THE MAC PUT IT`; the first fix, `LMS'S ECHO IS NOT PUT ON`, rejected); the lag left is LMS's status debounce, a faster-following push pace DECLINED by Simon ("leave it and close this"): NOT A FINDING; the headset's cause MEASURED and FIXED, INSTALLED as 0.4.1 (§C `A STUCK DB PROPERTY FIXED`) | `MAC SLIDER LAG AND THE BLUETOOTH HEADSET` |
+| `lms_echo`, `echo_reported`, `echo_forget`, `ECHO_DB` (1.1 dB): an audg within 1.1 dB of a reported level skipped | **BUILT then REJECTED by Simon 2026-10-14** (a Material nudge within 5 s not heard), **REPLACED in the tree** by `THE DEVICE STAYS WHERE THE MAC PUT IT`; never built into the app (§C) | `LMS'S ECHO IS NOT PUT ON` |
+| a Mac level move while LMS is muted; `VolumeReport.levelMoved`, the report's `<moved>` field, `VolumePush` (`mixer muting 0` only for an unmute alone); LMS's fade-out after a Mac mute unmuting the device per step | the move **CONFIRMED + FIXED by Simon's decision 2026-10-14, INSTALLED as 0.4.2, VERIFIED LIVE** ("all works"); the fade-out **ACCEPTED by Simon** (not a finding) (§C, §B) | `A MAC MOVE UNMUTES LMS AT ITS LEVEL` |
+| `put_lms_level`, `lv` (`lv_for`, `lv_reported`, pair, held, fresh), `lms_gain`, `agent_volume`, `restore_pair`, `ECHO_NS`; LMS's answer to a report recognised by its exact gain; a level LMS sends again (connect, stream start, twin) not put on; a resume ending on the Mac's exact scalars; the first level at an engine start taken as the device is | **DECIDED by Simon 2026-10-14** ("yes" to the design, after "verify this will work with out any other issues or volume snapping to another volume at track or album change"), **BUILT** the same day, suite PASS, **INSTALLED as 0.4.2, VERIFIED LIVE by Simon** ("all works"); a Mac -> Material lag remains (§B) (§C) | `THE DEVICE STAYS WHERE THE MAC PUT IT` |
+| `read_device_db`'s stuck rule (`scalar_to_db`; a dB reading at the top of its range with the scalar below 1.0 read through ScalarToDecibels); the fake HAL's `stuck_db`, `chan_volume`, `curved_conversion`, serial `notify` | **BUILT 2026-10-14** (Simon: "okay check over all areas this would hit and be sure to doument thoroughly"); **INSTALLED as 0.4.1**, VERIFIED LIVE by Simon the same day ("it works", with the lag: §C `LMS'S ECHO IS NOT PUT ON`) (§C) | `A STUCK DB PROPERTY FIXED` |
+| "the HAL's dB property always follows the volume"; "ScalarToDecibels equals the dB property" (`read_device_db`, `kAudioDevicePropertyVolumeDecibels`, `kAudioDevicePropertyVolumeScalarToDecibels`) | **WRONG, both** (§A3, measured 2026-10-14) | `A DB PROPERTY CAN BE STUCK` |
+| "a `mixer volume` reaches Material at once"; `statusQuery_filter`, `LatestValueSender(interval: 0.15)`, Material standing still during a Mac drag | **WRONG** (§A3, measured 2026-10-14): LMS debounces status 0.3 s per volume change, restarted by each; ~0.5 s per change is LMS's floor. A 350 ms push pace (Material follows a drag) **DECLINED by Simon 2026-10-14**: the remaining lag is NOT A FINDING | `LMS DELAYS STATUS FOR A VOLUME CHANGE` |
+| a player switched to Fixed inside a sync group not shown as fixed in Material until regrouped | **UNVERIFIED, stood down by Simon 2026-10-14** (§B) | `SYNC GROUP: FIXED NOT SHOWN IN MATERIAL` |
+| switching *Device's own volume* to *Software* while paused leaves a DAC with a volume control muted at its minimum | **KNOWN LIMITATION, NOT FIXING — Simon 2026-10-12** (§A2) | `SOFTWARE AFTER A PAUSED -V DAC` |
 
 ### HOW TO LOG A VERDICT so the next round finds it
 Every new decision goes in §A2 (declined or by design), §A3 (a belief a measurement killed), §B
@@ -310,6 +328,10 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
     - nothing is reported while LMS volume is fixed, or in -X (linear) mode;
     - watching starts at init, from the device's current level, because LMS sends a volume
       only when a track starts.
+  - **Since `LMS'S ECHO IS NOT PUT ON` (2026-10-14, in tree):** LMS's answer to a reported level
+    (two audgs within 1.1 dB of it) is not put back on the device.
+  - **Since `ONE PLAYER PER DAC` (2026-10-12):** all of this is per player. Each engine reports on its
+    own stdout; the agent's `PlayerSlot` has its own `LatestValueSender`, MAC and `FixedVolumeSync`.
   - **Agent:**
     - `deviceVolumeChanged` hands each report to a `LatestValueSender`: one push in flight at a
       time, at most one start per 150 ms, the latest level winning (it used to start a detached
@@ -453,6 +475,39 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
       agent 75372 "agent started: LyrionPlay 0.3.14 (202610121614)" (the first 0.3.14 agent), engine on the
       DragonFly, "LMS: using Simons Music"; LMS: connected, stopped, volume 35, `digital_volume_control` 1,
       queue 10 tracks. Copy and backups deleted.
+    - **0.4.0** (Simon: "installl it", "0.4.0" to version up, "Keep the old ID", 2026-10-12): `ONE PLAYER
+      PER DAC`, `FIXED HOLDS THE LMS VOLUME`, device players named "<Mac's name> <device's name>", and `THE
+      OLD PLAYER CARRIES ON`. prodmac46 checked first: PAUSED, volume 22, 10 tracks (the restart stops a
+      paused player, as before). `bump-version.sh minor`; `build.sh --install`, suite PASS inside it (engine
+      output 52/52, swift 90 in 21 suites, install.sh 3/3; the one Swift warning the known
+      `SendableClosureCaptures`). INSTALLED 19:57Z: install.sh "version 0.4.0 (was 0.3.14)", "stopped the old
+      player". agent.log: "agent started: LyrionPlay 0.4.0 (202610122056)", "settings from an older version
+      moved to settings-0.3.json; starting with the defaults", "prodmac46 carries on as the earlier
+      version's player 96:57:54:14:bd:87", engine of prodmac46 on the DragonFly (the macOS output) with
+      `-N …/players/follow/name -f …/engine-follow.log -a 0:0 -C 30 -V`, "LMS: using Simons Music". LMS:
+      ONE SqueezeLiteMac player, prodmac46 `96:57:54:14:bd:87`, connected, stopped, volume 22,
+      `digital_volume_control` 1, queue 10 tracks. One engine running. `players/follow/` holds mac, name
+      ("prodmac46"), engine.pid. NOT live-tested: everything in §C's live list.
+    - **0.4.1** (Simon: "build and install", "0.4.1" to version up, 2026-10-14): `A STUCK DB PROPERTY
+      FIXED` (the engine's `read_device_db`), INSTALL.md's two volume lines. Both players checked first:
+      stopped (prodmac46 51, the DragonFly's player 13). `bump-version.sh patch`; `build.sh --install`,
+      suite PASS inside it (engine output 55/55, swift 90 in 21 suites, install.sh 3/3). INSTALLED
+      12:54Z: install.sh "version 0.4.1 (was 0.4.0)", "stopped the old player"; agent.log "agent started:
+      LyrionPlay 0.4.1 (202610141354)", engines of the DragonFly's player and of prodmac46 (Follow, on
+      the Melomania P100), "LMS: using Simons Music". LMS after: both connected, stopped, volumes 51 and
+      13, `digital_volume_control` 1, queues 7 tracks, as before.
+    - **0.4.2** (Simon: "build and install", "0.4.2" to version up, 2026-10-14): `THE DEVICE STAYS WHERE THE
+      MAC PUT IT`, `A MAC MOVE UNMUTES LMS AT ITS LEVEL`, INSTALL.md's two volume lines. Checked first:
+      prodmac46 the only LyrionPlay player connected, stopped, volume 48, 7 tracks (the DragonFly's player
+      not connected). `bump-version.sh patch`; `build.sh --install`, suite PASS inside it (engine output
+      69/69 with the matrix, swift 92 in 21 suites, install.sh 3/3; build warnings the same 7 lines as
+      0.4.1's). INSTALLED 20:23Z: install.sh "version 0.4.2 (was 0.4.1)", "stopped the old player";
+      agent.log "agent started: LyrionPlay 0.4.2 (202610142122)", engine of prodmac46 on the MacBook Pro
+      Speakers (`-V`, `-C 10`), "LMS: using Simons Music". LMS after: connected, stopped, volume 48,
+      `digital_volume_control` 1, 7 tracks. Speakers read after (read-only `halread`): -25.89 dB, mute off:
+      LMS 48's own level (gain 3328), not the -25.64 dB the Mac last reported (20:11:27Z, on 0.4.1). Most
+      likely 0.4.1 put LMS's answer on right after that report (the defect fixed here), and 0.4.2's start
+      took the device as it was (its level gives 48); this read cannot tell the two apart. NOT live-tested.
 - **APPLE SILICON ONLY — Simon, 2026-10-09.** arm64 only, macOS 14+. No universal builds.
 - **NO VIRTUAL AUDIO DRIVERS — Simon, 2026-10-09.**
   - Simon: "we dont need blackhole it messes up things last time i installed it and was hard to
@@ -490,6 +545,40 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
     volume.
   - Fixed means "the player does no volume", so the listener's level stays where it was.
   - Since 2026-10-11 the app can set LMS's fixed mode itself, per device: `FIXED AT 100% PER DAC`.
+  - Superseded for the app's *Fixed* (2026-10-12, `FIXED HOLDS THE LMS VOLUME`): Fixed now runs with
+    `-a <f>:<e>:1[:<dB>]`, where the engine ignores LMS's level itself and holds a level on a DAC
+    whose volume the Mac sets. This entry still describes `-V` with LMS's fixed flag set from
+    outside (Material), before the agent puts it back.
+- **FIXED HOLDS THE LMS VOLUME — DECIDED by Simon 2026-10-12, BUILT in tree the same day, NOT installed**
+  (§C `PLAYERS AND FIXED BUILT 2026-10-12`) (Simon: "Hold the LMS
+  volume. This needs to be done properly no fudges this needs to be stable and do exactly what is
+  planned"). On a DAC whose volume the Mac sets (the DragonFly, no knob), switching to Fixed puts the
+  DAC's own volume at the level of LMS's SAVED volume for the player at that moment (17 -> -48.8 dB,
+  the same curve as *Device's own volume*), unmuted, and keeps it there, whether the player was
+  playing or paused (`FIXED SET UP WHILE PAUSED`) and after the DAC is plugged back in. Chosen over
+  100% (what LMS's label and squeezelite do, §A3 `LMS FIXED IS A FLAG, NOT A LEVEL`): it is what
+  Simon expects from "set the volume to the limit I want then chnage the settings to fixed", and what
+  0.3.14 already does when the switch is made while playing. Known and accepted with it: Material
+  shows the player fixed at 100 while the DAC sits at the held level; changing the held level means
+  setting it again. A DAC with no volume control (the FiiO) is unchanged: its knob sets the level.
+  **ONLY on a device with a detected volume control** (Simon, same day: "this is only for devices with
+  volume control detected. In all other cases its 100% fixed just want to ensuire that dacw with no
+  volume do not have software volume applied unless its on in the settings"). Every other Fixed is
+  100%, with NO software volume. Today the engine meets that only through LMS's flag: a Fixed engine
+  (no `-V`) puts the audg's gain on the samples whenever `adjust` is 1 (`process_audg`, slimproto.c:450;
+  `set_volume`), i.e. any audg LMS sends while its setting still says "adjust": after an engine start
+  before the agent sets fixed (~6 s in agent.log 17:41:32-38Z, if LMS sends one then), while the agent
+  cannot reach LMS, or after a change in Material until the agent puts it back. The plan must make
+  the engine itself ignore LMS's level in Fixed, whatever LMS sends.
+  **As built:** the cog page reads `mixer volume ?` for that player when Fixed is chosen
+  (`PlayerModel.chooseVolume`, `HeldVolume.from`: a muted player's negative volume gives its level; 0
+  or no answer refuses) and shows it in the caption; Save refuses a Fixed with no level. The level is
+  saved in `PlayerSettings.heldVolume`; the agent passes `-a 0:<e>:1:<dB>` (`LMSVolume.dB`, 17 =
+  -48.84). The engine (`ca.fixed`) keeps the samples at `FIXED_ONE` from init and on every audg,
+  ignores `-V`, and (`ca.hold`) puts the level on, unmuted, at init and at the first open of each
+  device ID (`put_held_level`, `ca.hold_dev`), never moved by LMS. Fixed without a held level
+  (`-a 0:<e>:1`) leaves the device alone. Replay gain, an LMS setting of its own, still applies.
+  Do NOT report "Fixed differs from upstream's 0 dB" once built.
 - **FIXED AT 100% PER DAC — BUILT 2026-10-11** (Simon: "is it possible to add a fixed volume mode
   that would feed back to LMS to set the player to 100% fixed … save that setting per dac"; then
   "LyrionPlay, per DAC" for who owns the pref). INSTALLED as 0.3.0 2026-10-11, the put-back as 0.3.1; the
@@ -628,6 +717,17 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
   `lastError` still carries it to the menu panel as before (`lastError` also holds switch-on errors, which
   do not belong in Settings). INSTALLED as 0.3.5, VERIFIED LIVE by Simon 2026-10-12 ("works"); the
   failed-save message not seen (not staged: it would mean making Simon's settings file unwritable).
+  A failed save followed by a good one loses a switch-on error (the failed save overwrites `lastError`,
+  then the good save's `clearSaveError` clears the matching message): **DISMISSED by Simon 2026-10-12**,
+  `CODE-REVIEW 2026-10-12 (7)` finding 3 ("too theoritcal if it shows up in use will fix"). It needs an
+  unwritable settings file, never seen. Re-raise only if it shows up in use.
+- **SOFTWARE AFTER A PAUSED -V DAC — KNOWN LIMITATION, NOT FIXING, Simon 2026-10-12** ("just leave
+  software its a known limitation I am not fixing it and should be marked as this"; `CODE-REVIEW
+  2026-10-12 (7)`). A switch from *Device's own volume* to *Software* made while LMS is paused leaves a
+  DAC with a volume control (the DragonFly) muted at its minimum, where LMS's pause fade put it
+  (`apply_volume` mutes at gain 0). Software never touches the device's own volume, so it plays into
+  that until the device's volume is raised (Audio MIDI Setup, or a switch back). Do not report it, and
+  do not propose setting the DAC's volume for Software.
 - **THE BOUNDARY AND THE REOPEN FLAG — by design, 2026-10-09.** Two places where the CoreAudio
   path deliberately differs from `output_pa.c`:
   - **The boundary.** `pa_callback` keeps calling `_output_frames` after a track start that
@@ -748,12 +848,15 @@ evidence it cites.
 | NO SWIFTUI MACROS WITHOUT XCODE: SwiftUI builds fine with the Command Line Tools | **PARTLY WRONG** (2026-10-09) | `@State` failed: "plugin for module 'SwiftUIMacros' not found". The CLT plugin folder (`/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins`) holds only `libObservationMacros`, `libSwiftMacros` and `testing`. `@Observable` and `@Bindable` work; `@State` (a macro in the macOS 26 SDK) does not. The app keeps all state in an `@Observable` `PlayerModel.shared`. Installing Xcode would lift this; it is not needed. |
 | A SHORTCUT QUIT THE MENU: playback made the menu bar icon disappear | **WRONG** (measured 2026-10-09) | Simon: the icon went "when I started to play". The unified log shows the menu app's panel opened at 22:47:20 over VS Code and kept the keyboard (WindowServer "outbound to keyThief") while VS Code was in front. At 22:48:51 a modifier plus a key reached it, AppKit ran `performKeyEquivalent:`, and launchservicesd logged `QUITTING` 50 ms later: an orderly quit, with no crash report. The first track started 16 s after that, at 22:49:07. The agent and engine never stopped. Only ⌘Q terminates a default SwiftUI app, so the key was almost certainly ⌘Q, though the log does not name it. Fix: `CommandGroup(replacing: .appTermination) {}` removes ⌘Q, and `applicationShouldTerminateAfterLastWindowClosed` returns false. Any quit not from Quit Menu is logged with its event to `~/Library/Logs/LyrionPlay/menu.log` and is never refused, since logout needs it. The ⌘Q removal is UNVERIFIED by keypress (no Accessibility access to send one). |
 | READ-BACK IS NOT THE LEVEL SET: a device reports the dB the engine just set, so comparing with the requested level tells the user's changes from ours | **WRONG** (measured 2026-10-10) | The MacBook Pro speakers move in coarse steps. With the record set to the REQUESTED dB, `mixer volume 50` produced 4 reports (−22.73, −21.85, −21.07, −20.37 dB), and LMS crept to 57: each read-back was mistaken for a user change and pushed back. Fix: `apply_volume` records the read-back after setting, and opens a 500 ms window (`VOLUME_SETTLE_NS`) in which the listener only records. Re-measured: 50 stayed 50, 62 stayed 62, 0 reports. (A clean set-versus-read-back table was NOT obtained: the probe ran with sync live, so the engine overwrote its readings.) |
-| UNMUTE IS NOT A LEVEL: when the Mac unmutes, sending LMS the device's level restores the volume | **WRONG** (measured 2026-10-10) | For squeezelite, LMS fades the level down over 0.3125 s (`SUPER::fade_volume`; `SqueezePlay::fade_volume` skips the fade only for baby/fab4), then mutes with gain 0. The engine then holds the device at its minimum, −63.5 dB. Unmuting sent `mixer volume 7`. Fix: `pushVolume` (now `VolumePush`) reads `mixer volume ?` (LMS stores a muted volume as negative), and sends `mixer muting 0` when it is negative. Re-measured: back to 42. |
+| UNMUTE IS NOT A LEVEL: when the Mac unmutes, sending LMS the device's level restores the volume | **WRONG** (measured 2026-10-10) | For squeezelite, LMS fades the level down over 0.3125 s (`SUPER::fade_volume`; `SqueezePlay::fade_volume` skips the fade only for baby/fab4), then mutes with gain 0. The engine then holds the device at its minimum, −63.5 dB. Unmuting sent `mixer volume 7`. Fix: `pushVolume` (now `VolumePush`) reads `mixer volume ?` (LMS stores a muted volume as negative), and sends `mixer muting 0` when it is negative. Re-measured: back to 42. Since 2026-10-14 only for the unmute key ALONE; a level moved while LMS is muted goes as `mixer volume N`, which unmutes LMS at N (`A MAC MOVE UNMUTES LMS AT ITS LEVEL`). |
 | RESUME IS ONE AUDG: LMS sends a single volume when playback resumes | **WRONG** (LMS 9.1 source, 2026-10-10) | `StreamingController::_Resume` calls `fade_volume(fadeIn or FADEVOLUME)`; `SqueezePlay::fade_volume` skips the fade only for baby/fab4, so squeezelite gets `Player::fade_volume`: an `audg` every 0.05 s from 0 up to the volume. After a pause longer than `-C` (30 s) the device is closed, so these arrive while the monitor is opening it. |
-| LMS SENDS VOLUME ON CONNECT: the player gets LMS's volume as soon as it connects | **WRONG** (LMS 9.1 source, 2026-10-10) | `Squeezebox::play` re-sends it ("make sure volume is set") when each track starts, and `mixer` commands send it. A freshly connected player has no `audg` until then, hence the engine watches from init. |
+| LMS SENDS VOLUME ON CONNECT: the player gets LMS's volume as soon as it connects | **TRUE — the 2026-10-10 verdict "WRONG" was itself wrong** (LMS 9.1 source + measured on the rig, 2026-10-14) | `Slim::Networking::Slimproto` hello handler, every HELO not needing an upgrade (SqueezePlay's `needsUpgrade` is empty): "make sure volume is set", `$client->volume($client->volume(), defined($client->tempVolume()))`. Measured with a silent stand-in player (`scratchpad/seqprobe/connect.py`): an audg ~5 ms after the HELO (after setd, setd, aude) at a first connect AND at each reconnect, carrying the SAVED level (not 0: 416 for volume 20.3, then 1458 for 33) and the sticky `seq_no` (0 for a new client object, kept across a reconnect). `Squeezebox::play` also re-sends it at each stream start, and `mixer` commands send it. So with `-V` every engine start or slimproto reconnect puts LMS's saved level on the device. Nothing it watches changed: watching from init is still right. Superseded text, kept for the record: `Squeezebox::play` re-sends it ("make sure volume is set") when each track starts, and `mixer` commands send it. A freshly connected player has no `audg` until then, hence the engine watches from init. |
 | SETTING DVC SENDS AN AUDG AT ONCE: a `digitalVolumeControl` set from outside (`playerpref`) reaches the player only at the next track start or `mixer` command | **WRONG** (LMS 9.1 source, read 2026-10-11) | `Player.pm:77`: `$prefs->setChange( sub { $_[2]->volume( $_[2]->volume ); }, 'digitalVolumeControl')`, and `Squeezebox2::volume` sends `audg` with the pref as its adjust byte. `Prefs::Base::set` runs the change only when the value changes and the validator passes: `Player.pm:85-89` refuses a false value unless `hasDigitalOut` (squeezelite's `HasDigitalOut=1`, mapped in `SqueezePlay.pm`). `prefCommand` takes `_newvalue` "0" (`value || _newvalue` gives "0"). `status` returns it as `digital_volume_control`, an integer (rig, 2026-10-11), and Material shows a player at 0 as fixed at 100 (`server.js` dvc). |
 | THE DVC HOOK SAVES A FADED VOLUME: changing `digitalVolumeControl` leaves the player's saved volume alone | **WRONG** (LMS 9.1 source, read 2026-10-11, after Simon's live report) | The hook is `$_[2]->volume( $_[2]->volume )` (Player.pm:77). `Client::volume` with no argument returns `tempVolume` when one is set (Client.pm:850), and with one but no temp flag SAVES it as the pref and clears the temp (Client.pm:842-845). LMS sets a temporary volume while it fades: `_Pause` fades to a temporary 0 (`fade_volume(-FADEVOLUME)`, Player.pm:427 `volume($endVol, 1)`), as do mute and sleep fades. So a fixed/variable change while one is in effect saves it, typically 0. LMS's own `stream_s` passes the temp flag (`volume($client->volume(), defined($client->tempVolume()))`, Squeezebox.pm:189); the hook does not: an LMS bug, which LyrionPlay hits on every device switch. On the rig 2026-10-11: prodmac46 at 50 (22:25Z), the FiiO left USB mid-track (23:26:55 local), the agent turned volume control back on (22:28:56Z), and LMS's saved volume was 0 at 22:30:40Z; the agent pushed no volume (agent.log). Which fade left that 0 was not seen. **REPRODUCED LIVE 2026-10-12** (0.3.1, DragonFly, Simon's OK): prodmac46 paused at volume 17, a switch to Fixed: the agent read 0.0 after the send (the pause fade's temporary 0, saved by the hook) and put 17 back; then played 8 s, paused, switched back to Device: 0.0 again, 17 put back. A muted player is safe: its negative volume survives the hook because the `mute` pref stops `Client::volume`'s clamp (Client.pm:831). |
 | MIXER VOLUME ? IS THE SAVED VOLUME: `mixer volume ?` answers the temporary volume while LMS fades | **WRONG** (LMS 9.1 source, 2026-10-11) | `mixerQuery` answers `volume` from `$prefs->client($client)->get("volume")` (Queries.pm:2137); only bass/treble/pitch call the client's method. So it is the saved volume, negative while muted (what `VolumePush`'s unmute and `volumeRestore` both rely on). |
+| A DB PROPERTY CAN BE STUCK: a device's `kAudioDevicePropertyVolumeDecibels` follows its volume, so `read_device_db` reading it first sees every change | **WRONG for the Melomania P100** (Bluetooth; measured 2026-10-14, read-only probe, Simon moving the macOS slider) | 816 change notifications; VolumeScalar on elements 1/2 moved 0.203-0.478 while VolumeDecibels read 0.00 dB in every one (settable, range -40..0 dB); ScalarToDecibels of the same scalars gave -31.87..-20.88 dB. So the engine saw no change and reported none (§B `MAC SLIDER LAG AND THE BLUETOOTH HEADSET`). |
+| LMS DELAYS STATUS FOR A VOLUME CHANGE: a `mixer volume` reaches Material (any status subscriber) as soon as LMS takes it, so pushing the Mac's level more often makes Material follow a drag more closely | **WRONG** (LMS 9.1 source + measured on the rig, 2026-10-14) | `statusQuery_filter` (Queries.pm:3927) returns 1.3 for a `mixer volume` notification (1.4 for muting, 2.0 for stop, 2.5 for open/jump), and `Request::notify` (Request.pm ~2093) kills the subscriber's pending timer and sets it again at now + (that - 1): a 0.3 s TRAILING debounce, restarted by every change. Measured with a silent stand-in player and a cometd subscriber made as Material makes it (`/meta/connect` + `/slim/subscribe` `status - 1 subscribe:30`; `scratchpad/seqprobe/cometd.py`): one change reached the subscriber 517 ms after the command; 12 changes 150 ms apart (LyrionPlay's `LatestValueSender` pace) gave ONE update, 600 ms after the last; 8 changes 350 ms apart gave 8 updates, each ~0.5 s after its command. So at 150 ms Material stands still for a whole drag. The ~0.5 s per change is LMS's floor for every client. |
+| SCALAR TO DB IS NOT THE DB PROPERTY: the HAL's `kAudioDevicePropertyVolumeScalarToDecibels` of a device's scalar gives the dB its VolumeDecibels property reads, so either can replace the other | **WRONG** (measured 2026-10-14, read-only) | MacBook Pro Speakers: scalar 0.385, VolumeDecibels -24.08 dB, ScalarToDecibels -39.03 dB, both live. DragonFly Black v1.5: VolumeDecibels -54.75 dB at scalar 0.021, ScalarToDecibels not supported. So a fix for `A DB PROPERTY CAN BE STUCK` cannot just read through the conversion: the speakers' levels (measured against VolumeDecibels, `VOLUME BOTH WAYS`) would change. The conversion is a LOOKUP (no device change), read 2026-10-14 for scalars 1.0/0.999/0.99/0.95/0.9/0.5/0.385: speakers 0.00/-0.06/-0.63/-3.18/-6.35/-31.75/-39.05 dB, the Melomania 0.00/-0.04/-0.40/-2.00/-4.00/-20.00/-24.60 dB: on both a straight line over the range, reaching the top exactly at full; the DragonFly has none (`kAudioHardwareUnknownPropertyError`). It is the speakers' dB PROPERTY that follows another taper. |
 | UNIVERSAL IS NOT ROSETTA: A "universal" binary depends on Rosetta | **WRONG** (raised 2026-10-09) | A universal Mach-O carries a full native arm64 slice; Rosetta translates only x86_64-only code. Moot here anyway: tools are built from source as arm64-only (`TOOLS ARE BUILT HERE`). |
 | MUTE HAS A WRITER ONLY WITHOUT A MUTE CONTROL: with `-V`, an LMS mute (gain 0, which is how LMS mutes, `Squeezebox2::volume`) leaves the DAC playing at its minimum dB, because `set_volume` keeps the samples at `FIXED_ONE` | **NO WRITER** (measured 2026-10-10, `squeezelite -l`) | `apply_volume` sets `kAudioDevicePropertyMute` whenever the device has one. DragonFly Black v1.5: `{"control":"main","db_min":-64.0,"db_max":0.0,"mute":true}`; MacBook Pro Speakers: `-63.5..0, mute true`; the FiiO has NO volume control, so it gets software gain and gain 0 is digital silence. Only a DAC with a volume control and no mute control would sit at its minimum, and upstream `output_alsa.c` `-V` does exactly that for every device (it never uses the playback switch except to unmute at init, line 891). Re-raise only with a named DAC whose `-l` shows `"mute":false` with a volume control. |
 | THE OFF POLL COSTS NOTHING MEASURABLE: the monitor waking every 100 ms (`OFF_POLL_US`) while the output is off (the idle state with `-C 30`) costs energy | **WRONG** (measured 2026-10-10) | Engine PID 5610, idle 28 min (`mode stop`, output off, so the monitor polling): `top -l 3 -s 5 -stats cpu,idlew` gave 0.0% CPU and idle wakeups 793 → 796 in 5 s, about 0.6/s for the whole process (macOS coalesces the timers). |
@@ -770,18 +873,231 @@ evidence it cites.
 | AN ORPHAN DIES AT ITS NEXT REPORT: the engine ignores SIGPIPE, so a `printf` to stdout (`ca_report_format`, `volume_listener`) cannot kill an engine whose agent died | **WRONG** (source, /code-review 2026-10-12 (3), 2026-10-12; a review cleared it on this wrong reason) | `signal(SIGPIPE, SIG_IGN)` (`engine/stream.c:804`) is inside `#if SUN`, which `squeezelite.h:73` defines for `__sun` only. `utils.c`'s `SO_NOSIGPIPE` covers sockets only, and the agent ignores only SIGTERM and SIGINT (`Agent/main.swift:137`). stdout is a `Pipe` to the agent (`main.swift:234`); stderr goes to the engine log, a file. So an engine orphaned by a crashed agent (`A CRASHED AGENT ORPHANS ITS ENGINE`) dies of SIGPIPE at its next stdout line. Since 0.3.x, `lyrionplay:format` makes that the next format change or idle release; before, it was the next Mac volume change on a `-V` device. Still NOT A FINDING: launchd restarts a crashed agent (`KeepAlive` `SuccessfulExit: false`, `LaunchAgent.swift:16`), and `stopOrphanedEngine` stops the orphan at once anyway. Not measured live. |
 | A HOG DOES NOT HIDE THE VOLUME CONTROL: while another process holds a device exclusively and plays to it, `squeezelite -l` run from a separate process reports no settable volume for it, so a probe taken during a play (the agent's reconcile, the Settings window's) reads a saved "Device's own volume" as Software and drops `-V` | **WRONG** (measured 2026-10-12 on the DragonFly Black v1.5, /code-review 2026-10-12 (3) findings 1 and 2; silent: prodmac46 `mode stop`, zeros at the DAC's own 48k / 24-bit, so no relock) | A scratch probe set `kAudioDevicePropertyHogMode` on the DragonFly to its own PID. In its own view, `kAudioDevicePropertyVolumeScalar` (output, main) was present and settable. Meanwhile `/Applications/LyrionPlay.app/Contents/MacOS/squeezelite -l` gave `"exclusive_owner":<probe PID>` and `"volume":{"control":"main","db_min":-64.00,"db_max":0.00,"mute":true}`. A second probe did the same with an IOProc running (`DeviceIsRunningSomewhere` 1, 404 IOProc calls of zeros in 4 s), and `-l` again gave the volume. So holding a device and playing to it leave its volume control visible and settable to every process. Not run: an LMS play under the engine itself, or any DAC but the DragonFly. Re-raise only with a named device whose `-l` loses `volume` while held. |
 | NO STRAY IDLE ON A REOPEN: `_ca_open` sets `ca.dev = kAudioObjectUnknown` and drops the output lock while it stops the old IOProc, so a `ca_report_format` tick during a mid-play reopen for a rate change sees the device closed and prints `lyrionplay:format idle` between two tracks | **WRONG** (source, 2026-10-12, /code-review 2026-10-12 (4)) | The rate-change reopen is `output.ca_reopen` -> `_ca_open()` on the slimproto thread (`slimproto.c:717-720`), and `ca_report_format()` is called later in the SAME loop iteration on the same thread (`slimproto.c:751`), so it can never run inside that window. The only other caller of `_ca_open` is the monitor thread (`monitor()`), which `_ca_open` starts only on `err` (the open failed, `ca.dev` already unknown). So the report has already said idle, correctly, before any monitor open. Re-raise only with a third `_ca_open` caller, or a report call moved off the slimproto thread. |
+| LMS FIXED IS A FLAG, NOT A LEVEL: LMS's "Output level is fixed at 100%" holds the level the player had when it was set, so setting the volume first and then fixed keeps that volume (Simon's manual method, 2026-10-12) | **WRONG** (LMS 9.1 + squeezelite source, read 2026-10-12 at Simon's request: "Check on how LMS sets the fixed value first before deciding as with the dragonfly this seems to vary") | `digitalVolumeControl` is read in only two places: `Squeezebox2::volume` (squeezelite is a `squeezeplay` device, `Slim::Player::SqueezePlay`, which inherits it) and the settings page (`Settings/Player/Audio.pm`). Every `audg` carries the CURRENT volume's gain (`dBToFixed(getVolume(volume))`, 0 at volume <= 0) with the pref as its `adjust` byte (Squeezebox2.pm:275-315); LMS does not refuse a volume change on a fixed player, it only flags it. LMS's own text: "You can fix the volume control at 100% if you are using the volume control on your amplifier … This affects both digital and analog volume." squeezelite ignores the gain when `adjust` is 0 and plays at 100% (`process_audg`, slimproto.c:450, as upstream). Upstream `output_alsa.c` with `-V` then sets its mixer to 0 dB (`set_volume(FIXED_ONE)` -> `set_mixer(.., 0, 0)`, output_alsa.c:229-250): full, whatever the volume was before. So on squeezelite a fixed player's level is 100%; only an amplifier or a DAC's own knob sets it. LyrionPlay differs on purpose (§A2 `FIXED VOLUME LEAVES THE DEVICE ALONE`): Fixed runs without `-V` and never touches the device, so the DragonFly's own level in Fixed is whatever was last put on it. That is why it varies: LMS's level from the last *Device's own volume* engine (agent.log 17:29:53Z and 17:33:08Z put back a saved volume of 100, so 0 dB), muted at -64 dB after a pause fade (`FIXED SET UP WHILE PAUSED`), or what macOS restores when it is plugged back in (17:31:50-17:32:07Z). LMS keeps ONE saved volume per player (`mixer volume ?` reads the pref), so it follows a change of output (`ONE PLAYER PER DAC`). |
 
 ### B. KNOWN-OPEN AND ACCEPTED — do not re-report as new
 
-- **ONE PLAYER PER DAC — PARKED 2026-10-10, not started** (Simon: "is it possible that multiple
+- **ONE PLAYER PER DAC — BUILT in tree 2026-10-12 to the approved plan
+  (`~/.claude/plans/immutable-purring-hoare.md`), NOT installed, NOT live-tested** (§C `PLAYERS AND
+  FIXED BUILT 2026-10-12`; PARKED 2026-10-10). The 2026-10-12 reason and requirements, after
+  `CODE-REVIEW 2026-10-12 (7)`:
+  - **Why:** "Its a mistake having all of the 3 options on one instance of Squeezelite … LMS sees it as
+    one player and its saved volume or paramters are inherited to what ever output is chosen." His
+    examples: lower the volume on the macOS output, change to the DragonFly, and the volume goes with
+    it (and Fixed is set at that volume); from a device at Fixed 100% to the Mac speakers, the speakers
+    play at 100%. "Its all got too complicated."
+  - **Shape:** "each DAC or output device needs its own Squeezlite instance", which the user can
+    enable or disable: "Follow the macOS output" (not the MacBook speakers as a player of their own),
+    then each additional device detected.
+  - **Options per player, as today's rules:** a device with a volume control, the 3 options; a DAC
+    with none, 2; the macOS output, 2.
+  - **No migration:** "We dont need to carry existing settings from a previosu install we can start
+    again no migration needed."
+  - **Settings page:** "should at first show each device that is seen by squeezelite with a settings
+    button (cog icon woud be nice) next to it that when clicked on show the same settings we have now
+    to change it for that squeezelite."
+  - **Answers, 2026-10-12 (Simon picked each recommended option):** the list is *Follow the macOS
+    output*, then every device squeezelite lists except the Mac's built-in speakers/headphones (reached
+    through *Follow the macOS output*); HDMI, Bluetooth and AirPlay included if listed. Each row has the
+    name, an on/off switch and the cog; *Follow the macOS output* on by default, the others off. Per
+    player (behind the cog): name, exclusive, DoP, LMS volume, silence on a rate change. Shared, set
+    once: LMS server, release time, resampling quality, log detail. The menu bar panel shows one line
+    per player that is on: name, device, connected or not, and what it is playing.
+  - **Fixed:** must work on a DAC with a volume control (the DragonFly) when set up while paused,
+    "as its going to be setup wilst pasued more often than not": NOT left at 0 / muted (`FIXED SET UP
+    WHILE PAUSED`); and it must keep working on DACs with no volume control. Simon: "If I was setting
+    a player to fixed volume manually in LMS I would set the volume to the limit I want then chnage
+    the settings to fixed." Earlier the same day he agreed Fixed = the DAC at 100% ("it is for using
+    line level out to an amplifier and you need 100%"). LMS and squeezelite themselves play a fixed
+    player at 100% (§A3 `LMS FIXED IS A FLAG, NOT A LEVEL`). **DECIDED by Simon 2026-10-12: Fixed
+    HOLDS THE LMS VOLUME** (§A2 `FIXED HOLDS THE LMS VOLUME`).
+  - **UNVERIFIED report:** the macOS output's volume "seems suspect when I just tried it and did not
+    map 1:1 to LMS volume at all" (2026-10-12; device, mode and levels not recorded, not measured).
+    The numbers are matched by dB, not by percentage (`LMSVolume`, the SqueezePlay curve: agent.log
+    17:35:12-17:37:05Z, the speakers' -63.5 dB minimum = LMS 7, -28.78 dB = LMS 42). Simon, the same
+    day: "there was a very large delay in the change to LMS so that may need more investigation" —
+    OPEN, not investigated. On 2026-10-10 the lag was "slight" (the 150 ms `LatestValueSender`
+    throttle plus Material's redraw); where a large delay comes from (the engine's report, the
+    agent's sender, LMS, Material) is not known.
+  - **MAC SLIDER LAG AND THE BLUETOOTH HEADSET — reported by Simon 2026-10-14, OPEN, nothing changed**
+    ("when in follow macOS the lag between changing levels using the macOS slider to material is quite
+    substantial"; "when using a BT headset via macOS using the macOS slider didnt move material at all,
+    but using materials slide adjusted macOS levels, but they get out of sync"). From the logs only:
+    - **Slider lag — CAUSE MEASURED 2026-10-14 13:59:47-14:01:32 local, 0.4.1, the Melomania under Follow**
+      (Simon: "it works but very laggy in its response"; Simon dragged the macOS slider, nothing playing;
+      debug log for the window only, settings.json restored byte-identical after; read-only watchers in
+      the scratchpad: the headset's scalar every ~18 ms during a drag, LMS's `mixer volume ?` polled):
+      - Mac -> LMS is fast once reported: report 14:00:41.249, LMS's echo audg at the engine 8 ms later
+        (41.257), LMS at 37 by the next poll (41.288).
+      - LMS answers each `mixer volume N` with TWO audgs (~11 ms apart); each runs `apply_volume`, which
+        puts LMS's rounded level back on the headset mid-drag (59.743 and 59.762: -18.62 dB while the
+        user was going up) and opens `VOLUME_SETTLE_NS` (500 ms).
+      - In that window every move is recorded as the engine's own: drag up 59.09-59.99 (-20.84 to -16.50
+        dB), 51 headset changes, 2 reports (59.09, 59.73), LMS ended at 62 (-18.6 dB). Drag down
+        18.04-18.81 (-16.45 to -25.40), 2 reports, LMS 50 (-24.6). Last move 22.95-23.14: reported
+        -28.64 (LMS 42), then -33.08 inside the window, never reported: LMS left at 42 (-29.1 dB) with
+        the headset at -33.1 dB. That is the lag and the "out of sync" (Simon, earlier the same day).
+      - So: during a drag LMS gets a level about twice a second, the headset is pulled back toward each
+        stale one, and a drag that ends inside the window leaves LMS behind for good. The 500 ms window
+        exists for the speakers' coarse read-back (`READ-BACK IS NOT THE LEVEL SET`: without it LMS crept
+        50 -> 57) and LMS's mute fade. Options put to Simon; he chose the first, skipping LMS's echo
+        ("yes as long as this doesnt break functionality elsewhere"): built in tree, then REJECTED (a
+        Material nudge not heard: §C `LMS'S ECHO IS NOT PUT ON`), REPLACED by §C `THE DEVICE STAYS WHERE
+        THE MAC PUT IT` (2026-10-14, INSTALLED as 0.4.2, VERIFIED LIVE).
+        **Remaining lag, 0.4.2** (Simon: "all works but we still have lag to materail from the macs
+        volume. This may be unavoidable but function wise it works better"): MEASURED the same day, it is
+        LMS's status debounce (§A3 `LMS DELAYS STATUS FOR A VOLUME CHANGE`): ~0.5 s per change is LMS's
+        floor, and at the agent's 150 ms pace each push restarts it, so Material stands still for a whole
+        drag and moves ~0.6 s after it ends. Pushing at most every 350 ms gave an update per push, each ~0.5
+        s behind. **DECLINED by Simon 2026-10-14** ("leave it and close this"): the agent keeps
+        `LatestValueSender(interval: 0.15)`. CLOSED. NOT A FINDING from now on: Material standing still
+        during a Mac drag and following ~0.6 s after it ends, the push pace, LMS's status debounce. Re-raise
+        only if Simon asks. The live check owed: drag the macOS slider
+        on the headset or the speakers; Material follows during the drag and ends where the slider stops.
+      Earlier, from the logs only: every engine report (`volume_listener` "device volume changed outside LMS") was
+      logged by the agent in the same second, but the agent logs BEFORE `client.call`, so LMS's receipt
+      is not timed. During a drag the engine reported at most one change per ~0.6-0.75 s (engine-follow
+      2026-10-12 21:26:15.08/15.80/16.55/17.24 local; 2026-10-13 10:28:58.49/59.07). SUSPECTED, NOT
+      MEASURED: LMS answers each `mixer volume N` with an audg, `apply_volume` puts LMS's (integer, so
+      rounded) level back on the device mid-drag and opens `VOLUME_SETTLE_NS` (500 ms), in which the
+      user's further moves are recorded as the engine's own and never reported; a drag that ends inside
+      that window leaves LMS on an older level. Needs a debug-log run (apply_volume's LOG_DEBUG) with
+      Simon dragging the slider, nothing playing. LMS answered `mixer volume ?` in 38-49 ms (10 of 10,
+      2026-10-14 12:15Z, over Tailscale 100.71.35.108); the agent's checks timed out at 4 s several times
+      that morning, and a push stuck behind one waits (one send at a time).
+    - **Bluetooth — CAUSE MEASURED 2026-10-14 12:29-12:33Z** (Simon connected the Melomania P100; a
+      read-only listener probe in the scratchpad, Simon moving the macOS slider): its volume is two
+      channel controls (elements 1 and 2, no main), each with a settable VolumeScalar AND VolumeDecibels.
+      macOS announced every step (816 notifications: VolumeScalar and VolumeDecibels on e1/e2, Mute,
+      VirtualMainVolume/Balance), the scalar moved 0.203-0.478, but **VolumeDecibels read 0.00 dB in
+      every one** (the HAL's own ScalarToDecibels gave -31.87 to -20.88 dB). `read_device_db` reads
+      VolumeDecibels first, so the engine always sees 0.00, never a move over `VOLUME_MOVED_DB`, and
+      reports nothing: engine-follow.log has no "changed outside LMS" line after the engine moved to the
+      headset (13:29:09 local). §A3 `A DB PROPERTY CAN BE STUCK`. LMS -> headset works (Simon), through
+      `set_control_db`'s VolumeDecibels write. **Round trip MEASURED 12:40:10-13Z** (Simon: "ok"; nothing
+      playing, LMS checked `stop` before each write, scalars put back exactly after: 0.478 both, LMS
+      volume 51 before and after, no engine report): writing VolumeDecibels -38/-30/-24/-18/-12/-6 dB on
+      elements 1 and 2 landed at scalar 0.050/0.250/0.400/0.550/0.700/0.850, exactly the HAL's
+      DecibelsToScalar of each, and ScalarToDecibels of each gave the written dB back exactly (a linear
+      taper, scalar = (dB + 40) / 40); the dB property read 0.00 after every one. So on this device the
+      writes and the conversion agree; only the dB property's READ is broken. **FIXED the same day,
+      INSTALLED as 0.4.1** (§C `A STUCK DB PROPERTY FIXED`); VERIFIED LIVE by Simon ("it works"):
+      the macOS slider on the headset under Follow moves Material.
+  - **PERFECT SYNC: SIMON'S REQUIREMENTS — 2026-10-14, design NOT started** (after `LMS'S ECHO IS NOT
+    PUT ON` was rejected). Simon: "As long as the rounding to make the mac volume + or - to the
+    nearest 2db gain on release of materials slider then its fine. What I dont want is to change again
+    after a track change as thats bad. If the mac goes up in 2db incremnets we need to ensure LMS maps
+    as close as it can."
+    - ACCEPTED: on release of Material's slider the device lands on its nearest hardware step.
+    - REQUIRED: no change of the heard level at a track change. LMS re-sends the volume at every track
+      start (`LMS SENDS VOLUME ON CONNECT`); today that re-send is put on the device, so after a Mac
+      slider move the device is moved to LMS's rounded level (up to 0.25 dB above LMS 25, 0.74 dB
+      below, plus `dBToFixed`'s rounding) at the next track. Also true of 0.4.1.
+    - REQUIRED: Mac -> LMS as close as LMS can map (already the nearest whole volume, `LMSVolume`).
+    - **Client volume steps, VALIDATED 2026-10-14 against the rig's installed copies:** Material 6.4.13
+      (`material-deferred.min.js` from plex:9000): *Volume step* offers 1%, 2%, 5%, 10%, default 5%
+      (Simon thought 3%: there is no 3%); it applies to the +/- buttons, keys and wheel (`adjustVolume`);
+      the slider itself is `step="1"`, any whole volume. Classic and Default skins (SqueezeJS,
+      `Base.js` `setVolume`): +/- buttons step 2; the volume bar has 11 positions (0, 10 ... 100).
+    - LMS's resolution: a whole volume is 0.49 dB above 25 and 1.48 dB below (SqueezePlay curve).
+    - **NO STEP COUNTING — Simon 2026-10-14** ("we are not coutning steps thats not practical"): do not
+      measure or tabulate each device's hardware volume steps, and do not design on them. The design
+      works from the level the device reports, whatever its steps.
+    - **NO DIP ON A MAC UNMUTE — Simon 2026-10-14** ("i have not heard any dips whilst unmuting that
+      does not affect the macs volume in my tests"): LMS's fade back up after a Mac unmute is not heard
+      as a dip; not to be measured or designed around. Re-raise only with a dip heard and named.
+    - **MEASURED 2026-10-14 on the rig (LMS 9.1.2), silent** (Simon: "yes run it"): a stand-in player
+      (`scratchpad/seqprobe/probe.py`, test MAC 02:00:4c:50:53:51, HELO as squeezelite, no audio;
+      forgotten with `client forget` after) logged every audg for `mixer volume` commands:
+      - **Every audg carries the sequence number** (22 data bytes; 0 from the connect). `mixer volume
+        41 seq_no:7` -> seq 7; a later `mixer volume 42` with none STILL carries 7 (sticky, as
+        Commands.pm:560 reads). So a seq marks the commands LMS took up to that point, not who sent
+        the level: a Material change after the agent's last send carries the agent's number.
+      - **Two audgs per change, ONE when the volume is unchanged** (`mixer volume 37.6` twice: the
+        second gave one audg; the pref hook runs only on a change). ~11-14 ms after the command.
+      - **A fractional volume is kept and sent:** `mixer volume 37.4` -> `mixer volume ?` 37.4, gain
+        1872; 37.6 -> 1894.
+      - **Adjacent volumes can share a gain:** 41 and 42 both gave 2304 (dBToFixed's 8 bits between -30
+        and 0 dB: 9/256 for both); 40 gave 2048. So between about -30 and -20 dB LMS's own level moves
+        in ~1 dB gain steps whatever the slider says, for every squeezelite.
+    - **VERIFICATION 2026-10-14** (Simon: "verify this will work with out any other issues or volume
+      snapping to another volume at track or album change"), from the LMS 9.1 source
+      (`scratchpad/lmssrc`, branch public/9.1 at 582a1b2, Slim/ only) and the rig:
+      - **Every path that sends a level** (`grep` of `volume(`/`fade_volume` in Slim/): the hello handler
+        (every connect and reconnect, measured); `Squeezebox::play` at every stream start (a gapless
+        next track when the decoder reaches it, before it is heard; an album or a seek from stopped);
+        `_Stream` from STOPPED also `$player->volume(abs pref)` first (the master's level with
+        `syncVolume` in a group), and `volume(0,1)` when the player's `fadeInDuration` is set, faded up
+        at `_Playing`; `_Pause` fades to a temporary 0, `_Resume` sets 0 then fades up, its last step
+        `volume(endVol, 1)` = the saved level exactly (Player.pm:427); mute/unmute fades
+        (Commands.pm:607); sleep fade (Commands.pm:3211); alarms; the `volume` pref hook (the twin
+        audg). Crossfade and LMS's short fades are the player's own sample fades (strm), never audg.
+      - **The snap today (0.4.1 and before):** after a Mac move the device sits between LMS's whole
+        volumes; each of those paths puts LMS's saved level back. Largest, every device level -74..0
+        dB in 0.01 dB through the agent's mapping and LMS's arithmetic: 0.74 dB between -30 and 0 dB (the 8-bit gain), 0.25 dB from -37
+        to -30, 1.75 dB below -37 (LMS 1 at -72.25 dB for -74). Not a reset: Simon, 2026-10-14: "it
+        doesnt resest the volume", "the mac or LMS volume is not reset in the UI", "it will start at
+        the last saved volume level". The Mac slider moves by that rounding only.
+      - **The echo can be named EXACTLY without `seq_no`:** the agent's mapping is the nearest whole
+        volume by dB (`LMSVolume.volume(forDB:)`), and LMS's gain for it is plain arithmetic
+        (`getVolume` with SqueezePlay's parameters, then `dBToFixed`): computed here it matched all 7
+        gains the rig sent (40, 41, 42, 37.4, 37.6, 20.3, 33), and no whole volume comes within 2e-4
+        of a rounding boundary, so a libm difference cannot flip one. Whole volumes 41/42, 44/45, 47/48
+        share a gain (LMS's resolution, on every squeezelite).
+      - **DECIDED by Simon ("yes") and BUILT 2026-10-14, §C `THE DEVICE STAYS WHERE THE MAC PUT IT`** (as
+        built: an answer to ANY report, not only the newest, sets LMS's level, so a failed send no longer
+        moves the device at the next track); proposed as: (1) each report keeps its expected gain and the device's
+        own scalars; an audg EQUAL to a recent report's expected gain is its echo: nothing is put on,
+        and that pair (gain -> scalars) is kept; (2) a level whose gain is the pair's gain is put on as
+        those scalars (exactly where the Mac left it), any other as today; (3) nothing is written when
+        the target equals the one last put on or adopted (track starts, album starts, connects, the
+        twin); (4) at an engine start, the connect level is adopted when it equals the expected gain of
+        the device's current level. Residuals to state: a move inside the 500 ms settle window is not
+        reported (LMS's number lags; no snap); a failed send leaves LMS's older level to be put on at
+        the next track; a level LMS changed while the engine was down is put on at the start (as
+        today); exact scalar restore unproven on Bluetooth until live.
+      - **Found on the way, existing since 0.2.0:** (1) after a Mac MUTE, LMS's fade-out (`mixer
+        muting 1`, ~0.31 s of audgs; measured on the stand-in: 2304, 1656, 1128, 530, 167, 53, 17, 0)
+        reaches `apply_volume`, which unmutes the device for each step above 0 (`mute = left == 0 &&
+        right == 0`), so the fade-out may be heard after the key: **ACCEPTED by Simon 2026-10-14**
+        ("first one isnt a problem and I accept it if does happen"); do not report or fix it. (2) a Mac
+        LEVEL move while LMS is muted sent `mixer muting 0` (VolumePush), so LMS faded to its own saved
+        level, not the Mac's: **CONFIRMED by Simon** ("2nd one does happen, so we need to fix that and
+        it should unmute LMS and move it the correct position"), **FIXED in tree** (§C `A MAC MOVE
+        UNMUTES LMS AT ITS LEVEL`).
+  - **SYNC GROUP: FIXED NOT SHOWN IN MATERIAL — reported by Simon 2026-10-14, UNVERIFIED, stood down
+    by Simon** ("lets stand down for now. I will try to replicate another time"): a player switched from
+    *Device's own volume* to Fixed after its sync group was made did not show as fixed in Material until
+    it was ungrouped and added again. Checked: every Fixed change of 0.4.0 reached LMS (agent.log, no
+    refusal); LMS 9.1 `statusQuery` reports each player's own pref (Queries.pm:4188-4190; nothing in
+    Sync.pm shares it); Material reads it per player (server.js:544, groupvolume-dialog.js `updatePlayer`).
+    The moment was not found in the logs (grouped 2026-10-12 ~20:00-20:12Z by the engines' synced
+    starts; no Fixed change logged in that window).
+
+  The 2026-10-10 question (Simon: "is it possible that multiple
   dacs connected could be seen as multiple players each with their own mac address and have unique
   name based on the dacs connected?"). Feasible: one engine per device, each with its own `-o`,
   `-m`, `-N` and `-f`; the engine needs no change. Simon's answers:
   - today's player stays exactly as it is, and a "More players" list adds one per device (on/off
     plus a name), off by default;
-  - the default name is the DAC's name only;
+  - the default name is the DAC's name only [SUPERSEDED by Simon 2026-10-12: "Use the macs name
+    followed by attached device for playernames" — a device's player is "<Mac's name> <device's
+    name>", e.g. "prodmac46 AudioQuest DragonFly Black v1.5" (`PlayerSettings.defaults(for:)`,
+    pinned in PlayerCoreTests `defaults`); *Follow the macOS output* stays the Mac's name];
   - when the main player follows the macOS output and that output is a DAC with its own player,
     the main player uses the built-in output.
+
+  **THE OLD PLAYER CARRIES ON — DECIDED by Simon 2026-10-12** (asked: "is this now or on every app
+  update?", then "Keep the old ID"). The first time *Follow the macOS output*'s identity is made, it
+  copies 0.3.x's `mac` and `player-name` (`PlayerIdentity.adoptOldPlayer`, called in the agent's
+  `makeSlot` for `PlayerKey.follow` only; agent.log "<name> carries on as the earlier version's player
+  <mac>"), so LMS keeps the same player: name, volume, favourites, sync; nothing left disconnected.
+  Copied, not moved; never read again once `players/follow/mac` exists, so a later rename LMS writes
+  stays. An invalid or missing old MAC gives a new player and takes no old name. New IDs happen only
+  for players that never existed (device players), and only once: IDs live in
+  `~/Library/Application Support/LyrionPlay/players/`, which install.sh never touches (it replaces the
+  .app only). Tests `theOldPlayerCarriesOnAsFollow`, `noOldPlayerMeansANewOne`; 3 mutants (adopt over
+  the player's own MAC, name not copied, an invalid old MAC adopted), each killed.
 
   Identity per player is keyed by device UID. Measured 2026-10-10: the DragonFly's UID carries its
   USB serial (`AQDFBL0100009556`), not its port (locationID 0x1100000), so a port change keeps the
@@ -792,6 +1108,23 @@ evidence it cites.
   - `EnginePlan`, with stops before starts;
   - a per-player volume sender, because the one `LatestValueSender` would drop another player's
     push.
+- **FIXED SET UP WHILE PAUSED — CONFIRMED by Simon 2026-10-12; FIXED the same day by `FIXED HOLDS THE LMS
+  VOLUME` (the held level is put on at the engine's start, unmuted), INSTALLED as 0.4.0, VERIFIED LIVE
+  2026-10-12 20:16Z on the DragonFly** ("held at -25.6 dB (was -64.0 dB, muted)", HAL -25.65 dB unmuted
+  while paused; §C `PLAYERS AND FIXED BUILT 2026-10-12`) (`CODE-REVIEW 2026-10-12 (7)` findings 1 and 2; `apply_volume`, `kAudioDevicePropertyMute`,
+  `EngineArguments` `-V`, `fixedVolumeNeverTouchesTheDevice`, `output_close_coreaudio`, `unhog`). With
+  *Device's own volume*, LMS's pause fade ends at gain 0, which `apply_volume` puts on a DAC with a volume
+  control as `db_min`, muted (output_coreaudio.c:474-476). Nothing undoes it when the engine restarts
+  without `-V` (a switch to Fixed or Software), at the idle release, or at exit, so Fixed set up while
+  paused plays into a muted DragonFly. Simon: "1 does happen". Two fixes were BUILT and REVERTED by Simon
+  the same day (not kept in the repo):
+  - the exiting `-V` engine put back LMS's last level that held 200 ms (a fade steps every 0.05 s);
+  - Fixed passed `-a <f>:<e>:1`, and the engine set a DAC's own volume to 100%, unmuted.
+  Simon: "I am concerned this is going to open up more issues as you have changed more than was
+  planned", then "we need to stop this work and revert back to the last version". Do not re-propose
+  either as a patch to the one-player design; the requirement is solved in `ONE PLAYER PER DAC`. A Quit or
+  Off while paused leaving the DAC muted: Simon, "thats the same for anything with LMS". Software's case:
+  §A2 `SOFTWARE AFTER A PAUSED -V DAC`.
 
   The agent holds one `EngineSlot` per player. Until built, "only one player per Mac" is not a
   finding.
@@ -832,7 +1165,9 @@ evidence it cites.
     audg `adjust: 0` (debug log);
   - changed back in Material: put back within ~5 s, one agent.log line;
   - DragonFly (device volume) after the FiiO: "turning volume control back on", the LMS slider moves
-    the DragonFly again; the DragonFly as Fixed: its level stays where the Mac set it.
+    the DragonFly again; the DragonFly as Fixed: its level stays where the Mac set it. [ANSWERED
+    2026-10-12: not after a switch made while paused; it stays muted at its minimum, confirmed by
+    Simon: `FIXED SET UP WHILE PAUSED`.]
   - the put-back: **VERIFIED LIVE 2026-10-12, 0.3.1** (Simon: "build and install", "continue",
     output "DragonFly"; 0.3.0 -> 0.3.1 with `bump-version.sh patch`, `build.sh --install` suite PASS,
     install.sh "version 0.3.1 (was 0.3.0)", agent.log "agent started: LyrionPlay 0.3.1
@@ -1076,6 +1411,301 @@ evidence it cites.
 Each entry records that a defect, as described, was fixed. It does not cover the code written to
 fix it (see HOW TO LOG).
 
+- **A MAC MOVE UNMUTES LMS AT ITS LEVEL — 2026-10-14, BUILT, INSTALLED as 0.4.2 the same day, VERIFIED
+  LIVE by Simon** ("all works") (Simon: "2nd one does happen, so we need to fix that and it should
+  unmute LMS and move it the correct position"). The defect: with LMS muted (Material, or a Mac mute),
+  moving the Mac's volume made the agent send `mixer muting 0`, so LMS faded back to the volume it kept
+  and the device left the level the user had just set.
+  - **Why it was so:** that rule was for the Mac's unmute KEY (`UNMUTE IS NOT A LEVEL`): LMS's mute
+    leaves the device at its minimum, so the unmute key's report carries the minimum (-63.5 dB -> LMS
+    7). Only the engine can tell the key from a move: after LMS's mute its record is the minimum,
+    muted, so the key changes only the mute, a move changes the level.
+  - **Fix:** the engine's report gains `<moved>` (`lyrionplay:volume <dB> <muted> <lms> <moved>`: 1 the
+    level moved past `VOLUME_MOVED_DB`, 0 only the mute changed). The agent (`VolumeReport.levelMoved`,
+    `VolumePush`) sends `mixer muting 0` only for an unmute alone with LMS muted; a moved level goes as
+    `mixer volume N`, which unmutes LMS at N (`mixerCommand`: "if the player is muted and the volume
+    changed, unmute first"; MEASURED on the stand-in 2026-10-14: muted at -42, `mixer volume 30` gave
+    volume 30, muting 0, one twin audg 1230; `mixer muting 0` gave a fade up to 30). A moved report also
+    no longer asks `mixer volume ?` (one request fewer). The answer to that `mixer volume N` is LMS's
+    answer to the report, so `THE DEVICE STAYS WHERE THE MAC PUT IT` leaves the device where the user
+    put it. A line without `<moved>` reads as moved.
+  - **Carriers:** the only reader of the line is the agent's `VolumeReport(line:)` -> `deviceVolumeChanged`
+    -> `LatestValueSender` -> `VolumePush` (unchanged otherwise; the sender keeps the latest report, so a
+    key and a move in flight together send the move). `FormatReport`/`FormatLine` still refuse the line.
+    Mute reports (`mixer muting 1`), fixed players before any audg, LMS at volume 0 (not muted): unchanged.
+  - **Tests:** engine `an unmute alone is not a moved level` (LMS's mute, then the unmute key: `... 0 0 0`;
+    then the slider: `... 0 0 1`; a slider that unmutes and moves at once: one report, moved); the 9
+    existing report expectations gain ` 1`. Swift `aLevelMovedWhileLMSIsMutedSetsThatLevel` (new),
+    `unmuteWhileLMSIsMutedAsksLMSToUnmute` (now marked an unmute alone), the parse rows for `<moved>`,
+    `beforeAnyAudgAFixedPlayerGetsNothing` (a moved level asks no volume question; an unmute alone asks
+    both). Anti-run, the old agent rule restored: `aLevelMovedWhileLMSIsMutedSetsThatLevel` and
+    `beforeAnyAudgAFixedPlayerGetsNothing` FAIL (source restored after, checked). Mutants: `<moved>`
+    always 1, always 0: each FAILS the engine test. `scripts/test.sh` PASS: engine output 69/69 with
+    the matrix, swift 92 in 21 suites, install.sh 3/3.
+  - **Docs:** INSTALL.md (*Device's own volume*), INSTALL.html regenerated.
+  - **Owed, live:** with the player muted in Material, move the macOS slider: LMS unmutes at the Mac's
+    level (Material shows it), the device stays where the slider is. The engine log shows ONE report
+    for that move. If macOS announces the unmute before the level, the first line would read `... 0 0 0`
+    and LMS would start its unmute fade before the level follows: watch for it.
+
+- **THE DEVICE STAYS WHERE THE MAC PUT IT — 2026-10-14, BUILT, INSTALLED as 0.4.2 the same day, VERIFIED
+  LIVE by Simon** ("all works but we still have lag to materail from the macs volume. This may be
+  unavoidable but function wise it works better"; the remaining lag: §B `MAC SLIDER LAG AND THE BLUETOOTH
+  HEADSET`) (Simon: "yes" to the design, §B `PERFECT SYNC: SIMON'S
+  REQUIREMENTS`). Replaces `LMS'S ECHO IS NOT PUT ON`. The defects: the slider lag (LMS's answer to a
+  report put back on the device mid-drag, the settle window then swallowing moves), and the device
+  moved off the Mac's level by LMS's rounding (up to 0.74 dB from -30 to 0 dB, 0.25 dB from -37 to
+  -30, 1.75 dB at the bottom) whenever LMS sends its saved level: every connect (`LMS SENDS VOLUME ON
+  CONNECT`, so every engine start), every stream start (track and album changes), LMS's second audg,
+  the end of a resume fade.
+  - **The rules** (`put_lms_level`, called by `apply_latest`, so `set_volume` and `_ca_open`'s pending
+    level both go through it; the comment above `ECHO_NS` says them in full):
+    1. each unmuted report keeps the gain LMS will answer with (`agent_volume`: the agent's whole
+       volume from the level as printed; `lms_gain`: LMS 9.1's arithmetic) and the device's scalars
+       (`lv_reported`, in `volume_listener`); a muted report goes to LMS as `mixer muting`, no entry;
+    2. an audg EQUAL to a report's gain (within `ECHO_NS`, 5 s) is its answer: nothing is written;
+       LMS's level is now that gain (held) and stands for those scalars (the pair); older reports go;
+    3. an audg equal to the held level is not written (connects, stream starts, twins, a failed send's
+       next track: the device stays where the user put it);
+    4. an audg equal to the pair's gain is written as the pair's scalars, unmuted (`restore_pair`): a
+       resume ends exactly where the Mac left the device;
+    5. the first level for a device (`lv.fresh`: an engine start, or a new device ID, `lv_for`) is
+       taken as the device is, unwritten, when the device's own level gives that gain and it is not
+       muted;
+    6. anything else is written as before (`apply_volume`), held, and clears the reports.
+    Gains are compared exactly: a different LMS volume is a different gain, except 41/42, 44/45, 47/48,
+    which LMS itself sends alike to every squeezelite.
+  - **Every carrier:** `set_volume`'s branches before it are unchanged (Fixed `ca.fixed`; Software and
+    no volume control, `!hw`; LMS's fixed flag; device absent, pending). -X (linear) goes straight to
+    `apply_volume` (it never reports). `put_held_level` (Fixed's hold) is separate and unchanged. The
+    settle window and `apply_volume` are unchanged for every level written; `restore_pair` records and
+    settles the same way. Lock order: `apply_lock`, then `lv.lock` alone and released before any HAL
+    call; the listener takes `vrec.lock` briefly, then `lv.lock` alone. The agent, PlayerCore and the
+    app: unchanged (one Swift test added). The audio path: none (the matrix passes). The Melomania's
+    stuck dB property: the pair is its channel scalars (elements 1, 2), and the first-level check reads
+    its level through `read_device_db`.
+  - **Residuals, stated to Simon:** a Mac move within 500 ms of a level LMS put on is still not
+    reported (the settle window: LMS's number lags until the next move; nothing heard changes); a level
+    changed in LMS while the engine was down is put on at the start (as before); a device back with a
+    new ID at another level than macOS kept takes LMS's level at the first stream (as before); a
+    future LMS with another volume curve would make answers unrecognised, i.e. 0.4.1's behaviour (the
+    engine test pins LMS 9.1's gains as the rig sent them). Not touched, found on the way (§B): LMS's
+    fade-out after a Mac mute unmutes the device per step; a Mac level move while LMS is muted sends
+    `mixer muting 0`.
+  - **Tests** (engine suite; LMS's answers are the gains the rig sent, `LMS_VOL33/40/41/42`, not
+    computed): `the engine knows LMS's answer to each report` (17 dB -> volume rows, shared with Swift
+    `theAgentsWholeVolumeIsTheEnginesToo`, plus a row only the printed level gives), `LMS's answer to a
+    reported level is not put on`, `a track or album change puts nothing on`, `a track change leaves a
+    move LMS never got`, `a resume ends where the Mac left the device`, `every other LMS level is put
+    on`, `a level put on clears the reports`, `a report never answered is forgotten`, `a pending level
+    goes through the same rules`, `an engine start keeps the device where it is`, `an engine start puts
+    on a level LMS changed`, `an engine start unmutes a muted device`, `a device back with a new ID
+    starts afresh`. **Anti-run** (0.4.1's behaviour: every level written): 7 FAIL (the answer, the
+    track change, the failed send, the resume, the pending level, the engine start, every-other via
+    the restore). **Mutants**, 15: 14 killed (no answer check; a one-step tolerance; no held check; no
+    restore; no first-level check; first level ignoring mute; no clear on a write; no expiry; no reset
+    for a new ID; the pair only for the newest report; restore without unmute; no report entry; the
+    unprinted level); SURVIVES, equivalent: an answer consuming itself (its twin is caught by the held
+    level). The Swift row test FAILS with one row changed (checked, restored). `scripts/test.sh` PASS:
+    engine output 68/68 with the matrix (25,690, 0 failed), swift 91 in 21 suites, install.sh 3/3.
+  - **Docs:** INSTALL.md (*Device's own volume*: the LMS slider shows the nearest step; the level stays
+    through a track or album change, pause and resume, a restart), INSTALL.html regenerated (README.html
+    and index.html unchanged).
+  - **Owed, live, after an install Simon asks for:** drag the macOS slider on the headset and the
+    speakers (Material follows, ends where the slider stops); a track change, an album change, pause
+    and resume, a settings change (engine restart): the device's level read before and after
+    (read-only HAL), unchanged; Material's slider still moves the device.
+
+- **LMS'S ECHO IS NOT PUT ON — 2026-10-14, BUILT in tree, then REJECTED and REPLACED the same day by
+  `THE DEVICE STAYS WHERE THE MAC PUT IT` (its code is gone; never built into the app)** (Simon chose option 1 of three: "yes as long as this doesnt break
+  functionality elsewhere"). The defect: §B `MAC SLIDER LAG AND THE BLUETOOTH HEADSET`, the slider lag
+  (LMS answers each `mixer volume N` with two audgs; each was put back on the device mid-drag and
+  opened the 500 ms settle window, where the user's next moves were recorded as the engine's own and
+  never sent).
+  - **The rule** (`output_coreaudio.c`, comment above `ECHO_DB`): each level `volume_listener` reports
+    is kept with its time (`echo_reported`, before the line is printed, so an echo can only follow
+    it; up to `ECHO_KEEP` 16). In `set_volume`, after `find_device` and before `apply_latest`, an audg
+    within `ECHO_DB` (1.1 dB) of a level reported in the last `ECHO_NS` (5 s) is an echo
+    (`lms_echo`): the device is not touched, no settle window opens, and `volume_pending` is cleared
+    (the device is where LMS says). The echo consumes every OLDER report and keeps itself (LMS's second
+    audg is an echo too) and the newer ones. An audg that is not an echo clears them all (`lms_echo`'s
+    miss), and so does any level put on (`echo_forget` in `apply_latest`, which also covers
+    `_ca_open`'s pending level, the one path that does not pass `lms_echo`).
+  - **The numbers, from the LMS 9.1 source and the measurement:** `ECHO_DB` is LMS's own rounding: the
+    agent picks the nearest slider position (`LMSVolume.volume(forDB:)`: half a step, 0.74 dB below
+    volume 25, 0.25 dB above), and `dBToFixed` (Squeezebox2.pm:211) keeps 8 bits from -30 to 0 dB (up
+    to 0.52 dB) and 16 bits below (up to 0.3 dB at -74 dB): 1.04 dB at most; measured 0.06-0.46 dB.
+    `ECHO_NS` covers the agent's send with LMS answering inside the agent's 4 s request timeout; the
+    echo arrived 8 ms after its report (2026-10-14 14:00:41).
+  - **Every carrier:**
+    - `set_volume`'s other branches are before the check and unchanged: Fixed (`ca.fixed`) returns
+      first; Software and a device with no volume control (`!hw`) return first (no listener, so nothing
+      is ever recorded); LMS's fixed flag (`output.volume_fixed`) returns first; a device not found
+      stays pending, as before.
+    - `volume_listener`: the only writer of reports. It reports nothing in -X (linear), under LMS's
+      fixed flag, or inside the settle window (unchanged), so none of those can make an echo.
+    - `apply_volume` and `VOLUME_SETTLE_NS`: unchanged for every level that IS put on, so the speakers'
+      coarse read-back (`READ-BACK IS NOT THE LEVEL SET`) and LMS's fades keep their window.
+    - Mute: LMS mutes with gain 0, -inf dB, never within 1.1 dB of a report: always put on (test). A
+      Mac mute reports its level and the agent sends `mixer muting 1`; LMS's fade down may start within
+      1.1 dB of it, so its first step can be skipped; the next is put on and clears the reports. Unmute:
+      the fade up's first steps are put on and clear them, so the last (the level) is put on too.
+    - Resume after the idle release (`RESUME IS ONE AUDG`, a fade in every 50 ms): its steps start at
+      0 and are put on as before; the last step can only be skipped within 5 s of a report and 1.1 dB
+      of it, i.e. at the level the device already has.
+    - `apply_lock` / lock order: `echo.lock` is only ever held alone, never across a HAL call.
+    - The agent, PlayerCore and the app: unchanged.
+    - The audio path: none (`set_volume` is LMS's audg; the 25,690-scenario matrix passes).
+  - **REJECTED AS IS by Simon 2026-10-14** ("I cant except a volume change if its heard this is not
+    acceptable and would need more thorough investigation on how to acheive a perfect sync"): the
+    residual below is HEARD (a Material nudge that changes nothing on the device). Do NOT build or
+    install this tree's echo skip; the matching by tolerance is to be replaced after the
+    investigation. Found for it, from the LMS 9.1 source: the TWO audgs are `Squeezebox2::volume`
+    (called by `mixerCommand`) and the `volume` pref's change hook (Player.pm:75), which calls it
+    again; and LMS's own echo mechanism: `mixer volume N seq_no:S` sets the client's sequence number
+    (Commands.pm:560), every later audg carries it (Squeezebox2.pm:310, `sequenceNumber` is 0 from
+    `SqueezePlay::init` on, so squeezelite always gets the field; the engine ignores it,
+    slimproto.h "squence ids - unused"). Not yet measured on the rig.
+  - **RESIDUAL (the reason it was rejected):** an LMS level within 1.1 dB of a report less than 5 s old
+    that is NOT an echo is skipped too: a nudge of Material's slider by 1 or 2 steps (0.49 dB a step
+    above volume 25; below 25 a step is about 1.5 dB, so never) within 5 s of a Mac slider move. The
+    device then sits up to 1.1 dB from LMS's level until the next LMS level is put on (the next track
+    start re-sends it). Narrowing it (consuming a report after two echoes, a shorter `ECHO_NS`) rests
+    on LMS always sending exactly two audgs and on its answer time, neither measured beyond one run.
+  - **Tests** (engine suite, all registered): `an echo of a reported level is not put on` (the
+    Melomania: a drag reported at -30 and -25, LMS's two echoes of -30 leave it at -25, the next move
+    is reported with `<lms>` 1, its own echo is skipped), `LMS's own levels are still put on`
+    (speakers: Material's -40, a level near a report older than Material's, a level near a 6 s old
+    report, a mute), `an echo consumes the older reports` (a level the drag passed, sent after the
+    drag's echoes, is put on), `a level put on at the open clears the reports` (a pending level put on
+    by `_ca_open`). **Anti-run** (the tree with the skip disabled, through `OCA_SOURCE`): the first
+    three FAIL (the drag pulled back to -30.40 dB; the move after the echo not reported, swallowed by
+    the window), as on 0.4.1. **Mutants**, 7 of 7 killed: no skip, no record, tolerance 0, no expiry,
+    no consumption of older reports, the hit consumed with the older ones (LMS's second audg then put
+    on), no `echo_forget` in `apply_latest` (it SURVIVED the first three tests, so the fourth was
+    written for it, and kills it). `scripts/test.sh` PASS: engine output 59/59 with the matrix, swift
+    90 in 21 suites, install.sh 3/3.
+  - **Docs:** INSTALL.md's "the LMS slider follows a moment later" stays true; nothing else describes
+    the old pull-back. This entry, §B, the index.
+
+- **A STUCK DB PROPERTY FIXED — 2026-10-14, INSTALLED as 0.4.1 the same day, VERIFIED LIVE by Simon** ("it works but very laggy in its response": the macOS slider on the headset now reaches Material; the lag is §C `LMS'S ECHO IS NOT PUT ON`)
+  (Simon: "okay check over all areas this would hit and be sure to doument thoroughly", after asking
+  "couldnt this get confused with a DAC that has no volume control"). The defect: §B `MAC SLIDER LAG
+  AND THE BLUETOOTH HEADSET` (the Melomania P100's macOS slider never reached LMS; §A3 `A DB
+  PROPERTY CAN BE STUCK`).
+  - **The rule** (`read_device_db`, `output_coreaudio.c`): per volume control, the dB property is
+    read first, as before. Only when it reads the top of its range (`d >= v->db_max`) while the
+    control's scalar is below full (`s < 1.0f`) is it taken as stuck, and the level is the scalar
+    through the HAL's ScalarToDecibels (`scalar_to_db`, split out). A working control cannot give that
+    pair: at the top of its range it is at full scale. If the conversion fails, the stuck reading is
+    kept (as before); a control with no dB property still reads through the conversion (unchanged).
+    Cost: one more property read per control per level read (listener calls and records only, never
+    the audio path).
+  - **Why not the conversion everywhere:** it disagrees with the speakers' dB property mid-range
+    (§A3 `SCALAR TO DB IS NOT THE DB PROPERTY`), and their levels were measured against the property.
+    On the headset it is exact: writes land at DecibelsToScalar, and ScalarToDecibels gives the dB
+    written back (round trip, §B).
+  - **A DAC with no volume control** (the FiiO; Simon's question): `find_volume` finds no control
+    (`v.n` 0), so `read_device_db` loops over nothing, no listener is added (`init`: `watch_volume` only
+    with `dev_has_volume`), and LMS's level is software gain. Nothing to read, nothing to confuse.
+  - **Every carrier of the change** (the level is read in `read_device_db` and nowhere else):
+    - `record_device_volume`: at init (`watch_volume(dev, &v, true)`), when the listeners move to a
+      device (`point_listeners`), after LMS's level is written (`apply_volume`). On the headset the
+      record is now the level written, so LMS's own level is not reported back (test).
+    - `volume_listener`: the report. Now the headset's real level.
+    - `put_held_level`: only the "was" in its log line. Fixed is never offered on Bluetooth
+      (`isExternal`), so no writer there today; a USB DAC with a stuck property would log the right
+      "was".
+    - NOT touched: the writes (`set_control_db`, `apply_volume`: the headset's dB writes measured
+      right), `find_volume` and the `-l` list (controls, range, mute; no level), mute (its own
+      property), -X linear (the listener returns first), Fixed (no `-V`, nothing watched), the agent
+      (it takes the engine's dB: `LMSVolume.volume(forDB:)` puts the headset's -40 dB floor at LMS 23,
+      as any short-range device: the DragonFly's -64 dB is about 7; INSTALL.md now says so), the audio
+      frames (`read_device_db` is not in the audio path: the matrix's 25,690 scenarios pass).
+  - **Tests** (engine suite, fake HAL taught the measured behaviour: `stuck_db`, `chan_volume`
+    (elements 1 and 2, no main), `curved_conversion` (another taper than the property, agreeing at the
+    ends), and `notify` calling a property's listeners one after another, as macOS announces each
+    channel on its own; the 52 earlier tests unchanged and passing):
+    - `a stuck dB reading is read through the scalar` (the Melomania as measured: the slider reported
+      at -30.00 and -35.00, LMS's -25 not reported back, full read as 0.00): FAILS on the engine
+      before the fix (0 reports).
+    - `a working dB reading stays the level` (the speakers with a conversion 15.8 dB off mid-range:
+      reported -30.00, not -45.83; full 0.00): a control, passes before and after.
+    - `a DAC with no volume control is never read or reported` (no listener, software gain, no
+      report): a control, passes before and after.
+    - Mutants (scratchpad copies through `OCA_SOURCE`): always the conversion, and the conversion
+      whenever it disagrees, each FAIL the working-reading test (-45.83); no stuck rule, and a stuck
+      rule that keeps the reading, each FAIL the stuck test. SURVIVES: dropping `s < 1.0f`. It is
+      equivalent wherever the conversion reaches the top at full, which both devices with one do
+      (§A3 lookups: 1.0 -> 0.00 dB); the guard keeps a full-scale reading from ever being replaced.
+  - **Docs:** INSTALL.md (*Device's own volume*: Bluetooth headphones that misreport, and a device
+    whose quietest setting sits above LMS's bottom), INSTALL.html regenerated; this entry, §A3's two
+    rows, §B.
+  - **Live:** the headset under Follow, the macOS slider moved, Material followed (Simon, 2026-10-14:
+    "it works"). Not separately confirmed: LMS's slider still moving the headset after the fix.
+
+- **PLAYERS AND FIXED BUILT 2026-10-12 — `ONE PLAYER PER DAC` and `FIXED HOLDS THE LMS VOLUME`,
+  INSTALLED as 0.4.0 2026-10-12 19:57Z (§A2 version history), NOT live-tested** (Simon approved the plan
+  `~/.claude/plans/immutable-purring-hoare.md`). Built in its order, each step's suite passing first:
+  - **Engine** (`output_coreaudio.c`, usage line in `main.c`, UPSTREAM.md): `-a <f>:<e>:<x>:<h>`;
+    `set_control_db` split out of `apply_volume` unchanged. 7 tests (`Fixed ignores LMS's level`, `a
+    held level is put on at the start`, `... never moved by LMS`, `... once per device`, `Fixed without
+    a held level leaves the device alone`, `a held level needs Fixed`, `Fixed ignores device volume`):
+    5 FAIL on 0.3.14's engine, the 2 controls pass. 7 mutants, 7 killed (no Fixed branch, no gain at
+    init, no unmute, a hold at every open, none at init, `-V` not ignored, a hold without Fixed).
+    `MATRIX_SIG` 0.3.14 vs tree: 27 of 25,690 differ, all synced starts, each the same on both builds
+    in a rerun (`THE MATRIX IS FRAME-EXACT BUT ONE`).
+  - **PlayerCore:** `Settings` v2 (`players`, `PlayerSettings`, `followDevice`, `Stored`/`read`,
+    `setAsideOlder`), `Players.swift` (`PlayerList`, `EnginePlan`, `HeldVolume`), `Paths` per player
+    (`slug`: readable UID cut at 48 + 4 hex of FNV-1a), `PlayerIdentity` per URL, `AgentStatus` v2 +
+    `PlayerStatus`, `LMSClient.playerStates(macs:)`, `ServerChoice.playerStates`. Swift 88 tests in
+    21 suites, the old ones moved to the new shapes and new ones for every rule in the plan.
+  - **Agent:** `PlayerSlot` per player that is on; `reconcile` stops every changed engine before
+    starting any; orphans stopped from every `players/*/engine.pid` and 0.3.x's.
+  - **App:** Settings = *Players* (row: name, device, switch, gearshape) + *Shared*; the cog opens a
+    sheet (`PlayerSettingsView`, state in `PlayerModel.editingPlayer`); the held level read in
+    `chooseVolume`; the menu shows one block per player.
+  - **Docs:** INSTALL.md (Settings, the cog, Fixed holding, log names) + INSTALL.html regenerated;
+    README.md and CHANGELOG wait for the merge to main. The CHANGELOG must say: settings start fresh
+    (0.3.x's set aside); the 0.3.x LMS player carries on as *Follow the macOS output* (`THE OLD
+    PLAYER CARRIES ON`); each device player switched on is a new LMS player, named "<Mac's name>
+    <device's name>".
+  - `scripts/test.sh` PASS: engine output 52/52, swift 88 in 21 suites, install.sh 3/3; `swift build`
+    of the agent shows one warning, the same one 0.3.14 has (a clean build of HEAD, same line).
+  - **LIVE, 0.4.0, 2026-10-12 (Simon: "most appears to work check current volume level of the
+    dragonfly"):** Simon set it all up himself: Follow on the speakers, the DragonFly and the FiiO
+    players on, both Fixed (FiiO `-a 0:1:1`, no level: no volume control). The DragonFly's Fixed held
+    LMS volume 48: `-a 0:1:1:-25.65`, engine log "device volume held at -25.6 dB (was -25.9 dB)" at
+    20:13:43Z. At 20:15:11Z, with that player PAUSED in LMS (saved volume 48, `digital_volume_control`
+    0), a read-only HAL read of the DragonFly: -25.65 dB, mute off. So the level survives a pause.
+    **FIXED SET UP WHILE PAUSED VERIFIED LIVE 20:16:19Z** (Simon: "setting to fixed whilst paused set
+    the volume to what was in LMS check this now"): Device's own volume at 20:15:23Z (the agent put
+    LMS's faded 0.0 back to 48, `volumeRestore`), played, paused, so the pause fade left the DragonFly
+    muted; then Fixed while paused: engine log "device volume held at -25.6 dB (was -64.0 dB, muted)".
+    At 20:17:16Z, LMS paused, saved volume 48, `digital_volume_control` 0: HAL read -25.65 dB, mute off.
+    **REPLUG VERIFIED LIVE** (Simon: "just unplugged it and back in again still in fixed is volume still
+    the same level"): unplugged 20:17:41Z (agent stopped its engine), back on USB only at 20:21:04Z
+    (~3 min; the DragonFly is slow to re-enumerate here, as at 18:04-18:06Z); engine restarted with the
+    same `-a 0:1:1:-25.65`, "device volume held at -25.6 dB (was -26.0 dB)" (macOS's own restored
+    level), HAL read 20:21:06Z -25.65 dB, mute off; LMS connected, stopped, 48, fixed. The FiiO's player
+    also stopped at 20:20:40Z ("its device is not present"); not asked about, not investigated.
+    NOT yet seen: a slider move in Material.
+  - **Live checks owed** (the plan's Verification, each play test asking the player first): a fresh
+    start; the DragonFly as its own player with its own volume; Fixed set up while paused holding
+    LMS 17 at -48.8 dB, through pause, a Material slider move and a replug; the FiiO bit-exact in Fixed
+    with "Volume can be adjusted" set in Material; *Follow the macOS output* staying on the built-in
+    output while the DragonFly, its own player on, is the macOS output.
+- **CODE-REVIEW 2026-10-12 (7) — /code-review of 0.2.10-0.3.14, CLOSED with no code change** (Simon:
+  "lets do another /code-review"; scope `origin/dev` 7faf2f8..15fa252, tree clean). Four findings:
+  1+2 CONFIRMED, two fixes built and REVERTED by Simon, requirement moved to `ONE PLAYER PER DAC`
+  (§B `FIXED SET UP WHILE PAUSED`); Software's case a known limitation (§A2); 3 DISMISSED (§A2 `SAVE AND
+  CLOSE`); 4 not answered. The tree is back at 15fa252 (0.3.14, installed); nothing was built.
+  - Cleared on evidence: build.sh:53 compares `wc -l`'s padded count with `-eq`, true under sh, dash,
+    bash and zsh (measured; a string `=` would fail).
+  - Measured on the way, for the plan: LMS 9.1 `Player::fade_volume` sends an audg every 0.05 s from
+    the level it starts at (Player.pm:373-396); under fixed volume (`adjust` 0) the engine passes
+    FIXED_ONE whatever the gain (`process_audg`, slimproto.c:450); the agent's `stopEngine` waits up to
+    3 s for the engine to exit, and SIGTERM reaches `close output` in ~0.2 s (engine.log).
 - **CODE-REVIEW 2026-10-12 (6) — /code-review of 0.2.10-0.3.13** (Simon: "lets do another /code-review
   of lyrionplayer show me the resutls before acting on anything", then "Dimiss 4 I dont care about the
   lag", then "fix those"). Scope `origin/dev` 7faf2f8..tree (no commits past it). Gate drops: the same

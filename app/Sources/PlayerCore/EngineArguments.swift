@@ -13,9 +13,11 @@ public enum EngineArguments {
 	/// (repo ledger, THE 384K CAP), so MaxSampleRate is never reported above it.
 	public static let lmsPCMRateCap = 384_000
 
-	public static func build(settings: Settings, device: DeviceCaps, mac: String, nameFile: String,
+	/// One player's engine (`key`: PlayerKey.follow or a device UID) on `device`, with its own LMS
+	/// identity (`mac`, `nameFile`) and log.
+	public static func build(settings: Settings, key: String, device: DeviceCaps, mac: String, nameFile: String,
 							 logFile: String) -> [String] {
-		let options = settings.options(for: device)
+		let options = settings.player(key, device: device)
 		var args = [
 			"-o", device.uid,
 			"-M", modelName,
@@ -24,7 +26,7 @@ public enum EngineArguments {
 			"-Z", String(min(device.maxRate, lmsPCMRateCap)),
 			// E: resample only when the device lacks the track's rate
 			"-R", "\(settings.resampleQuality)E",
-			"-a", "0:\(options.exclusive ? 1 : 0)",
+			"-a", deviceParams(options, device),
 			"-d", "all=\(settings.logLevel)",
 			"-f", logFile,
 		]
@@ -34,8 +36,7 @@ public enum EngineArguments {
 		if settings.idleSeconds > 0 {
 			args += ["-C", String(settings.idleSeconds)]
 		}
-		// .fixed: no -V, so the engine never touches the device's level, even on an audg LMS sends
-		// before the agent has set it to fixed
+		// .fixed: no -V; the engine ignores LMS's level itself (-a's third field)
 		if options.volume == .device {
 			args.append("-V")
 		}
@@ -48,5 +49,21 @@ public enum EngineArguments {
 			args.append("-D")
 		}
 		return args
+	}
+
+	/// `-a <frames>:<exclusive>[:<fixed>[:<held dB>]]` (engine/output_coreaudio.c). Fixed: the engine
+	/// keeps the samples at full scale whatever LMS sends, so it never rests on LMS's fixed flag
+	/// reaching it (after a start, before the agent has set it; while LMS cannot be reached; after a
+	/// change in Material). On a device with a volume control, its own volume is held at the level LMS
+	/// had when Fixed was chosen (FIXED HOLDS THE LMS VOLUME); with no level saved, the device is left
+	/// alone (the agent says so).
+	static func deviceParams(_ options: PlayerSettings, _ device: DeviceCaps) -> String {
+		var params = "0:\(options.exclusive ? 1 : 0)"
+		guard options.volume == .fixed else { return params }
+		params += ":1"
+		if device.volume != nil, let held = options.heldVolume {
+			params += ":" + String(format: "%.2f", HeldVolume.dB(held))
+		}
+		return params
 	}
 }

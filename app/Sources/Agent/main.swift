@@ -1,8 +1,9 @@
-// The LyrionPlay agent. launchd starts it at login (PlayerCore.LaunchAgent). It runs the
-// squeezelite engine with arguments built from the settings and the device's probed capabilities,
-// restarts it if it exits unexpectedly, follows device and settings changes, and writes
-// status.json for the menu bar app. It also keeps the menu app open while it runs. It only ever
-// signals the engine PID it started.
+// The LyrionPlay agent. launchd starts it at login (PlayerCore.LaunchAgent). It runs one squeezelite
+// engine per player that is on (ONE PLAYER PER DAC): *Follow the macOS output*, and each device whose
+// own player is switched on in Settings. Each engine's arguments are built from the settings and the
+// device's probed capabilities. It restarts an engine that exits unexpectedly, follows device and
+// settings changes, and writes status.json for the menu bar app. It also keeps the menu app open
+// while it runs. It only ever signals engine PIDs it started.
 import Foundation
 import os
 import PlayerCore
@@ -25,20 +26,22 @@ final class Log {
 
 let log = Log()
 
-/// a report from the engine, with where to send it
+/// a report from a player's engine, with where to send it
 struct VolumeChange: Sendable {
 	var report: VolumeReport
 	var server: LMSServer
 	var mac: String
+	/// the player's name, for the log
+	var player: String
 }
 
 func modificationDate(_ url: URL) -> Date? {
 	(try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
 }
 
-/// keeps one older copy. Called only when the agent or the engine starts, and both can run for a
+/// keeps one older copy. Called only when the agent or an engine starts, and both can run for a
 /// whole login session, so a log can grow past `bytes` until the next start (with "Debug" logging,
-/// engine.log grows fastest).
+/// an engine's log grows fastest).
 func rotate(_ url: URL, above bytes: Int) {
 	guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int,
 		  size > bytes else { return }
@@ -47,34 +50,75 @@ func rotate(_ url: URL, above bytes: Int) {
 	try? FileManager.default.moveItem(at: url, to: old)
 }
 
+/// One player: its LMS identity and the engine that plays it.
+final class PlayerSlot {
+	let key: String
+	let mac: String
+	/// the player's name, for the log and the menu
+	var name: String
+	var engine: Process?
+	var args: [String]?
+	/// a rename: the name file is read at the engine's start, so the next reconcile restarts it
+	var restartWanted = false
+	/// the device the running engine plays to
+	var device: DeviceCaps?
+	/// what the running engine last said it plays (PCM, or DoP at a rate); nil until it says, and
+	/// again once it lets go of the device (`lyrionplay:format idle`, FormatLine)
+	var format: FormatReport?
+	var expectedExit: Int32?
+	var restartWork: DispatchWorkItem?
+	var backoff: TimeInterval = 1
+	var startedAt = Date.distantPast
+	/// what went wrong with the engine (it could not start, it stopped)
+	var problem: String?
+	/// what keeps it from playing as set: no device, or Fixed with no level to hold
+	var setupProblem: String?
+	/// LMS's "Output level fixed at 100%" for this player, following its setting; locked: `checked`
+	/// runs on the main queue, `recordRefusal` on the send's own task (syncFixedVolume)
+	let fixedVolume = OSAllocatedUnfairLock(initialState: FixedVolumeSync())
+	/// Mac volume -> LMS: one push at a time, at most one per 150 ms while a key is held, the latest
+	/// level winning (VolumeSync.swift). One per player, so one player's push never drops another's.
+	let volumeSender = LatestValueSender<VolumeChange>(interval: 0.15) { change in
+		let client = LMSClient(server: change.server)
+		guard let command = await VolumePush.command(for: change.report,
+													 volumeFixed: { await client.volumeFixed(player: change.mac) },
+													 lmsVolume: { await client.volume(player: change.mac) }) else {
+			DispatchQueue.main.async { log("\(change.player): the Mac's volume changed, but LMS's volume is fixed for this player; not sent") }
+			return
+		}
+		DispatchQueue.main.async {
+			let report = change.report
+			log("\(change.player): the Mac's volume changed (\(String(format: "%.2f", report.dB)) dB\(report.muted ? ", muted" : "")): LMS \(command.joined(separator: " "))")
+		}
+		_ = await client.call(player: change.mac, command)
+	}
+
+	init(key: String, mac: String, name: String) {
+		self.key = key
+		self.mac = mac
+		self.name = name
+	}
+}
+
 final class Supervisor {
 	private var settings: Settings
 	private var settingsDate: Date?
 	private var devices: [DeviceCaps] = []
-	private var engine: Process?
-	private var engineArgs: [String]?
-	/// the device the running engine plays to
-	private var engineDevice: DeviceCaps?
-	/// what the running engine last said it plays (PCM, or DoP at a rate); nil until it says, and
-	/// again once it lets go of the device (`lyrionplay:format idle`, FormatLine)
-	private var engineFormat: FormatReport?
-	/// following the macOS output, but held on the engine's device while it has exclusive access
+	/// one per player that is on
+	private var slots: [String: PlayerSlot] = [:]
+	/// *Follow the macOS output*, held on its engine's device while it has exclusive access
 	private var follow = OutputFollow()
-	private var expectedExit: Int32?
-	private var restartWork: DispatchWorkItem?
-	private var backoff: TimeInterval = 1
-	private var startedAt = Date.distantPast
 	private var watcher: AudioDeviceWatcher?
 	private var timer: DispatchSourceTimer?
 	private var signalSources: [DispatchSourceSignal] = []
 	private var reconcilePending = false
-	private var mac = ""
-	/// the server for the status and volume pushes, and what it said of the player; a check begun
+	/// the server for the status and volume pushes, and what it said of each player; a check begun
 	/// before a server change is dropped
 	private var lms: ServerChoice
 	private var lastLMSCheck = Date.distantPast
 	private var lmsCheckRunning = false
 	private var checkLog = LMSCheckLog()
+	/// a problem of the whole player (the engine missing from the app)
 	private var problem: String?
 	private let engineURL = Paths.executable("squeezelite")
 	private var shuttingDown = false
@@ -82,25 +126,6 @@ final class Supervisor {
 	private var menuOpenedAt: Date?
 	private var menuBackoff: TimeInterval = 5
 	private var lastNoServerLog = Date.distantPast
-	/// LMS's "Output level fixed at 100%" for this player, following the engine device's setting;
-	/// locked: `checked` runs on the main queue, `recordRefusal` on the send's own task (syncFixedVolume)
-	private let fixedVolume = OSAllocatedUnfairLock(initialState: FixedVolumeSync())
-	/// Mac volume -> LMS: one push at a time, at most one per 150 ms while a key is held, the
-	/// latest level winning (VolumeSync.swift)
-	private let volumeSender = LatestValueSender<VolumeChange>(interval: 0.15) { change in
-		let client = LMSClient(server: change.server)
-		guard let command = await VolumePush.command(for: change.report,
-													 volumeFixed: { await client.volumeFixed(player: change.mac) },
-													 lmsVolume: { await client.volume(player: change.mac) }) else {
-			DispatchQueue.main.async { log("the Mac's volume changed, but LMS's volume is fixed for this player; not sent") }
-			return
-		}
-		DispatchQueue.main.async {
-			let report = change.report
-			log("the Mac's volume changed (\(String(format: "%.2f", report.dB)) dB\(report.muted ? ", muted" : "")): LMS \(command.joined(separator: " "))")
-		}
-		_ = await client.call(player: change.mac, command)
-	}
 
 	init() {
 		let settings = Settings.load()
@@ -122,17 +147,20 @@ final class Supervisor {
 			writeStatus()
 			exit(1) // KeepAlive restarts us; a reinstall fixes it
 		}
+		// settings from before players (0.3.x) are not carried over (Simon, 2026-10-12: "no migration")
+		do {
+			if let aside = try Settings.setAsideOlder() {
+				log("settings from an older version moved to \(aside.lastPathComponent); starting with the defaults")
+			}
+		} catch {
+			log("cannot set the older settings aside: \(error)")
+		}
+		settings = Settings.load()
+		lms = ServerChoice(setting: settings.server)
 		if !FileManager.default.fileExists(atPath: Paths.settings.path) {
 			try? settings.save()
 		}
 		settingsDate = modificationDate(Paths.settings)
-		do {
-			mac = try PlayerIdentity.loadOrCreateMAC()
-			try PlayerIdentity.ensureNameFile(name: settings.playerName)
-		} catch {
-			log("cannot create the player identity: \(error)")
-			exit(1)
-		}
 
 		for sig in [SIGTERM, SIGINT] {
 			signal(sig, SIG_IGN)
@@ -150,29 +178,32 @@ final class Supervisor {
 
 		// a new agent means a new session, or a restart after a crash: an old marker is stale
 		try? FileManager.default.removeItem(at: MenuPresence.sessionEnding)
-		stopOrphanedEngine()
+		stopOrphanedEngines()
 		reconcile("start")
 		dispatchMain()
 	}
 
-	/// An agent that crashed leaves its engine running: Process starts children in their own
+	/// An agent that crashed leaves its engines running: Process starts children in their own
 	/// process group, so launchd does not take them down with the job. Measured 2026-10-09: after
 	/// `kill -9` of the agent, the old engine (parent now PID 1) and the new agent's engine both ran
-	/// with the same player identity. Stop the one named in engine.pid, and only if that PID is
-	/// alive AND is this engine executable.
-	private func stopOrphanedEngine() {
-		defer { try? FileManager.default.removeItem(at: Paths.enginePID) }
-		guard let text = try? String(contentsOf: Paths.enginePID, encoding: .utf8),
-			  let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0,
-			  kill(pid, 0) == 0 else { return }
-		var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-		guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0,
-			  String(cString: buffer) == engineURL.path else { return }
-		log("stopping engine \(pid), left running by a previous agent")
-		kill(pid, SIGTERM)
-		let deadline = Date().addingTimeInterval(3)
-		while kill(pid, 0) == 0 && Date() < deadline { usleep(50_000) }
-		if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+	/// with the same player identity. Stop each one named in a player's engine.pid (and in 0.3.x's
+	/// one), and only if that PID is alive AND is this engine executable.
+	private func stopOrphanedEngines() {
+		let folders = (try? FileManager.default.contentsOfDirectory(at: Paths.players, includingPropertiesForKeys: nil)) ?? []
+		for pidFile in folders.map({ $0.appendingPathComponent("engine.pid") }) + [Paths.oldEnginePID] {
+			defer { try? FileManager.default.removeItem(at: pidFile) }
+			guard let text = try? String(contentsOf: pidFile, encoding: .utf8),
+				  let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0,
+				  kill(pid, 0) == 0 else { continue }
+			var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+			guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0,
+				  String(cString: buffer) == engineURL.path else { continue }
+			log("stopping engine \(pid), left running by a previous agent")
+			kill(pid, SIGTERM)
+			let deadline = Date().addingTimeInterval(3)
+			while kill(pid, 0) == 0 && Date() < deadline { usleep(50_000) }
+			if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+		}
 	}
 
 	/// device notifications arrive in bursts: act once, a second after the first
@@ -185,55 +216,112 @@ final class Supervisor {
 		}
 	}
 
-	/// probe the devices, build the arguments, and (re)start the engine only if they changed
+	/// the players that are on: *Follow the macOS output* first, then the others in the list's order
+	private var playersOn: [String] {
+		PlayerList.rows(settings: settings, devices: devices).map(\.key).filter { settings.isOn($0) }
+	}
+
+	/// probe the devices, then (re)start only the engines whose arguments changed, stopping every one
+	/// that changed or ended before starting any, so two engines never hold one device
 	private func reconcile(_ reason: String) {
 		devices = DeviceCaps.probe(engine: engineURL)
-		let wasDeferred = follow.deferred
-		guard let device = follow.resolve(settings, in: devices, holding: heldDevice()) else {
-			if engine != nil { log("\(reason): output device \(settings.outputDevice) is not present; stopping the engine") }
-			stopEngine()
-			problem = settings.outputDevice == Settings.followSystem
-				? "No output device" : "The chosen output device is not connected"
-			writeStatus()
-			return
+		let on = playersOn
+		var followDevice: DeviceCaps?
+		if on.contains(PlayerKey.follow) {
+			let wasDeferred = follow.deferred
+			followDevice = follow.resolve(settings, in: devices, holding: heldDevice(PlayerKey.follow))
+			// Taking exclusive access moves the macOS default output elsewhere; that is not the user
+			// choosing another output. Follow it once the engine lets go (tick).
+			if follow.deferred && !wasDeferred, let device = followDevice {
+				log("\(reason): the macOS output is elsewhere while \(settings.player(PlayerKey.follow, device: device).name) holds \(device.name) exclusively; staying on it until it lets go")
+			}
 		}
-		// Taking exclusive access moves the macOS default output elsewhere; that is not the user
-		// choosing another output. Follow it once the engine lets go (tick).
-		if follow.deferred && !wasDeferred {
-			log("\(reason): the macOS output is elsewhere while the engine holds \(device.name) exclusively; staying on it until it lets go")
+		for key in on where slots[key] == nil {
+			guard let slot = makeSlot(key) else { continue }
+			slots[key] = slot
 		}
-		let args = EngineArguments.build(settings: settings, device: device, mac: mac,
-										 nameFile: Paths.playerName.path, logFile: Paths.engineLog.path)
-		if args == engineArgs, engine != nil { return }
-		log("\(reason): \(engine == nil ? "starting" : "restarting") the engine for \(device.name)")
-		stopEngine()
-		startEngine(args, device: device)
+		let plan = EnginePlan.make(settings: settings, devices: devices, followDevice: followDevice) { key, device in
+			guard let slot = slots[key] else { return [] }
+			return EngineArguments.build(settings: settings, key: key, device: device, mac: slot.mac,
+										 nameFile: Paths.playerName(key).path, logFile: Paths.engineLog(key).path)
+		}.filter { slots[$0.key] != nil }
+		let running = slots.compactMapValues { slot -> [String]? in
+			guard slot.engine != nil else { return nil }
+			return slot.restartWanted ? [] : slot.args ?? []
+		}
+		let changes = EnginePlan.changes(running: running, wanted: plan)
+		for key in changes.stop {
+			guard let slot = slots[key] else { continue }
+			if plan[key] == nil {
+				log("\(reason): stopping the engine of \(slot.name)\(on.contains(key) ? ": its device is not present" : ": switched off")")
+			}
+			stopEngine(slot)
+		}
+		// players switched off: their engines are stopped above; nothing more is known of them
+		for key in slots.keys where !on.contains(key) {
+			if let slot = slots[key] { stopEngine(slot) }
+			slots[key] = nil
+		}
+		for key in changes.start {
+			guard let slot = slots[key], let spec = plan[key] else { continue }
+			log("\(reason): \(running[key] == nil ? "starting" : "restarting") the engine of \(slot.name) on \(spec.device.name)")
+			startEngine(slot, spec)
+		}
+		for (key, slot) in slots {
+			guard let spec = plan[key] else {
+				slot.setupProblem = key == PlayerKey.follow ? "No output device" : "Not connected"
+				continue
+			}
+			// only a hand-edited file gets here: the Settings window saves no Fixed without a level
+			let options = settings.player(key, device: spec.device)
+			slot.setupProblem = options.volume == .fixed && spec.device.volume != nil && options.heldVolume == nil
+				? "Fixed has no level to hold: choose Fixed again in its settings" : nil
+		}
 		writeStatus()
 	}
 
-	/// the engine's device, while the engine holds it exclusively
-	private func heldDevice() -> String? {
-		guard let device = engineDevice, let pid = engine?.processIdentifier,
+	/// a player's identity in LMS, made once and kept (PlayerIdentity)
+	private func makeSlot(_ key: String) -> PlayerSlot? {
+		let name = settings.player(key, device: devices.first { $0.uid == key }).name
+		do {
+			if key == PlayerKey.follow,
+			   let mac = try PlayerIdentity.adoptOldPlayer(mac: Paths.oldMAC, name: Paths.oldPlayerName,
+															macAt: Paths.mac(key), nameAt: Paths.playerName(key)) {
+				log("\(name) carries on as the earlier version's player \(mac)")
+			}
+			let mac = try PlayerIdentity.loadOrCreateMAC(at: Paths.mac(key))
+			try PlayerIdentity.ensureNameFile(at: Paths.playerName(key), name: name)
+			return PlayerSlot(key: key, mac: mac, name: name)
+		} catch {
+			log("cannot create the identity of \(name): \(error)")
+			return nil
+		}
+	}
+
+	/// a player's engine's device, while that engine holds it exclusively
+	private func heldDevice(_ key: String) -> String? {
+		guard let slot = slots[key], let device = slot.device, let pid = slot.engine?.processIdentifier,
 			  let id = CoreAudioQuery.device(uid: device.uid), CoreAudioQuery.hogOwner(id) == pid else { return nil }
 		return device.uid
 	}
 
-	private func startEngine(_ args: [String], device: DeviceCaps) {
-		restartWork?.cancel()
-		restartWork = nil
-		rotate(Paths.engineLog, above: 5_000_000)
-		if !FileManager.default.fileExists(atPath: Paths.engineLog.path) {
-			FileManager.default.createFile(atPath: Paths.engineLog.path, contents: nil)
+	private func startEngine(_ slot: PlayerSlot, _ spec: EngineSpec) {
+		slot.restartWork?.cancel()
+		slot.restartWork = nil
+		let logURL = Paths.engineLog(slot.key)
+		rotate(logURL, above: 5_000_000)
+		if !FileManager.default.fileExists(atPath: logURL.path) {
+			FileManager.default.createFile(atPath: logURL.path, contents: nil)
 		}
 		let process = Process()
 		process.executableURL = engineURL
-		process.arguments = args
+		process.arguments = spec.args
 		// the engine reports volume changes made on the Mac here (output_coreaudio.c, volume_listener),
 		// and what it plays (ca_report_format)
 		let reports = Pipe()
 		process.standardOutput = reports
 		var partial = ""
-		reports.fileHandleForReading.readabilityHandler = { [weak self, weak process] handle in
+		reports.fileHandleForReading.readabilityHandler = { [weak self, weak slot, weak process] handle in
 			let data = handle.availableData
 			if data.isEmpty {
 				handle.readabilityHandler = nil // the engine exited
@@ -248,20 +336,20 @@ final class Supervisor {
 				// (/code-review 2026-10-12 (2), finding 5)
 				if let report = VolumeReport(line: line) {
 					DispatchQueue.main.async {
-						guard let self, let process, self.engine === process else { return }
-						self.deviceVolumeChanged(report)
+						guard let self, let slot, let process, slot.engine === process else { return }
+						self.deviceVolumeChanged(slot, report)
 					}
 				} else if let format = FormatLine(line: line) {
 					DispatchQueue.main.async {
-						guard let self, let process, self.engine === process else { return }
-						self.engineFormat = format.report // nil once the engine lets go of the device
+						guard let self, let slot, let process, slot.engine === process else { return }
+						slot.format = format.report // nil once the engine lets go of the device
 						self.writeStatus()
 					}
 				}
 			}
 		}
 		// anything printed before the engine opens its own log (a bad option, say) lands there too
-		if let handle = try? FileHandle(forWritingTo: Paths.engineLog) {
+		if let handle = try? FileHandle(forWritingTo: logURL) {
 			handle.seekToEndOfFile()
 			process.standardError = handle
 		}
@@ -272,77 +360,81 @@ final class Supervisor {
 		do {
 			try process.run()
 		} catch {
-			log("cannot start the engine: \(error)")
-			problem = "The player engine could not start"
-			scheduleRestart()
+			log("cannot start the engine of \(slot.name): \(error)")
+			slot.problem = "The player engine could not start"
+			scheduleRestart(slot)
 			return
 		}
-		engine = process
-		engineArgs = args
-		engineDevice = device
-		startedAt = Date()
-		problem = nil
-		try? String(process.processIdentifier).write(to: Paths.enginePID, atomically: true, encoding: .utf8)
-		log("engine \(process.processIdentifier) started: \(args.joined(separator: " "))")
+		slot.engine = process
+		slot.args = spec.args
+		slot.restartWanted = false
+		slot.device = spec.device
+		slot.startedAt = Date()
+		slot.problem = nil
+		try? String(process.processIdentifier).write(to: Paths.enginePID(slot.key), atomically: true, encoding: .utf8)
+		log("engine \(process.processIdentifier) of \(slot.name) started: \(spec.args.joined(separator: " "))")
 	}
 
-	private func stopEngine() {
-		restartWork?.cancel()
-		restartWork = nil
-		guard let process = engine else { return }
-		engine = nil
-		engineArgs = nil
-		engineDevice = nil
-		engineFormat = nil
-		try? FileManager.default.removeItem(at: Paths.enginePID)
-		expectedExit = process.processIdentifier
+	private func stopEngine(_ slot: PlayerSlot) {
+		slot.restartWork?.cancel()
+		slot.restartWork = nil
+		guard let process = slot.engine else { return }
+		slot.engine = nil
+		slot.args = nil
+		slot.device = nil
+		slot.format = nil
+		try? FileManager.default.removeItem(at: Paths.enginePID(slot.key))
+		slot.expectedExit = process.processIdentifier
 		process.terminate()
 		let deadline = Date().addingTimeInterval(3)
 		while process.isRunning && Date() < deadline { usleep(50_000) }
 		if process.isRunning {
-			log("engine \(process.processIdentifier) did not stop; killing it")
+			log("engine \(process.processIdentifier) of \(slot.name) did not stop; killing it")
 			kill(process.processIdentifier, SIGKILL)
 		}
 	}
 
-	/// The Mac's volume keys or menu bar slider moved the device: move LMS's slider to match, so the
-	/// volume works both ways. The engine reports only changes it did not make itself, and LMS's
-	/// reply puts the same level back on the device, so nothing echoes.
-	private func deviceVolumeChanged(_ report: VolumeReport) {
+	/// The Mac's volume keys or menu bar slider moved a player's device: move that player's LMS slider
+	/// to match, so the volume works both ways. The engine reports only changes it did not make
+	/// itself, and LMS's reply puts the same level back on the device, so nothing echoes.
+	private func deviceVolumeChanged(_ slot: PlayerSlot, _ report: VolumeReport) {
 		guard let server = lms.server else {
 			// a held key reports many times a second: say it once
 			if Date().timeIntervalSince(lastNoServerLog) > 5 {
 				lastNoServerLog = Date()
-				log("the Mac's volume changed, but no server is known yet; not sent")
+				log("\(slot.name): the Mac's volume changed, but no server is known yet; not sent")
 			}
 			return
 		}
-		volumeSender.submit(VolumeChange(report: report, server: server, mac: mac))
+		slot.volumeSender.submit(VolumeChange(report: report, server: server, mac: slot.mac, player: slot.name))
 	}
 
 	private func engineExited(pid: Int32, status: Int32) {
-		if pid == expectedExit {
-			expectedExit = nil
+		for slot in slots.values {
+			if pid == slot.expectedExit {
+				slot.expectedExit = nil
+				return
+			}
+			guard slot.engine?.processIdentifier == pid else { continue }
+			slot.engine = nil
+			slot.args = nil
+			slot.device = nil
+			slot.format = nil
+			try? FileManager.default.removeItem(at: Paths.enginePID(slot.key))
+			let ran = Date().timeIntervalSince(slot.startedAt)
+			if ran > 60 { slot.backoff = 1 }
+			log("engine \(pid) of \(slot.name) exited unexpectedly (status \(status)) after \(Int(ran)) s; restarting in \(Int(slot.backoff)) s")
+			slot.problem = "The player engine stopped; restarting"
+			scheduleRestart(slot)
 			return
 		}
-		guard engine?.processIdentifier == pid else { return }
-		engine = nil
-		engineArgs = nil
-		engineDevice = nil
-		engineFormat = nil
-		try? FileManager.default.removeItem(at: Paths.enginePID)
-		let ran = Date().timeIntervalSince(startedAt)
-		if ran > 60 { backoff = 1 }
-		log("engine \(pid) exited unexpectedly (status \(status)) after \(Int(ran)) s; restarting in \(Int(backoff)) s")
-		problem = "The player engine stopped; restarting"
-		scheduleRestart()
 	}
 
-	private func scheduleRestart() {
+	private func scheduleRestart(_ slot: PlayerSlot) {
 		let work = DispatchWorkItem { [weak self] in self?.reconcile("restart") }
-		restartWork = work
-		DispatchQueue.main.asyncAfter(deadline: .now() + backoff, execute: work)
-		backoff = min(backoff * 2, 30)
+		slot.restartWork = work
+		DispatchQueue.main.asyncAfter(deadline: .now() + slot.backoff, execute: work)
+		slot.backoff = min(slot.backoff * 2, 30)
 	}
 
 	private func tick() {
@@ -355,21 +447,24 @@ final class Supervisor {
 				lastLMSCheck = .distantPast
 				checkLog.settingChanged()
 			}
-			if settings.playerName != old.playerName {
+			for (key, slot) in slots {
+				let name = settings.player(key, device: slot.device).name
+				guard name != old.player(key, device: slot.device).name else { continue }
 				// a rename in the app replaces the name file; the engine reads it at start
-				try? settings.playerName.write(to: Paths.playerName, atomically: true, encoding: .utf8)
-				engineArgs = nil
+				try? name.write(to: Paths.playerName(key), atomically: true, encoding: .utf8)
+				slot.name = name
+				slot.restartWanted = true
 			}
 			reconcile("settings changed")
-			// a device's "LMS volume" may have changed: check LMS at once (FixedVolumeSync). A change to or
-			// from the device's own volume restarts the engine (-V), and the check in this tick does not
-			// sync it (only a connected player is synced): it followed at the next check, 6 s after the
-			// change, both ways, live 2026-10-12 (/code-review 2026-10-12, finding 6)
+			// a player's "LMS volume" may have changed: check LMS at once (FixedVolumeSync). A change to
+			// or from the device's own volume or Fixed restarts its engine, and the check in this tick
+			// does not sync it (only a connected player is synced): it followed at the next check, 6 s
+			// after the change, both ways, live 2026-10-12 (/code-review 2026-10-12, finding 6)
 			lastLMSCheck = .distantPast
 		}
 		// macOS puts its default output back when the engine lets go of a device it held, which
 		// reconciles by itself; this catches a different output chosen meanwhile
-		if follow.deferred, follow.shouldReconcile(holding: heldDevice()) {
+		if follow.deferred, follow.shouldReconcile(holding: heldDevice(PlayerKey.follow)) {
 			scheduleReconcile("the engine let go of its device")
 		}
 		if Date().timeIntervalSince(lastLMSCheck) >= 5 {
@@ -409,11 +504,11 @@ final class Supervisor {
 		menuBackoff = min(menuBackoff * 2, 300)
 	}
 
-	/// finds the server (or uses the configured one) and asks it about this player
+	/// finds the server (or uses the configured one) and asks it about every player that is on
 	private func refreshLMS() {
 		guard !lmsCheckRunning else { return }
 		lmsCheckRunning = true
-		let configured = lms.setting, mac = self.mac, known = lms.server
+		let configured = lms.setting, macs = slots.values.map(\.mac), known = lms.server
 		Task.detached { [weak self] in
 			// timed here, on the check's own task, with a clock that stops while the Mac sleeps: the
 			// main queue may be busy (a device probe, an engine stop) when the result reaches it, and
@@ -424,11 +519,11 @@ final class Supervisor {
 				let host = configured.isEmpty ? nil : configured.split(separator: ":").first.map(String.init)
 				found = LMSDiscovery.find(host: host) ?? host.map { LMSServer(host: $0, webPort: 9000, name: nil) }
 			}
-			var state: LMSClient.PlayerState?
+			var states: [String: LMSClient.PlayerState]?
 			var answer: TimeInterval?
 			if let server = found {
 				let asked = clock.now
-				state = await LMSClient(server: server).playerState(mac: mac)
+				states = await LMSClient(server: server).playerStates(macs: macs)
 				answer = asked.duration(to: clock.now) / .seconds(1)
 			}
 			let checked = found, took = began.duration(to: clock.now) / .seconds(1)
@@ -437,27 +532,30 @@ final class Supervisor {
 				self.lmsCheckRunning = false
 				// unreachable: look again next time. Begun before the server setting changed: dropped,
 				// and the new one is checked at the next tick, not 5 s after this check began
-				let kept = self.lms.checked(setting: configured, found: state == nil ? nil : checked, state: state)
+				let kept = self.lms.checked(setting: configured, found: states == nil ? nil : checked, states: states ?? [:])
 				if !kept { self.lastLMSCheck = .distantPast }
 				// how a stalled server is seen: slow checks, dropped ones and the server used (LMSCheckLog)
-				let end: LMSCheckLog.End = kept ? .kept(answered: state != nil, answer: answer)
+				let end: LMSCheckLog.End = kept ? .kept(answered: states != nil, answer: answer)
 					: .dropped(began: configured, now: self.lms.setting, took: took)
 				for line in self.checkLog.ended(end, found: checked) { log(line) }
-				if kept, let state, state.connected, let server = checked { self.syncFixedVolume(state, server: server) }
+				guard kept, let states, let server = checked else { return }
+				for slot in self.slots.values {
+					if let state = states[slot.mac], state.connected { self.syncFixedVolume(slot, state, server: server) }
+				}
 			}
 		}
 	}
 
-	/// LMS's "Output level fixed at 100%" for this player follows the "LMS volume" setting of the
-	/// device the engine plays to (FixedVolumeSync). `status` already carries the pref, so this costs
-	/// requests only when LMS differs: the send, a read of what LMS kept, and the saved volume before
-	/// and after (put back when LMS's hook changed it, `volumeRestore`).
-	private func syncFixedVolume(_ state: LMSClient.PlayerState, server: LMSServer) {
-		guard let device = engineDevice else { return }
-		let mode = settings.options(for: device).volume, uid = device.uid, name = device.name
-		guard let command = fixedVolume.withLock({ $0.checked(device: uid, mode: mode, lms: state.digitalVolumeControl) }) else { return }
-		log("LMS volume for \(name): \(mode == .fixed ? "setting it to fixed at 100%" : "turning volume control back on"), as this device's setting says")
-		let mac = self.mac, sync = fixedVolume
+	/// LMS's "Output level fixed at 100%" for a player follows its "LMS volume" setting
+	/// (FixedVolumeSync). `status` already carries the pref, so this costs requests only when LMS
+	/// differs: the send, a read of what LMS kept, and the saved volume before and after (put back
+	/// when LMS's hook changed it, `volumeRestore`).
+	private func syncFixedVolume(_ slot: PlayerSlot, _ state: LMSClient.PlayerState, server: LMSServer) {
+		guard let device = slot.device else { return }
+		let mode = settings.player(slot.key, device: device).volume, uid = device.uid, name = slot.name
+		guard let command = slot.fixedVolume.withLock({ $0.checked(device: uid, mode: mode, lms: state.digitalVolumeControl) }) else { return }
+		log("LMS volume for \(name): \(mode == .fixed ? "setting it to fixed at 100%" : "turning volume control back on"), as this player's setting says")
+		let mac = slot.mac, sync = slot.fixedVolume
 		Task.detached {
 			let client = LMSClient(server: server)
 			let volumeBefore = await client.volume(player: mac)
@@ -481,36 +579,46 @@ final class Supervisor {
 
 	private func writeStatus() {
 		var status = AgentStatus(agentPID: getpid())
-		status.engineRunning = engine?.isRunning ?? false
-		status.enginePID = engine?.processIdentifier
 		status.devices = devices
-		// the device actually played to, which can differ from the macOS output (follow.deferred)
-		if let device = engineDevice ?? settings.resolveDevice(in: devices) {
-			status.deviceUID = device.uid
-			status.deviceName = device.name
-			if let id = CoreAudioQuery.device(uid: device.uid) {
-				status.currentRate = CoreAudioQuery.nominalRate(id)
-				status.currentFormat = CoreAudioQuery.physicalFormat(id)
-				status.dsdRate = engineFormat?.dsdRate(deviceRate: status.currentRate)
-				if let owner = CoreAudioQuery.hogOwner(id), let pid = status.enginePID {
-					status.exclusive = owner == pid
+		status.serverName = lms.server?.name ?? lms.server?.host
+		status.serverHost = lms.server?.host
+		status.serverWebPort = lms.server?.webPort
+		status.problem = problem
+		for key in playersOn {
+			guard let slot = slots[key] else { continue }
+			var player = PlayerStatus(key: key, name: slot.name, mac: slot.mac)
+			player.engineRunning = slot.engine?.isRunning ?? false
+			player.enginePID = slot.engine?.processIdentifier
+			// the device actually played to, which for *Follow the macOS output* can differ from the
+			// macOS output (follow.deferred)
+			if let device = slot.device {
+				player.deviceUID = device.uid
+				player.deviceName = device.name
+				if let id = CoreAudioQuery.device(uid: device.uid) {
+					player.currentRate = CoreAudioQuery.nominalRate(id)
+					player.currentFormat = CoreAudioQuery.physicalFormat(id)
+					player.dsdRate = slot.format?.dsdRate(deviceRate: player.currentRate)
+					if let owner = CoreAudioQuery.hogOwner(id), let pid = player.enginePID {
+						player.exclusive = owner == pid
+					}
 				}
 			}
+			let state = lms.playerStates[slot.mac]
+			player.connected = state?.connected ?? false
+			player.mode = state?.mode
+			player.nowPlaying = state?.nowPlaying
+			player.problem = slot.problem ?? slot.setupProblem
+			status.players.append(player)
 		}
-		status.serverName = lms.server?.name ?? lms.server?.host
-		status.connected = lms.playerState?.connected ?? false
-		status.mode = lms.playerState?.mode
-		status.nowPlaying = lms.playerState?.nowPlaying
-		status.problem = problem
 		try? status.save()
 	}
 
 	private func shutdown(_ sig: Int32) {
 		shuttingDown = true
 		log("signal \(sig): stopping")
-		stopEngine()
+		for slot in slots.values { stopEngine(slot) }
 		problem = nil
-		lms.forgetPlayer()
+		lms.forgetPlayers()
 		writeStatus()
 		exit(0) // a clean exit: launchd's KeepAlive{SuccessfulExit=false} leaves us stopped
 	}

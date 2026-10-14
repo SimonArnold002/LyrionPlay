@@ -14,22 +14,58 @@ public enum Paths {
 	public static var settings: URL { support.appendingPathComponent("settings.json") }
 	/// written by the agent, read by the app
 	public static var status: URL { support.appendingPathComponent("status.json") }
-	/// the player's MAC address, generated once
-	public static var mac: URL { support.appendingPathComponent("mac") }
-	/// squeezelite -N: holds the player name, and LMS's renames are written back to it
-	public static var playerName: URL { support.appendingPathComponent("player-name") }
-	/// the running engine's PID, so a restarted agent can stop an engine its crashed predecessor left
-	public static var enginePID: URL { support.appendingPathComponent("engine.pid") }
+	/// one folder per player (ONE PLAYER PER DAC)
+	public static var players: URL { support.appendingPathComponent("players") }
+	/// 0.3.x's one engine's PID, read once so a new agent can stop an engine an old one left
+	public static var oldEnginePID: URL { support.appendingPathComponent("engine.pid") }
+	/// 0.3.x's one player's MAC address and name file, which *Follow the macOS output* takes over
+	/// (PlayerIdentity.adoptOldPlayer)
+	public static var oldMAC: URL { support.appendingPathComponent("mac") }
+	public static var oldPlayerName: URL { support.appendingPathComponent("player-name") }
 
 	public static var agentLog: URL { logs.appendingPathComponent("agent.log") }
-	public static var engineLog: URL { logs.appendingPathComponent("engine.log") }
+
+	/// a player's folder: its MAC address, name file and engine PID
+	public static func player(_ key: String) -> URL { players.appendingPathComponent(slug(key)) }
+	/// the player's MAC address, generated once
+	public static func mac(_ key: String) -> URL { player(key).appendingPathComponent("mac") }
+	/// squeezelite -N: holds the player name, and LMS's renames are written back to it
+	public static func playerName(_ key: String) -> URL { player(key).appendingPathComponent("name") }
+	/// the player's running engine's PID, so a restarted agent can stop an engine its crashed
+	/// predecessor left
+	public static func enginePID(_ key: String) -> URL { player(key).appendingPathComponent("engine.pid") }
+	public static func engineLog(_ key: String) -> URL { logs.appendingPathComponent("engine-\(slug(key)).log") }
+
+	/// A file-safe name for a player key: "follow", or a device UID made readable (letters, digits,
+	/// '.' and '-'), cut to 48 characters, plus 4 hex digits of the UID's hash, so two keys never share
+	/// a folder or a log.
+	public static func slug(_ key: String) -> String {
+		if key == PlayerKey.follow { return key }
+		var readable = ""
+		for scalar in key.unicodeScalars {
+			let safe = scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || scalar == "." || scalar == "-")
+			if safe { readable.unicodeScalars.append(scalar) } else if !readable.hasSuffix("-") { readable += "-" }
+		}
+		readable = String(readable.trimmingCharacters(in: CharacterSet(charactersIn: "-")).prefix(48))
+		return "\(readable)-\(String(format: "%04x", fnv1a(key) & 0xFFFF))"
+	}
+
+	/// FNV-1a, 32 bits: stable across runs and builds (Swift's own Hasher is seeded per process)
+	static func fnv1a(_ text: String) -> UInt32 {
+		var hash: UInt32 = 2_166_136_261
+		for byte in text.utf8 {
+			hash ^= UInt32(byte)
+			hash = hash &* 16_777_619
+		}
+		return hash
+	}
 
 	public static var launchAgentPlist: URL {
 		home.appendingPathComponent("Library/LaunchAgents/\(agentLabel).plist")
 	}
 
 	public static func createDirectories() throws {
-		for dir in [support, logs] {
+		for dir in [support, logs, players] {
 			try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 		}
 	}

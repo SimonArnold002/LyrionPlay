@@ -82,7 +82,7 @@ static void usage(const char *argv0) {
 #endif
 #endif
 #if COREAUDIO
-		   "  -a <f>:<e>\t\tSpecify CoreAudio params, f = device buffer size in frames (0 = device default), e = exclusive (hog) mode (0|1)\n"
+		   "  -a <f>:<e>:<x>:<h>\tSpecify CoreAudio params, f = device buffer size in frames (0 = device default), e = exclusive (hog) mode (0|1), x = fixed volume: LMS's level is ignored, -V too (0|1), h = with x, hold the device's own volume at h dB\n"
 #endif
 		   "  -a <f>\t\tSpecify sample format (16|24|32) of output file when using -o - to output samples to stdout (interleaved little endian only)\n"
 		   "  -b <stream>:<output>\tSpecify internal Stream and Output buffer sizes in Kbytes. Default is %d:%d\n"

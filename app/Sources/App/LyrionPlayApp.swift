@@ -1,5 +1,5 @@
 // The LyrionPlay menu bar app: switches the player (the launch agent) on and off, shows what
-// it is doing, and edits its settings. It reads status.json and writes settings.json. It is tied
+// each player is doing, and edits their settings. It reads status.json and writes settings.json. It is tied
 // to the player: Quit stops the player, and the agent reopens the menu if it dies (AppDelegate).
 //
 // No @State anywhere: the Command Line Tools ship the Observation macros but not SwiftUI's macro
@@ -123,6 +123,11 @@ final class PlayerModel {
 	/// a failed save, shown in the Settings window itself (Simon, 2026-10-12); lastError still carries
 	/// it to the menu panel
 	var saveError: String?
+	/// the player whose settings page (the cog) is open
+	var editingPlayer: String?
+	/// Fixed on a device with a volume control: what reading LMS's volume gave, while there is no level
+	/// to hold (reading, or why not), by player
+	var heldNote: [String: String] = [:]
 	@ObservationIgnored private var timer: Timer?
 
 	init() {
@@ -138,11 +143,15 @@ final class PlayerModel {
 		if isOn, let status, !status.devices.isEmpty { devices = status.devices }
 	}
 
-	/// the device the player holds exclusively, which "Follow the macOS output" stays on
-	/// (Settings.resolveDevice)
-	var heldDevice: String? {
-		guard agentAlive, let status, status.exclusive else { return nil }
-		return status.deviceUID
+	/// the device *Follow the macOS output* holds exclusively, which it stays on (Settings.followDevice)
+	var heldFollowDevice: String? {
+		guard agentAlive, let player = status?.player(PlayerKey.follow), player.exclusive else { return nil }
+		return player.deviceUID
+	}
+
+	/// the Settings list: *Follow the macOS output*, then every device but the Mac's built-in outputs
+	var rows: [PlayerRow] {
+		PlayerList.rows(settings: draft, devices: devices, holding: heldFollowDevice)
 	}
 
 	/// the agent writes status every 2 s; older than 10 s means it is not running
@@ -178,14 +187,62 @@ final class PlayerModel {
 		if !probed.isEmpty { devices = probed }
 	}
 
-	/// false when the file could not be written (lastError says why)
+	/// The LMS volume picker. Fixed on a device with a volume control holds the volume LMS has saved
+	/// for the player now (FIXED HOLDS THE LMS VOLUME): read here, and shown before the save. The level
+	/// is read again only when Fixed is chosen again; another mode drops it.
+	func chooseVolume(_ mode: VolumeMode, for row: PlayerRow) {
+		var player = draft.player(row.key, device: row.device)
+		player.volume = mode
+		player.heldVolume = nil
+		draft.players[row.key] = player
+		heldNote[row.key] = nil
+		guard mode == .fixed, let device = row.device, device.volume != nil else { return }
+		guard let server = statusServer else {
+			heldNote[row.key] = "LyrionPlay is not connected to LMS, so the volume to hold is not known: Fixed is not saved."
+			return
+		}
+		guard let mac = (try? String(contentsOf: Paths.mac(row.key), encoding: .utf8))?
+				.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), PlayerIdentity.isValid(mac) else {
+			heldNote[row.key] = "LMS does not know this player yet: switch it on, let it connect, set its volume in LMS, then choose Fixed."
+			return
+		}
+		heldNote[row.key] = "Reading the volume LMS has for this player…"
+		let key = row.key
+		Task {
+			let volume = await LMSClient(server: server).volume(player: mac)
+			// chosen again, or another mode, meanwhile: this answer is not wanted
+			guard heldNote[key] == "Reading the volume LMS has for this player…", draft.players[key]?.volume == .fixed else { return }
+			switch HeldVolume.from(lmsVolume: volume) {
+			case .held(let level):
+				draft.players[key]?.heldVolume = level
+				heldNote[key] = nil
+			case .refused(let reason):
+				heldNote[key] = reason
+			}
+		}
+	}
+
+	private var statusServer: LMSServer? {
+		guard agentAlive, let status, let host = status.serverHost, let port = status.serverWebPort else { return nil }
+		return LMSServer(host: host, webPort: port, name: status.serverName)
+	}
+
+	/// false when the file could not be written, or Fixed has no level to hold (lastError says why)
 	@discardableResult
 	func save(_ draft: PlayerCore.Settings) -> Bool {
-		// a saved volume choice a device does not offer is read as one it does (Settings.options(for:));
-		// write that, for the devices here
+		// a saved volume choice a device does not offer is read as one it does (Settings.player);
+		// write that, for the players shown here
 		var draft = draft
-		for device in devices where draft.devices[device.uid] != nil {
-			draft.devices[device.uid] = draft.options(for: device)
+		for row in rows where draft.players[row.key] != nil {
+			draft.players[row.key] = draft.player(row.key, device: row.device)
+		}
+		for row in rows {
+			guard let device = row.device, device.volume != nil, draft.players[row.key] != nil else { continue }
+			let player = draft.player(row.key, device: device)
+			guard player.volume == .fixed, player.heldVolume == nil else { continue }
+			lastError = "\(player.name): Fixed has no level to hold. \(heldNote[row.key] ?? "Choose Fixed again.")"
+			saveError = lastError
+			return false
 		}
 		do {
 			try Paths.createDirectories()
@@ -206,6 +263,7 @@ final class PlayerModel {
 	/// panel; a switch-on error in lastError stays (/code-review 2026-10-12 (2), finding 4)
 	func revert() {
 		draft = settings
+		heldNote = [:]
 		clearSaveError()
 	}
 
@@ -233,7 +291,19 @@ struct MenuView: View {
 			} else if !model.agentAlive {
 				Text("Starting…").foregroundStyle(.secondary)
 			} else if let status = model.status {
-				StatusRows(status: status)
+				if let problem = status.problem {
+					Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout)
+				}
+				if status.players.isEmpty {
+					Text("No player is on: switch one on in Settings.").foregroundStyle(.secondary)
+				}
+				// one block per player that is on (Simon, 2026-10-12)
+				ForEach(status.players, id: \.key) { player in
+					VStack(alignment: .leading, spacing: 6) {
+						Text(player.name).font(.callout.bold())
+						StatusRows(player: player, serverName: status.serverName)
+					}
+				}
 			}
 			if let error = model.lastError {
 				Text(error).font(.caption).foregroundStyle(.red)
@@ -265,19 +335,20 @@ struct MenuView: View {
 }
 
 struct StatusRows: View {
-	let status: AgentStatus
+	let player: PlayerStatus
+	let serverName: String?
 
 	var body: some View {
 		VStack(alignment: .leading, spacing: 6) {
-			Label(serverLine, systemImage: status.connected ? "checkmark.circle.fill" : "circle.dashed")
-			if let device = status.deviceName {
-				Label(outputLine(device), systemImage: status.exclusive ? "lock.fill" : "speaker.wave.2")
+			Label(serverLine, systemImage: player.connected ? "checkmark.circle.fill" : "circle.dashed")
+			if let device = player.deviceName {
+				Label(outputLine(device), systemImage: player.exclusive ? "lock.fill" : "speaker.wave.2")
 			}
-			if let track = status.nowPlaying, let mode = status.mode, mode != "stop" {
+			if let track = player.nowPlaying, let mode = player.mode, mode != "stop" {
 				Label(track, systemImage: mode == "play" ? "play.fill" : "pause.fill")
 					.lineLimit(2)
 			}
-			if let problem = status.problem {
+			if let problem = player.problem {
 				Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
 			}
 		}
@@ -285,71 +356,43 @@ struct StatusRows: View {
 	}
 
 	private var serverLine: String {
-		if status.connected { return "Connected to \(status.serverName ?? "LMS")" }
-		if let name = status.serverName { return "Connecting to \(name)…" }
+		if player.connected { return "Connected to \(serverName ?? "LMS")" }
+		if let name = serverName { return "Connecting to \(name)…" }
 		return "Looking for the server…"
 	}
 
 	private func outputLine(_ device: String) -> String {
 		var parts = [device]
-		if let dsd = status.dsdRate {
+		if let dsd = player.dsdRate {
 			// DoP: the device runs at the DSD rate / 16 in a 32-bit word, so show the DSD
 			parts.append(DeviceCaps.dsd(dsd))
 			parts.append("DoP")
 		} else {
-			if let rate = status.currentRate { parts.append(DeviceCaps.kHz(rate)) }
-			if let format = status.currentFormat { parts.append(format) }
+			if let rate = player.currentRate { parts.append(DeviceCaps.kHz(rate)) }
+			if let format = player.currentFormat { parts.append(format) }
 		}
-		if status.exclusive { parts.append("exclusive") }
+		if player.exclusive { parts.append("exclusive") }
 		return parts.joined(separator: " · ")
 	}
 }
 
+/// The Settings window: the players, each with its switch and its cog, then what they share
+/// (Simon, 2026-10-12).
 struct SettingsView: View {
 	@Bindable var model: PlayerModel
 	@Environment(\.dismissWindow) private var dismissWindow
 
 	var body: some View {
 		Form {
-			Section("Player") {
-				TextField("Name", text: $model.draft.playerName)
+			Section("Players") {
+				ForEach(model.rows) { row in
+					PlayerRowView(model: model, row: row)
+				}
+				Text("Each player is its own player in LMS, with its own volume and settings.")
+					.font(.caption).foregroundStyle(.secondary)
+			}
+			Section("Shared") {
 				TextField("Server", text: $model.draft.server, prompt: Text("Find automatically"))
-			}
-			Section("Output") {
-				Picker("Device", selection: $model.draft.outputDevice) {
-					Text("Follow the macOS output").tag(PlayerCore.Settings.followSystem)
-					ForEach(model.devices) { device in
-						Text("\(device.name) (\(device.rateSummary))").tag(device.uid)
-					}
-				}
-				if let device = model.draft.resolveDevice(in: model.devices, holding: model.heldDevice) {
-					Toggle("Exclusive mode", isOn: option(device, \.exclusive))
-					Text(model.draft.idleSeconds == 0
-						 ? "Other apps cannot use \(device.name) while the player is on: it is never released (Advanced)."
-						 : "Other apps cannot use \(device.name) while the player is playing.")
-						.font(.caption).foregroundStyle(.secondary)
-					Toggle("DAC accepts DSD over PCM (DoP)", isOn: option(device, \.dop))
-					Text("Off: DSD is converted to PCM in the player, so it still plays.")
-						.font(.caption).foregroundStyle(.secondary)
-					// only what the device offers (VolumeMode.offered): no device volume without a control,
-					// no Fixed on the Mac's own outputs
-					Picker("LMS volume", selection: option(device, \.volume)) {
-						ForEach(VolumeMode.offered(by: device), id: \.self) { mode in
-							switch mode {
-							case .device: Text("Device's own volume").tag(mode)
-							case .software: Text("Software (scales the samples)").tag(mode)
-							case .fixed: Text("Fixed at 100%").tag(mode)
-							}
-						}
-					}
-					// the player's "Output level fixed at 100%" in LMS follows this (FixedVolumeSync)
-					Text(volumeCaption(device))
-						.font(.caption).foregroundStyle(.secondary)
-					Stepper("Silence on a rate change: \(model.draft.options(for: device).rateSwitchDelayMs) ms",
-							value: option(device, \.rateSwitchDelayMs), in: 0...2000, step: 100)
-				}
-			}
-			Section("Advanced") {
 				// 0 passes no -C (EngineArguments): the engine opens the device at start and keeps it
 				Stepper(model.draft.idleSeconds == 0 ? "Release the device: never"
 							: "Release the device after \(model.draft.idleSeconds) s stopped",
@@ -380,23 +423,119 @@ struct SettingsView: View {
 		}
 		.formStyle(.grouped)
 		.frame(width: 500)
+		.sheet(item: Binding(get: { model.rows.first { $0.key == model.editingPlayer } },
+							 set: { model.editingPlayer = $0?.key })) { row in
+			PlayerSettingsView(model: model, row: row)
+		}
 		.onAppear {
 			model.clearSaveError() // from an earlier opening
 			model.loadDevices()
 			// what is saved now (the volume warning compares with it; Revert goes back to it)
 			model.settings = PlayerCore.Settings.load()
 			model.draft = model.settings
+			model.heldNote = [:]
 		}
+	}
+}
+
+/// One player in the list: its name and device, its switch, and its cog.
+struct PlayerRowView: View {
+	@Bindable var model: PlayerModel
+	let row: PlayerRow
+
+	var body: some View {
+		let player = model.draft.player(row.key, device: row.device)
+		HStack {
+			VStack(alignment: .leading, spacing: 2) {
+				Text(row.isFollow ? "Follow the macOS output" : player.name)
+				Text(subtitle(player)).font(.caption).foregroundStyle(.secondary)
+			}
+			Spacer()
+			Toggle("On", isOn: Binding(
+				get: { model.draft.isOn(row.key) },
+				set: { on in
+					var player = model.draft.player(row.key, device: row.device)
+					player.enabled = on
+					model.draft.players[row.key] = player
+				}))
+				.toggleStyle(.switch)
+				.labelsHidden()
+			Button {
+				model.editingPlayer = row.key
+			} label: {
+				Image(systemName: "gearshape")
+			}
+			.buttonStyle(.borderless)
+			.help("Settings for this player")
+		}
+	}
+
+	private func subtitle(_ player: PlayerSettings) -> String {
+		guard let device = row.device else { return row.isFollow ? "No output device" : "Not connected" }
+		return row.isFollow ? "\(player.name), now on \(device.name) (\(device.rateSummary))" : device.rateSummary
+	}
+}
+
+/// A player's settings, behind its cog: today's per-device settings, for this player.
+struct PlayerSettingsView: View {
+	@Bindable var model: PlayerModel
+	let row: PlayerRow
+
+	var body: some View {
+		Form {
+			Section(row.isFollow ? "Follow the macOS output" : (row.device?.name ?? model.draft.player(row.key, device: nil).name)) {
+				TextField("Name", text: setting(\.name))
+				if let device = row.device {
+					Toggle("Exclusive mode", isOn: setting(\.exclusive))
+					Text(model.draft.idleSeconds == 0
+						 ? "Other apps cannot use \(device.name) while the player is on: it is never released (Shared)."
+						 : "Other apps cannot use \(device.name) while the player is playing.")
+						.font(.caption).foregroundStyle(.secondary)
+					Toggle("DAC accepts DSD over PCM (DoP)", isOn: setting(\.dop))
+					Text("Off: DSD is converted to PCM in the player, so it still plays.")
+						.font(.caption).foregroundStyle(.secondary)
+					// only what the device offers (VolumeMode.offered): no device volume without a control,
+					// no Fixed on the Mac's own outputs or for *Follow the macOS output*
+					Picker("LMS volume", selection: Binding(
+						get: { model.draft.player(row.key, device: device).volume },
+						set: { model.chooseVolume($0, for: row) })) {
+						ForEach(VolumeMode.offered(by: device, follow: row.isFollow), id: \.self) { mode in
+							switch mode {
+							case .device: Text("Device's own volume").tag(mode)
+							case .software: Text("Software (scales the samples)").tag(mode)
+							case .fixed: Text("Fixed at 100%").tag(mode)
+							}
+						}
+					}
+					// the player's "Output level fixed at 100%" in LMS follows this (FixedVolumeSync)
+					Text(volumeCaption(device))
+						.font(.caption).foregroundStyle(.secondary)
+					Stepper("Silence on a rate change: \(model.draft.player(row.key, device: device).rateSwitchDelayMs) ms",
+							value: setting(\.rateSwitchDelayMs), in: 0...2000, step: 100)
+				} else {
+					Text(row.isFollow ? "There is no macOS output to follow." : "Connect it to change its settings.")
+						.font(.caption).foregroundStyle(.secondary)
+				}
+			}
+			HStack {
+				Spacer()
+				Button("Done") { model.editingPlayer = nil }
+					.keyboardShortcut(.defaultAction)
+			}
+		}
+		.formStyle(.grouped)
+		.frame(width: 460)
 	}
 
 	/// Under "LMS volume". The Mac's volume keys change only the macOS output's level, in every mode
 	/// (LyrionPlay never sees a key), so where they work is said for any device with a volume control;
 	/// not under Fixed, where it would confuse (Simon, 2026-10-12). Fixed warns that it is louder only
 	/// when the saved mode scales the samples (software volume, VolumeMode.scalesSamples): from the
-	/// device's own volume the level stays.
+	/// device's own volume it holds the level LMS had.
 	private func volumeCaption(_ device: DeviceCaps) -> String {
 		let keys = " The Mac's volume keys work only when the output is the Mac's built-in speakers or Follow the macOS output."
-		switch model.draft.options(for: device).volume {
+		let player = model.draft.player(row.key, device: device)
+		switch player.volume {
 		case .device: // offered only with a volume control (VolumeMode.offered)
 			// "fixed" is never said here: nothing is fixed in these modes (Simon, 2026-10-12)
 			return "The LMS volume slider sets \(device.name)'s own volume." + keys
@@ -406,22 +545,27 @@ struct SettingsView: View {
 		case .fixed:
 			break
 		}
-		var caption = device.volume == nil
-			? "LMS sends full level; set the volume on \(device.name) or your amplifier."
-			: "LMS sends full level and leaves \(device.name)'s own volume alone."
-		if model.settings.options(for: device).volume.scalesSamples {
+		var caption: String
+		if device.volume == nil {
+			caption = "LMS sends full level; set the volume on \(device.name) or your amplifier."
+		} else if let held = player.heldVolume {
+			caption = "LMS sends full level; \(device.name) holds LMS volume \(held) (\(String(format: "%.1f", HeldVolume.dB(held))) dB). To change it, choose Device's own volume, set the volume in LMS, then Fixed again."
+		} else {
+			caption = model.heldNote[row.key] ?? "Choose Fixed again to read the volume LMS has for this player."
+		}
+		if model.settings.player(row.key, device: device).volume.scalesSamples {
 			caption += " From software volume this is louder: turn it down before saving."
 		}
 		return caption
 	}
 
-	private func option<T>(_ device: DeviceCaps, _ key: WritableKeyPath<DeviceOptions, T>) -> Binding<T> {
+	private func setting<T>(_ key: WritableKeyPath<PlayerSettings, T>) -> Binding<T> {
 		Binding(
-			get: { model.draft.options(for: device)[keyPath: key] },
+			get: { model.draft.player(row.key, device: row.device)[keyPath: key] },
 			set: { value in
-				var options = model.draft.options(for: device)
-				options[keyPath: key] = value
-				model.draft.devices[device.uid] = options
+				var player = model.draft.player(row.key, device: row.device)
+				player[keyPath: key] = value
+				model.draft.players[row.key] = player
 			})
 	}
 }

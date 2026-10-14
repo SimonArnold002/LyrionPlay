@@ -126,7 +126,7 @@
   <h1>Installing LyrionPlay</h1>
   <p class="tagline">LyrionPlay plays music from your Lyrion Music Server (LMS) on your Mac. LMS sees it as an ordinary squeezelite player.</p>
   <div class="badges">
-    <span class="badge accent">v0.3.14</span>
+    <span class="badge accent">v0.4.2</span>
     <span class="badge">Apple Silicon</span>
     <span class="badge">macOS 14+</span>
     <span class="badge">Bit-perfect</span>
@@ -203,38 +203,55 @@
 <li><strong>Play something.</strong> The player appears in LMS (in Material or any other LMS interface) under your Mac's name. Material shows it with an Apple icon.</li>
 <li><strong>Choose your options:</strong> click the icon, then <strong>Settings…</strong>. See the next section.</li>
 </ol>
-<p>The menu shows whether the player is connected to your server, the output device with the rate it plays at (for DSD sent as DoP, the DSD rate, such as DSD64), a lock when it has the device to itself, and the track playing.</p>
+<p>The menu shows each player that is on: whether it is connected to your server, its output device with the rate it plays at (for DSD sent as DoP, the DSD rate, such as DSD64), a lock when it has the device to itself, and the track playing.</p>
 <p>Quitting from the menu stops the player as well. Both start again when you log in, or when you open LyrionPlay from Applications. If the menu ever disappears while the player is running, it comes back by itself within a few seconds.</p>
 </section>
 <section id="settings">
 <h2>Settings</h2>
-<p><strong>Name</strong> is the player's name in LMS; it starts as your Mac's name. <strong>Server</strong> is left empty to find your server on the network by itself; enter its name or IP address if it is on another network.</p>
-<p><strong>Output device.</strong> Either follow the macOS sound output, or pick one device. Picking the device is the better choice for a DAC.</p>
+<p>LyrionPlay has one player for each output, and each is its own player in LMS, with its own volume and its own settings. Settings lists them:</p>
+<ul>
+<li><strong>Follow the macOS output</strong> plays to whatever the Mac's sound output is. It is on to begin with, and it is the way to the Mac's own speakers and headphones.</li>
+<li><strong>Each other output</strong> the Mac has (a USB DAC, HDMI, AirPlay, Bluetooth) has a player of its own, named after your Mac and the device (for example "MacBook Pro AudioQuest DragonFly Black v1.5"), off until you switch it on. A device that is unplugged keeps its row and its settings.</li>
+</ul>
+<p>Each row has a switch, to turn that player on or off, and a cog, which opens its settings. If the Mac's sound output is a device whose own player is on, <em>Follow the macOS output</em> plays to the Mac's built-in output instead, so two players never share a device.</p>
+<p>Below the players are the settings they share: <strong>Server</strong> is left empty to find your server on the network by itself; enter its name or IP address if it is on another network. Then the release time, <strong>Resampling quality</strong>, used only when your device lacks a track's rate, and <strong>Log detail</strong>: Debug writes more to the logs.</p>
+<p><strong>Save</strong> keeps your changes, <strong>Save and Close</strong> keeps them and closes the window, and <strong>Revert</strong> goes back to what is saved. If a save fails, the window says why and keeps your changes on screen.</p>
+<h3 id="a-player-s-settings-the-cog">A player's settings (the cog)</h3>
+<p><strong>Name</strong> is the player's name in LMS; it starts as your Mac's name, or your Mac's name followed by the device's.</p>
 <p><strong>Exclusive mode</strong> is on by default for external DACs (USB, Thunderbolt and the like), and off for the Mac's own outputs. While playing, LyrionPlay:</p>
 <ul>
 <li>takes the DAC for itself, so other apps can't play through it;</li>
 <li>sets the DAC to each track's sample rate;</li>
 <li>sends the samples unchanged.</li>
 </ul>
-<p>It lets go of the DAC 30 seconds after you stop. You can change that time under Advanced. At 0 it reads <em>never</em>: LyrionPlay then keeps the DAC for as long as the player is on, even while stopped.</p>
+<p>It lets go of the DAC 30 seconds after you stop. You can change that time in the shared settings. At 0 it reads <em>never</em>: LyrionPlay then keeps the DAC for as long as the player is on, even while stopped.</p>
 <p><strong>DAC accepts DSD over PCM (DoP).</strong> Turn this on only if your DAC supports DoP; macOS cannot detect it.</p>
 <ul>
 <li>With it off, DSD is converted to PCM, so it still plays.</li>
 <li>DoP needs a PCM rate of a sixteenth of the DSD rate: DSD64 needs 176.4 kHz and DSD128 needs 352.8 kHz. DSD faster than your DAC's top PCM rate allows is converted to PCM.</li>
 </ul>
-<p><strong>LMS volume.</strong> Each device offers only the choices it can take: <em>Device's own volume</em> only when the Mac can set its volume, and <em>Fixed at 100%</em> only on a DAC, not on the Mac's own outputs (built-in speakers and headphones, Bluetooth, AirPlay, HDMI).</p>
+<p><strong>LMS volume.</strong> Each player offers only the choices its device can take: <em>Device's own volume</em> only when the Mac can set its volume, and <em>Fixed at 100%</em> only on a DAC, not on the Mac's own outputs (built-in speakers and headphones, Bluetooth, AirPlay, HDMI), and not for <em>Follow the macOS output</em>.</p>
 <ul>
-<li><em>Device's own volume</em>: the LMS volume slider and your Mac's volume follow each other. Move the LMS slider and your Mac's volume (built-in speakers, headphones) or the DAC's hardware volume moves with it. Use your Mac's volume keys, or mute, and the LMS slider follows a moment later. The volume keys only work when LyrionPlay's output is the Mac's built-in speakers or <strong>Follow the macOS output</strong>.</li>
+<li><p><em>Device's own volume</em>: the LMS volume slider and your Mac's volume follow each other. Move the LMS slider and your Mac's volume (built-in speakers, headphones) or the DAC's hardware volume moves with it. Use your Mac's volume keys, or mute, and the LMS slider follows a moment later. The volume keys only work when the output is the Mac's built-in speakers or <strong>Follow the macOS output</strong>.</p>
+<ul>
+<li>The LMS slider moves in whole steps, so it shows the step nearest the level you set on the Mac. Your level stays as you set it: a track or album change, a pause and resume, or a restart of the player doesn't move it.</li>
+<li>If the player is muted in LMS, moving your Mac's volume unmutes it at the level you set. The Mac's mute key on its own unmutes it at the volume LMS kept.</li>
+<li>Some Bluetooth headphones tell macOS the wrong volume in decibels. LyrionPlay reads their volume level another way, so the Mac's slider still moves the LMS slider.</li>
+<li>A device that can't go as quiet as LMS shows its quietest setting as a higher LMS volume, for example 23 for headphones whose quietest is -40 dB. Below that, the LMS slider leaves the device at its quietest.</li>
+</ul></li>
 <li><em>Software</em>: LyrionPlay scales the samples instead.</li>
-<li><p><em>Fixed at 100%</em>: LMS sends the music at full level, and you set the volume on the DAC or your amplifier. LyrionPlay sets the player's <strong>Output level is fixed at 100%</strong> in LMS for you, and turns LMS's volume control back on when you play to a device set to one of the other two. Each device keeps its own choice. Coming from <em>Software</em>, this is louder: turn the DAC down before you save.</p>
-<p>LMS's own Volume Control setting for this player follows the choice here: change it in LMS or Material, and LyrionPlay puts it back within a few seconds.</p></li>
+<li><p><em>Fixed at 100%</em>: LMS sends the music at full level, for an amplifier, and LyrionPlay ignores the LMS volume slider for this player. LyrionPlay sets the player's <strong>Output level is fixed at 100%</strong> in LMS for you, and turns LMS's volume control back on if you choose one of the other two.</p>
+<ul>
+<li>On a DAC with its own knob, or no volume the Mac can set, you set the volume on the DAC or your amplifier.</li>
+<li>On a DAC whose volume the Mac sets (one with no knob), set the player's volume in LMS first, then choose Fixed: the page reads that volume from LMS and shows it, for example <em>holds LMS volume 17 (-48.8 dB)</em>. The DAC stays at that level, playing or paused, and after it is unplugged and plugged back in. To change it, choose <em>Device's own volume</em>, set the volume in LMS, then Fixed again. LMS shows the player fixed at 100 meanwhile.</li>
+<li>Coming from <em>Software</em>, this is louder: turn the DAC down before you save.</li>
+</ul>
+<p>LMS's own Volume Control setting for the player follows the choice here: change it in LMS or Material, and LyrionPlay puts it back within a few seconds.</p></li>
 </ul>
 <p><strong>Silence on a rate change.</strong> Some DACs mute for a moment after switching rate. If the start of a track gets clipped, add a little silence here.</p>
-<p><strong>Advanced:</strong> the release time above; <strong>Resampling quality</strong>, used only when your device lacks a track's rate; <strong>Log detail</strong>: Debug writes more to the logs.</p>
-<p><strong>Save</strong> keeps your changes, <strong>Save and Close</strong> keeps them and closes the window, and <strong>Revert</strong> goes back to what is saved. If a save fails, the window says why and keeps your changes on screen.</p>
 <h3 id="for-bit-perfect-playback">For bit-perfect playback</h3>
 <ul>
-<li><strong>Use your DAC's or amplifier's own volume control.</strong> In LyrionPlay's Settings, set the DAC's <strong>LMS volume</strong> to <strong>Fixed at 100%</strong>.</li>
+<li><strong>Use your DAC's or amplifier's own volume control.</strong> In LyrionPlay's Settings, open the DAC's player (its cog) and set <strong>LMS volume</strong> to <strong>Fixed at 100%</strong>.</li>
 <li><strong>Replay gain</strong> is set in LMS, under the player's settings → Audio. LyrionPlay applies it, but it changes the level, so tracks played with replay gain are not bit-perfect.</li>
 </ul>
 </section>
@@ -293,13 +310,13 @@ codesign --force --options runtime -s "LyrionPlay Signing" /Applications/LyrionP
 <li>Check System Settings → Privacy &amp; Security → Local Network: <code>lyrionplay-agent</code> and <code>squeezelite</code> must both be switched on.</li>
 <li>If your server is on a different network, enter its address in Settings → Server.</li>
 </ul></li>
-<li><strong>Nothing plays on a DAC another app is using</strong> (Audirvana, Roon or similar, in exclusive mode). <code>engine.log</code> says "device is held exclusively by another process". LyrionPlay keeps trying, and plays within about 5 seconds of the other app letting go.</li>
-<li><strong>The menu's status lags behind LMS.</strong> LyrionPlay asks the server about the player every 5 seconds, and <code>agent.log</code> says when the server is slow: "LMS check of … took N s" means it took over 2 seconds to answer, and "back under 2 s" follows when it recovers. "did not answer" or "no server found" means the server could not be reached: check that it is running, and the address in Settings → Server.</li>
+<li><strong>Nothing plays on a DAC another app is using</strong> (Audirvana, Roon or similar, in exclusive mode). The player's engine log says "device is held exclusively by another process". LyrionPlay keeps trying, and plays within about 5 seconds of the other app letting go.</li>
+<li><strong>The menu's status lags behind LMS.</strong> LyrionPlay asks the server about the players every 5 seconds, and <code>agent.log</code> says when the server is slow: "LMS check of … took N s" means it took over 2 seconds to answer, and "back under 2 s" follows when it recovers. "did not answer" or "no server found" means the server could not be reached: check that it is running, and the address in Settings → Server.</li>
 <li><strong>The menu bar icon has gone.</strong> Open LyrionPlay from Applications.</li>
 <li><p><strong>Logs:</strong> click the icon, then <strong>Logs</strong>. They are in <code>~/Library/Logs/LyrionPlay</code>:</p>
 <ul>
 <li><code>agent.log</code> is the background player;</li>
-<li><code>engine.log</code> is the audio engine;</li>
+<li><code>engine-follow.log</code> is the audio engine of <em>Follow the macOS output</em>, and <code>engine-&lt;device&gt;.log</code> each other player's;</li>
 <li><code>menu.log</code> is the menu app.</li>
 </ul></li>
 </ul>

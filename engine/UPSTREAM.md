@@ -30,7 +30,7 @@ Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines:
   - `struct outputstate` gains `ca_reopen` and `volume_fixed`.
   - Prototypes for `output_coreaudio.c` (`ca_report_format` among them).
 - `main.c`
-  - Usage text for `-a <f>:<e>`, `-V` and `-X`; `-V`/`-X` take no argument here.
+  - Usage text for `-a <f>:<e>:<x>:<h>`, `-V` and `-X`; `-V`/`-X` take no argument here.
   - `" COREAUDIO"` added to the build options.
   - `ca_hw_volume` / `ca_linear_volume` variables and their `case 'V'` / `case 'X'`.
   - `output_init_coreaudio()` and `output_close_coreaudio()` calls.

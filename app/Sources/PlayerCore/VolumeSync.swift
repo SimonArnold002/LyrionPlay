@@ -1,12 +1,12 @@
 import Foundation
 
-/// One `lyrionplay:volume <dB> <muted> <lms>` line from the engine (output_coreaudio.c,
+/// One `lyrionplay:volume <dB> <muted> <lms> <moved>` line from the engine (output_coreaudio.c,
 /// volume_listener): the Mac's volume keys or menu bar slider moved the device.
 public struct VolumeReport: Equatable, Sendable {
 	/// LMS's last `audg`, as the engine got it
 	public enum LMSLevel: Int, Sendable {
-		/// none yet: LMS sends one only when a track starts, so whether its volume is fixed is not
-		/// known either
+		/// none yet: LMS sends its level at the connect (repo ledger, LMS SENDS VOLUME ON CONNECT),
+		/// so only before that; whether its volume is fixed is not known either
 		case unknown = -1
 		/// silence: LMS is muted, or at volume 0
 		case silent = 0
@@ -17,21 +17,27 @@ public struct VolumeReport: Equatable, Sendable {
 	public var dB: Double
 	public var muted: Bool
 	public var lms: LMSLevel
+	/// the level moved; false when only the mute changed (the Mac's mute key)
+	public var levelMoved: Bool
 
-	public init(dB: Double, muted: Bool, lms: LMSLevel) {
+	public init(dB: Double, muted: Bool, lms: LMSLevel, levelMoved: Bool = true) {
 		self.dB = dB
 		self.muted = muted
 		self.lms = lms
+		self.levelMoved = levelMoved
 	}
 
-	/// nil for any other line. A line without <lms> counts as unknown, so the agent asks LMS.
+	/// nil for any other line. A line without <lms> counts as unknown, so the agent asks LMS; one
+	/// without <moved> as a level that moved.
 	public init?(line: some StringProtocol) {
 		let fields = line.split(separator: " ")
-		guard fields.count == 3 || fields.count == 4, fields[0] == "lyrionplay:volume",
+		guard (3...5).contains(fields.count), fields[0] == "lyrionplay:volume",
 			  let dB = Double(fields[1]), fields[2] == "0" || fields[2] == "1" else { return nil }
+		if fields.count == 5 && fields[4] != "0" && fields[4] != "1" { return nil }
 		self.dB = dB
 		muted = fields[2] == "1"
-		lms = fields.count == 4 ? Int(fields[3]).flatMap(LMSLevel.init(rawValue:)) ?? .unknown : .unknown
+		lms = fields.count >= 4 ? Int(fields[3]).flatMap(LMSLevel.init(rawValue:)) ?? .unknown : .unknown
+		levelMoved = fields.count < 5 || fields[4] == "1"
 	}
 }
 
@@ -47,12 +53,15 @@ public enum VolumePush {
 		// takes no volume from the Mac (repo ledger, FIXED VOLUME LEAVES THE DEVICE ALONE).
 		if report.lms == .unknown, await volumeFixed() == true { return nil }
 		if report.muted { return ["mixer", "muting", "1"] }
-		// Unmuting on the Mac while LMS is muted asks LMS to unmute, so it fades back to the
+		// The Mac's unmute key alone while LMS is muted asks LMS to unmute, so it fades back to the
 		// volume it kept. A level would be wrong: LMS faded the device to its minimum when it
 		// muted (measured 2026-10-09: unmute gave LMS volume 7 instead of 42; UNMUTE IS NOT A
 		// LEVEL). LMS stores a muted volume as a negative number. A report of LMS at a level
-		// needs no question: LMS is not muted.
-		if report.lms != .audible, let current = await lmsVolume(), current < 0 {
+		// needs no question: LMS is not muted. A level the user MOVED goes to LMS as that level
+		// even while LMS is muted: `mixer volume N` unmutes it at N (mixerCommand; measured on the
+		// rig 2026-10-14: muted at -42, `mixer volume 30` gave 30, muting 0). Unmuting to the kept
+		// volume moved the device off the level the user had just set (Simon, 2026-10-14).
+		if report.lms != .audible, !report.levelMoved, let current = await lmsVolume(), current < 0 {
 			return ["mixer", "muting", "0"]
 		}
 		return ["mixer", "volume", String(LMSVolume.volume(forDB: report.dB))]

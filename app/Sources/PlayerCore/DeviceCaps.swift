@@ -46,6 +46,10 @@ public struct DeviceCaps: Codable, Equatable, Hashable, Sendable, Identifiable {
 	/// a DAC-style connection, where exclusive mode is the default
 	public var isExternal: Bool { ["usb", "thunderbolt", "firewire", "pci", "avb"].contains(transport) }
 
+	/// the Mac's own speakers or headphones: reached through *Follow the macOS output*, never a player
+	/// of their own (Simon, 2026-10-12)
+	public var isBuiltIn: Bool { transport == "builtin" }
+
 	/// "44.1-384 kHz" for the device picker
 	public var rateSummary: String {
 		guard let low = rates.last, let high = rates.first else { return "no rates" }

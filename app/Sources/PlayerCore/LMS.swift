@@ -13,15 +13,15 @@ public struct LMSServer: Equatable, Sendable {
 }
 
 /// The server the agent talks to, for the status and the Mac's volume pushes (the engine is told
-/// the setting itself, `-s`), and what that server last said of this player. A server that answers
+/// the setting itself, `-s`), and what that server last said of each player. A server that answers
 /// is reused without looking at the setting again, so a check that began before the setting
 /// changed must not bring the old server back: LMS can stall for seconds, longer than the agent's
-/// 2 s tick, and such a check would win for good. Nor may the old server's word on the player
+/// 2 s tick, and such a check would win for good. Nor may the old server's word on the players
 /// outlive a change (connected, mode and now playing in the menu).
 public struct ServerChoice: Sendable {
 	public private(set) var server: LMSServer?
-	/// what `server` said of this player at the last check; nil when none answered
-	public private(set) var playerState: LMSClient.PlayerState?
+	/// what `server` said of each player at the last check, by MAC; empty when none answered
+	public private(set) var playerStates: [String: LMSClient.PlayerState] = [:]
 	/// the server setting as last saved: "" finds one on the network
 	public private(set) var setting: String
 
@@ -33,7 +33,7 @@ public struct ServerChoice: Sendable {
 	public mutating func update(setting: String) -> Bool {
 		guard setting != self.setting else { return false }
 		server = nil
-		playerState = nil
+		playerStates = [:]
 		self.setting = setting
 		return true
 	}
@@ -41,15 +41,15 @@ public struct ServerChoice: Sendable {
 	/// a check that began with `setting` ended: `found` nil means no server answered. False, and
 	/// nothing kept, if the setting changed meanwhile; the agent then checks the new one at once.
 	@discardableResult
-	public mutating func checked(setting: String, found: LMSServer?, state: LMSClient.PlayerState? = nil) -> Bool {
+	public mutating func checked(setting: String, found: LMSServer?, states: [String: LMSClient.PlayerState] = [:]) -> Bool {
 		guard setting == self.setting else { return false }
 		server = found
-		playerState = found == nil ? nil : state
+		playerStates = found == nil ? [:] : states
 		return true
 	}
 
-	/// the agent is stopping: nothing is known of the player any more
-	public mutating func forgetPlayer() { playerState = nil }
+	/// the agent is stopping: nothing is known of the players any more
+	public mutating func forgetPlayers() { playerStates = [:] }
 }
 
 /// What agent.log says of the agent's LMS checks. A stalled server can't be staged on the rig, so
@@ -266,22 +266,29 @@ public struct LMSClient: Sendable {
 		}
 	}
 
-	public func playerState(mac: String) async -> PlayerState? {
+	/// Each player's state: one `players` request for all, then `status` for each one connected.
+	/// nil when the server did not answer the first.
+	public func playerStates(macs: [String]) async -> [String: PlayerState]? {
 		guard let players = await call(player: "", ["players", "0", "99"]) else { return nil }
 		let loop = players["players_loop"] as? [[String: Any]] ?? []
-		guard let me = loop.first(where: { ($0["playerid"] as? String)?.lowercased() == mac }) else {
-			return PlayerState(connected: false)
-		}
-		var state = PlayerState(connected: (me["connected"] as? Int ?? 0) == 1)
-		if let status = await call(player: mac, ["status", "-", "1", "tags:a"]) {
-			state.mode = status["mode"] as? String
-			state.digitalVolumeControl = PlayerState.digitalVolumeControl(in: status)
-			if let track = (status["playlist_loop"] as? [[String: Any]])?.first {
-				let title = track["title"] as? String ?? ""
-				let artist = track["artist"] as? String
-				state.nowPlaying = artist.map { "\(title) — \($0)" } ?? title
+		var states: [String: PlayerState] = [:]
+		for mac in macs {
+			guard let me = loop.first(where: { ($0["playerid"] as? String)?.lowercased() == mac }) else {
+				states[mac] = PlayerState(connected: false)
+				continue
 			}
+			var state = PlayerState(connected: (me["connected"] as? Int ?? 0) == 1)
+			if state.connected, let status = await call(player: mac, ["status", "-", "1", "tags:a"]) {
+				state.mode = status["mode"] as? String
+				state.digitalVolumeControl = PlayerState.digitalVolumeControl(in: status)
+				if let track = (status["playlist_loop"] as? [[String: Any]])?.first {
+					let title = track["title"] as? String ?? ""
+					let artist = track["artist"] as? String
+					state.nowPlaying = artist.map { "\(title) — \($0)" } ?? title
+				}
+			}
+			states[mac] = state
 		}
-		return state
+		return states
 	}
 }

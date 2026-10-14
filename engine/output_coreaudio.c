@@ -83,6 +83,10 @@ static struct {
 	unsigned buffer_frames;     // -a <frames>; 0 = device default
 	bool hw_volume;             // -V
 	bool linear_volume;         // -X
+	bool fixed;                 // -a <f>:<e>:1  Fixed: LMS's level never reaches the samples or the device
+	bool hold;                  // -a <f>:<e>:1:<dB>  ...and the device's own volume is held at hold_db
+	float hold_db;
+	AudioDeviceID hold_dev;     //   the device it was last put on (put_held_level)
 	bool dev_has_volume;        // the output device has a settable volume control
 	bool volume_known;          // an audg has arrived
 	bool volume_pending;        // LMS volume not yet put on the device (it was absent)
@@ -292,12 +296,15 @@ static void find_volume(AudioDeviceID dev, struct volctl *v) {
 // Mac volume -> LMS. The level this engine last put on the device is recorded BEFORE it is set, so
 // a listener can tell its own changes (LMS's volume, fades, mute ramps) from the user's (volume
 // keys, the menu bar slider). Only the user's are reported, as one stdout line for the agent,
-//   lyrionplay:volume <dB> <muted 0|1> <lms -1|0|1>
-// which the agent turns into LMS `mixer volume N`, `mixer muting 1` or `mixer muting 0`. <lms> is
+//   lyrionplay:volume <dB> <muted 0|1> <lms -1|0|1> <moved 0|1>
+// which the agent turns into LMS `mixer volume N`, `mixer muting 1` or `mixer muting 0`. <moved> is
+// 1 when the level moved, 0 when only the mute changed: with LMS muted, an unmute alone asks LMS to
+// unmute to the volume it kept (UNMUTE IS NOT A LEVEL: LMS's mute left the device at its minimum),
+// and a level moved sets LMS to that level, which unmutes it (Simon, 2026-10-14). <lms> is
 // LMS's last audg as this engine got it: 1 a level (so LMS is not muted), 0 silence (muted, or
 // volume 0), -1 none yet (LMS sends one only when a track starts, so whether its volume is fixed
-// is not known either). The agent asks LMS only when it is not 1. LMS's reply re-records the
-// level it sets, so a report never echoes. dB mode only; -X (linear) is not reported.
+// is not known either). The agent asks LMS only when it is not 1. LMS's answer to a report is
+// recognised and not put on (put_lms_level). dB mode only; -X (linear) is not reported.
 
 #define VOLUME_MOVED_DB 0.6f         // LMS's dBToFixed rounding and read-back jitter stay below this
 // After this engine sets a level, the device's own reports are absorbed for this long: the
@@ -319,22 +326,153 @@ static struct {
 } vrec = { .muted = -1, .lms = -1, .dev = kAudioObjectUnknown, .lock = PTHREAD_MUTEX_INITIALIZER,
 		   .watch = PTHREAD_MUTEX_INITIALIZER };
 
-// the device's level in dB: the louder of its controls
+// one control's scalar in dB, by the HAL's own conversion for it
+static bool scalar_to_db(AudioDeviceID dev, AudioObjectPropertyElement elem, Float32 scalar, Float32 *dB) {
+	AudioObjectPropertyAddress a = { kAudioDevicePropertyVolumeScalarToDecibels, kAudioDevicePropertyScopeOutput, elem };
+	UInt32 size = sizeof(*dB);
+	*dB = scalar;
+	return AudioObjectGetPropertyData(dev, &a, 0, NULL, &size, dB) == noErr;
+}
+
+// The device's level in dB: the louder of its controls. Each control's dB property, read first,
+// is the level for every device seen but one. A STUCK dB property: the Melomania P100 (Bluetooth,
+// two channel controls, -40..0 dB) reads 0.00 dB at every level while its scalar moves (816
+// notifications, scalar 0.203-0.478; A DB PROPERTY CAN BE STUCK, measured 2026-10-14), so the
+// engine saw no change and the macOS slider never reached LMS. Its writes land where the HAL's
+// DecibelsToScalar says, and ScalarToDecibels gives back the dB written (measured: -38 to -6 dB),
+// so its level is the scalar through that conversion. The sign is a reading at the top of the
+// range while the scalar is below full, which a working control cannot give: there the top of the
+// range is full scale. Only then is the conversion used. Elsewhere it must not be: on the speakers
+// it disagrees with the dB property mid-range (scalar 0.385: property -24.08 dB, conversion -39.03,
+// SCALAR TO DB IS NOT THE DB PROPERTY), and their levels, measured against the property, would move.
 static float read_device_db(AudioDeviceID dev, const struct volctl *v) {
 	const AudioObjectPropertyScope out = kAudioDevicePropertyScopeOutput;
 	float best = -INFINITY;
 	int i;
 	for (i = 0; i < v->n; i++) {
-		Float32 d;
-		if (!get_prop(dev, kAudioDevicePropertyVolumeDecibels, out, v->elem[i], &d, sizeof(d))) {
-			AudioObjectPropertyAddress a = { kAudioDevicePropertyVolumeScalarToDecibels, out, v->elem[i] };
-			UInt32 size = sizeof(d);
-			if (!get_prop(dev, kAudioDevicePropertyVolumeScalar, out, v->elem[i], &d, sizeof(d)) ||
-				AudioObjectGetPropertyData(dev, &a, 0, NULL, &size, &d) != noErr) continue;
+		Float32 d, s, c;
+		bool have_db = get_prop(dev, kAudioDevicePropertyVolumeDecibels, out, v->elem[i], &d, sizeof(d));
+		bool have_s = get_prop(dev, kAudioDevicePropertyVolumeScalar, out, v->elem[i], &s, sizeof(s));
+		bool stuck = have_db && have_s && d >= v->db_max && s < 1.0f;
+		if (!have_db || stuck) {
+			// no dB property (as before), or a stuck one; with no conversion a stuck reading stays
+			if (have_s && scalar_to_db(dev, v->elem[i], s, &c)) d = c;
+			else if (!have_db) continue;
 		}
 		best = fmaxf(best, d);
 	}
 	return best;
+}
+
+// LMS's level, and where the device is for it (MAC SLIDER LAG AND THE BLUETOOTH HEADSET, PERFECT
+// SYNC: SIMON'S REQUIREMENTS in the repo ledger). The agent turns each report into `mixer volume N`,
+// N the whole volume nearest the reported dB, and LMS answers with N's gain, twice. Put on, that
+// answer pulled the device back to LMS's rounded level mid-drag and opened the settle window, which
+// swallowed the moves after it; and LMS sends its saved level again at every connect and every
+// stream start (LMS SENDS VOLUME ON CONNECT), which moved the device off the level the Mac set by up
+// to LMS's rounding (0.74 dB from -30 to 0 dB, 1.75 dB at the bottom). So:
+// - each report keeps the gain LMS will answer with (agent_volume, lms_gain: exact, the rig sent
+//   these gains for every volume tried, 2026-10-14) and the device's own scalars;
+// - an audg EQUAL to a recent report's gain is its echo: nothing is put on, and LMS's level now
+//   stands for those scalars (the pair). It consumes the reports before it;
+// - a level equal to the one the device was last given, or found at, is not put on again (a connect,
+//   a stream start, LMS's second audg): the device does not move at a track or album change;
+// - a level equal to the pair's is put on as the pair's scalars, exactly where the Mac left it (the
+//   end of a resume fade); any other level as before (Material, a fade step, a mute), and it clears
+//   the reports, as the device is no longer where they say;
+// - the first level for a device (the engine starting, a device back with a new ID) is taken as the
+//   device is when it is the gain the device's own level would be reported as, unmuted.
+// Gains are compared exactly. Two whole volumes give one gain only where LMS's own rounding makes
+// them one level for every squeezelite (41/42, 44/45, 47/48).
+#define ECHO_NS 5000000000ULL        // a report's echo is looked for this long: the agent's request
+                                     // times out at 4 s; an echo came back in 8-14 ms (2026-10-14)
+#define ECHO_KEEP 16
+
+struct lms_pair {                    // an LMS gain and the device's scalars it stands for
+	unsigned gain;
+	int n;
+	AudioObjectPropertyElement elem[2];
+	Float32 scalar[2];
+};
+
+static struct {
+	pthread_mutex_t lock;            // held alone, never across a HAL call
+	AudioDeviceID dev;               // the device all of this is about; another one starts afresh
+	unsigned n;                      // reports kept, oldest first
+	struct { struct lms_pair p; uint64_t at; } r[ECHO_KEEP];
+	bool pair_valid;
+	struct lms_pair pair;
+	bool held_valid;                 // the level the device was last given, or found at
+	unsigned held_left, held_right;
+	bool fresh;                      // no LMS level yet for this device
+} lv = { .lock = PTHREAD_MUTEX_INITIALIZER, .dev = kAudioObjectUnknown, .fresh = true };
+
+// under lv.lock
+static void lv_for(AudioDeviceID dev) {
+	if (lv.dev == dev) return;
+	lv.dev = dev;
+	lv.n = 0;
+	lv.pair_valid = lv.held_valid = false;
+	lv.fresh = true;
+}
+
+// LMS 9.1's gain for whole volume N: SqueezePlay's curve through Squeezebox2::getVolume, then
+// dBToFixed (8 bits from -30 to 0 dB), in the same double arithmetic as LMS's Perl. It gave every
+// gain the rig sent (volumes 40, 41, 42, 37.4, 37.6, 20.3, 33), and no whole volume comes within
+// 2e-4 of a rounding boundary, so a libm difference cannot flip one.
+static unsigned lms_gain(int volume) {
+	const double total = -74, step = 25, stepdB = total * .5, top = 0;
+	double dB, m;
+	if (volume <= 0) return 0;
+	dB = volume > step ? (top - stepdB) / (100 - step) * (volume - 100) + top
+					   : (stepdB - total) / (step - 0) * (volume - 0) + total;
+	m = pow(10, dB / 20);
+	return dB >= -30 && dB <= 0 ? (unsigned)(int)(m * (1 << 8) + 0.5) * (1 << 8) : (unsigned)(int)(m * (1 << 16) + 0.5);
+}
+
+// the whole volume the agent asks LMS for, for a reported level: LMSVolume.volume(forDB:) (nearest
+// by dB, the lower on a tie, at least 1), read from the level as printed, which is what the agent
+// parses. The two must agree: pinned by the same table in both suites.
+static int agent_volume(float dB) {
+	char text[32];
+	double level, best_distance = INFINITY;
+	int v, best = 1;
+	snprintf(text, sizeof(text), "%.2f", dB);
+	level = strtod(text, NULL);
+	for (v = 1; v <= 100; v++) {
+		double at = v > 25 ? (0 - -37.0) / (100 - 25.0) * (v - 100) : (-37.0 - -74.0) / 25.0 * v + -74.0;
+		if (fabs(at - level) < best_distance) {
+			best = v;
+			best_distance = fabs(at - level);
+		}
+	}
+	return best;
+}
+
+// the device's own scalars, control by control
+static bool read_pair(AudioDeviceID dev, const struct volctl *v, unsigned gain, struct lms_pair *p) {
+	int i;
+	p->gain = gain;
+	p->n = v->n;
+	for (i = 0; i < v->n; i++) {
+		p->elem[i] = v->elem[i];
+		if (!get_prop(dev, kAudioDevicePropertyVolumeScalar, kAudioDevicePropertyScopeOutput, v->elem[i], &p->scalar[i],
+					  sizeof(p->scalar[i]))) return false;
+	}
+	return v->n > 0;
+}
+
+// a level reported to the agent, unmuted (volume_listener): the gain LMS will answer with
+static void lv_reported(AudioDeviceID dev, const struct volctl *v, float dB) {
+	struct lms_pair p;
+	if (!read_pair(dev, v, lms_gain(agent_volume(dB)), &p)) return;
+	pthread_mutex_lock(&lv.lock);
+	lv_for(dev);
+	if (lv.n == ECHO_KEEP) memmove(&lv.r[0], &lv.r[1], (ECHO_KEEP - 1) * sizeof(lv.r[0]));
+	else lv.n++;
+	lv.r[lv.n - 1].p = p;
+	lv.r[lv.n - 1].at = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+	pthread_mutex_unlock(&lv.lock);
 }
 
 // the device's mute, or -1 if it has none
@@ -358,6 +496,7 @@ static OSStatus volume_listener(AudioObjectID dev, UInt32 n, const AudioObjectPr
 	AudioDeviceID watched;
 	float dB, was;
 	int muted = -1, was_muted;
+	bool moved;
 	(void)n; (void)addrs; (void)ctx;
 
 	if (!atomic_load(&vrec.valid) || ca.linear_volume || output.volume_fixed) return noErr;
@@ -376,13 +515,16 @@ static OSStatus volume_listener(AudioObjectID dev, UInt32 n, const AudioObjectPr
 	muted = read_device_mute(dev, &v);
 	was = atomic_load(&vrec.centi_db) / 100.0f;
 	was_muted = atomic_load(&vrec.muted);
-	if (fabsf(dB - was) <= VOLUME_MOVED_DB && (muted < 0 || was_muted < 0 || muted == was_muted)) return noErr;
+	moved = fabsf(dB - was) > VOLUME_MOVED_DB;
+	if (!moved && (muted < 0 || was_muted < 0 || muted == was_muted)) return noErr;
 
 	// recorded, so one change is reported once however many properties announce it
 	atomic_store(&vrec.centi_db, (int)lrintf(dB * 100));
 	if (muted >= 0) atomic_store(&vrec.muted, muted);
 	LOG_INFO("device volume changed outside LMS: %.2f dB%s", dB, muted > 0 ? ", muted" : "");
-	printf("lyrionplay:volume %.2f %d %d\n", dB, muted > 0, atomic_load(&vrec.lms));
+	// before the line, as LMS's echo can only follow it; a mute goes to LMS as `mixer muting`, no level
+	if (muted <= 0) lv_reported(dev, &v, dB);
+	printf("lyrionplay:volume %.2f %d %d %d\n", dB, muted > 0, atomic_load(&vrec.lms), moved);
 	fflush(stdout);
 	return noErr;
 }
@@ -433,6 +575,22 @@ static void unwatch_volume(void) {
 	atomic_store(&vrec.valid, false);
 }
 
+// one control of the device to a level in dB, clamped to the device's range
+static void set_control_db(AudioDeviceID dev, const struct volctl *v, AudioObjectPropertyElement elem, float dB) {
+	const AudioObjectPropertyScope out = kAudioDevicePropertyScopeOutput;
+	Float32 d = isinf(dB) || dB < v->db_min ? v->db_min : (dB > v->db_max ? v->db_max : dB);
+	if (v->db) {
+		set_prop(dev, kAudioDevicePropertyVolumeDecibels, out, elem, &d, sizeof(d));
+	} else {
+		// let the HAL map dB onto this device's scalar taper
+		AudioObjectPropertyAddress a = { kAudioDevicePropertyVolumeDecibelsToScalar, out, elem };
+		UInt32 size = sizeof(d);
+		if (AudioObjectGetPropertyData(dev, &a, 0, NULL, &size, &d) == noErr) {
+			set_prop(dev, kAudioDevicePropertyVolumeScalar, out, elem, &d, sizeof(d));
+		}
+	}
+}
+
 // left/right are LMS's 16.16 gains, as handed to set_volume()
 static void apply_volume(AudioDeviceID dev, unsigned left, unsigned right) {
 	const AudioObjectPropertyScope out = kAudioDevicePropertyScopeOutput;
@@ -458,17 +616,7 @@ static void apply_volume(AudioDeviceID dev, unsigned left, unsigned right) {
 			if (scalar > 1) scalar = 1;
 			set_prop(dev, kAudioDevicePropertyVolumeScalar, out, v.elem[i], &scalar, sizeof(scalar));
 		} else {
-			Float32 d = isinf(dB) || dB < v.db_min ? v.db_min : (dB > v.db_max ? v.db_max : dB);
-			if (v.db) {
-				set_prop(dev, kAudioDevicePropertyVolumeDecibels, out, v.elem[i], &d, sizeof(d));
-			} else {
-				// let the HAL map dB onto this device's scalar taper
-				AudioObjectPropertyAddress a = { kAudioDevicePropertyVolumeDecibelsToScalar, out, v.elem[i] };
-				UInt32 size = sizeof(d);
-				if (AudioObjectGetPropertyData(dev, &a, 0, NULL, &size, &d) == noErr) {
-					set_prop(dev, kAudioDevicePropertyVolumeScalar, out, v.elem[i], &d, sizeof(d));
-				}
-			}
+			set_control_db(dev, &v, v.elem[i], dB);
 		}
 	}
 	if (v.mute) {
@@ -480,6 +628,103 @@ static void apply_volume(AudioDeviceID dev, unsigned left, unsigned right) {
 		atomic_store(&vrec.settle_until, clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + VOLUME_SETTLE_NS);
 	}
 	LOG_DEBUG("device volume left: %.1f dB right: %.1f dB (%s)", ldB, rdB, ca.linear_volume ? "linear" : "dB");
+}
+
+// the pair's scalars back on the device, unmuted, recorded as apply_volume records a level
+static void restore_pair(AudioDeviceID dev, const struct volctl *v, const struct lms_pair *p) {
+	const AudioObjectPropertyScope out = kAudioDevicePropertyScopeOutput;
+	UInt32 unmuted = 0;
+	int i;
+	atomic_store(&vrec.settle_until, clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + VOLUME_SETTLE_NS);
+	watch_volume(dev, v, false);
+	for (i = 0; i < p->n; i++) set_prop(dev, kAudioDevicePropertyVolumeScalar, out, p->elem[i], &p->scalar[i], sizeof(p->scalar[i]));
+	if (v->mute) set_prop(dev, kAudioDevicePropertyMute, out, kAudioObjectPropertyElementMain, &unmuted, sizeof(unmuted));
+	record_device_volume(dev, v);
+	atomic_store(&vrec.settle_until, clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + VOLUME_SETTLE_NS);
+}
+
+// LMS's level onto the device by the rules above lms_gain (apply_latest, under apply_lock)
+static void put_lms_level(AudioDeviceID dev, unsigned left, unsigned right) {
+	enum { PUT, ECHO, SAME, RESTORE, FIRST } what = PUT;
+	unsigned g = left > right ? left : right, i, keep = 0;
+	uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+	struct lms_pair p;
+	struct volctl v;
+
+	if (ca.linear_volume) {           // -X: no reports, so nothing to match
+		apply_volume(dev, left, right);
+		return;
+	}
+	pthread_mutex_lock(&lv.lock);
+	lv_for(dev);
+	for (i = lv.n; g && i-- > 0;) {                     // newest first
+		if (now - lv.r[i].at > ECHO_NS) break;            // this one and all older have expired
+		if (lv.r[i].p.gain == g) {
+			// LMS is now at this report's level, and the device was there for it (during a drag, it
+			// has moved on since: the newer reports' answers follow)
+			what = ECHO;
+			keep = lv.n - i;                              // it (LMS sends it twice) and the newer ones
+			lv.pair = lv.r[i].p;
+			lv.pair_valid = true;
+			lv.held_valid = true;
+			lv.held_left = left;
+			lv.held_right = right;
+			break;
+		}
+	}
+	if (what == ECHO) {
+		if (keep < lv.n) memmove(&lv.r[0], &lv.r[lv.n - keep], keep * sizeof(lv.r[0]));
+		lv.n = keep;
+	} else if (lv.held_valid && left == lv.held_left && right == lv.held_right) {
+		what = SAME;
+	} else if (lv.pair_valid && g == lv.pair.gain) {
+		what = RESTORE;
+		p = lv.pair;
+	} else if (lv.fresh) {
+		what = FIRST;
+	}
+	lv.fresh = false;
+	pthread_mutex_unlock(&lv.lock);
+
+	if (what == ECHO) {
+		LOG_DEBUG("LMS's answer to a reported level: the device stays where the Mac put it");
+		return;
+	}
+	if (what == SAME) {
+		LOG_DEBUG("LMS's level is the one the device has: nothing put on");
+		return;
+	}
+	find_volume(dev, &v);
+	if (!v.n) return;
+	if (what == FIRST) {
+		float dB = read_device_db(dev, &v);
+		if (!isinf(dB) && read_device_mute(dev, &v) != 1 && g && lms_gain(agent_volume(dB)) == g && read_pair(dev, &v, g, &p)) {
+			pthread_mutex_lock(&lv.lock);
+			if (lv.dev == dev) {
+				lv.pair = p;
+				lv.pair_valid = lv.held_valid = true;
+				lv.held_left = left;
+				lv.held_right = right;
+			}
+			pthread_mutex_unlock(&lv.lock);
+			LOG_DEBUG("LMS's first level is the device's own (%.2f dB): taken as it is", dB);
+			return;
+		}
+	}
+	if (what == RESTORE && p.n == v.n && !memcmp(p.elem, v.elem, v.n * sizeof(v.elem[0]))) {
+		restore_pair(dev, &v, &p);
+		LOG_DEBUG("LMS's level is where the Mac left the device: put back exactly");
+	} else {
+		apply_volume(dev, left, right);
+	}
+	pthread_mutex_lock(&lv.lock);
+	if (lv.dev == dev) {
+		lv.n = 0;                                         // the device is no longer where the reports say
+		lv.held_valid = true;
+		lv.held_left = left;
+		lv.held_right = right;
+	}
+	pthread_mutex_unlock(&lv.lock);
 }
 
 // One level change on the device at a time, with LMS's latest level read inside: when a set_volume
@@ -496,7 +741,7 @@ static void apply_latest(AudioDeviceID dev) {
 	right = ca.last_right;
 	ca.volume_pending = false;
 	UNLOCK;
-	apply_volume(dev, left, right);
+	put_lms_level(dev, left, right);
 	pthread_mutex_unlock(&apply_lock);
 }
 
@@ -506,6 +751,16 @@ void set_volume(unsigned left, unsigned right) {
 
 	atomic_store(&vrec.lms, left || right ? 1 : 0);
 	LOCK;
+	if (ca.fixed) {
+		// Fixed (-a <f>:<e>:1): whatever LMS sends, its level, a fade, a mute, with adjust 1 or 0, the
+		// samples stay at full scale and the device is not touched (FIXED HOLDS THE LMS VOLUME)
+		ca.last_left = ca.last_right = FIXED_ONE;
+		ca.volume_known = true;
+		output.gainL = output.gainR = FIXED_ONE;
+		UNLOCK;
+		LOG_DEBUG("fixed volume: LMS's level ignored");
+		return;
+	}
 	ca.last_left = left;
 	ca.last_right = right;
 	ca.volume_known = true;
@@ -537,6 +792,28 @@ void set_volume(unsigned left, unsigned right) {
 	if (dev == kAudioObjectUnknown) dev = find_device(output.device);
 	if (dev == kAudioObjectUnknown) return; // still pending
 	apply_latest(dev);
+}
+
+// -a <f>:<e>:1:<dB>, Fixed on a device with a volume control (the DragonFly): its own volume at the
+// level the user set in LMS before choosing Fixed, unmuted, where LMS never moves it. Without it the
+// device kept whatever it was last given: muted at its minimum when Fixed was set up while LMS was
+// paused (FIXED SET UP WHILE PAUSED). Put on once per device ID: at init, or the first open of a
+// device plugged in later.
+static void put_held_level(AudioDeviceID dev) {
+	const AudioObjectPropertyScope out = kAudioDevicePropertyScopeOutput;
+	struct volctl v;
+	UInt32 unmuted = 0;
+	float was;
+	int muted, i;
+
+	find_volume(dev, &v);
+	if (!v.n) return;
+	was = read_device_db(dev, &v);
+	muted = read_device_mute(dev, &v);
+	for (i = 0; i < v.n; i++) set_control_db(dev, &v, v.elem[i], ca.hold_db);
+	if (v.mute) set_prop(dev, kAudioDevicePropertyMute, out, kAudioObjectPropertyElementMain, &unmuted, sizeof(unmuted));
+	LOG_INFO("device volume held at %.1f dB (was %.1f dB%s)", fminf(fmaxf(ca.hold_db, v.db_min), v.db_max), was,
+			 muted > 0 ? ", muted" : "");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1071,7 +1348,7 @@ void _ca_open(void) {
 	const char *device = output.device;
 	struct volctl v;
 	char name[256] = "";
-	bool err = false, apply = false, watch = false, present, closing = false;
+	bool err = false, apply = false, watch = false, hold = false, present, closing = false;
 	// a device that keeps failing to open says why on its first three tries, then every 5 minutes
 	bool quiet = ca.open_failures >= 3 && ca.open_failures % RETRY_LOG_EVERY;
 	OSStatus st;
@@ -1125,6 +1402,11 @@ void _ca_open(void) {
 			output.gainL = ca.last_left;
 			output.gainR = ca.last_right;
 		}
+		// a device plugged in after init, or again (a new ID): its held level (put_held_level)
+		if (ca.hold && dev != ca.hold_dev) {
+			hold = true;
+			ca.hold_dev = dev;
+		}
 	}
 	output.error_opening = err;
 	UNLOCK;
@@ -1141,6 +1423,7 @@ void _ca_open(void) {
 			// a device that was absent at init has not been watched yet (a no-op if it is)
 			watch_volume(dev, &v, true);
 		}
+		if (hold) put_held_level(dev);
 		if ((st = AudioDeviceStart(dev, proc)) != noErr) {
 			if (!quiet) LOG_WARN("cannot start %s: %d", name, (int)st);
 			AudioDeviceDestroyIOProcID(dev, proc);
@@ -1349,6 +1632,9 @@ void output_init_coreaudio(log_level level, const char *device, unsigned output_
 						   unsigned rates[], unsigned rate_delay, unsigned idle, bool hw_volume, bool linear_volume) {
 	char *b = next_param(params, ':');
 	char *e = next_param(NULL, ':');
+	char *x = next_param(NULL, ':');
+	char *h = next_param(NULL, ':');
+	char volume[48];
 	CFRunLoopRef none = NULL;
 	const char *tap_base = getenv("LYRIONPLAY_TAP");
 	struct volctl v;
@@ -1363,7 +1649,10 @@ void output_init_coreaudio(log_level level, const char *device, unsigned output_
 	ca.dev = ca.hog_dev = kAudioObjectUnknown;
 	ca.buffer_frames = b ? (unsigned)atoi(b) : 0;
 	ca.exclusive = e && atoi(e) == 1;
-	ca.hw_volume = hw_volume;
+	ca.fixed = x && atoi(x) == 1;
+	ca.hold = ca.fixed && h;
+	ca.hold_db = ca.hold ? (float)atof(h) : 0;
+	ca.hw_volume = hw_volume && !ca.fixed;
 	ca.linear_volume = linear_volume;
 
 	// HAL notifications on the HAL's own thread: this process has no run loop
@@ -1376,8 +1665,11 @@ void output_init_coreaudio(log_level level, const char *device, unsigned output_
 	output.write_cb = &_write_frames;
 	output.rate_delay = rate_delay;
 
-	LOG_INFO("exclusive: %s, device volume: %s%s, buffer: %u frames", ca.exclusive ? "yes" : "no",
-			 ca.hw_volume ? "yes" : "no", ca.hw_volume && ca.linear_volume ? " (linear)" : "", ca.buffer_frames);
+	if (ca.fixed && hw_volume) LOG_INFO("fixed volume: -V ignored");
+	if (ca.hold) snprintf(volume, sizeof(volume), "fixed, holds %.1f dB", ca.hold_db);
+	else snprintf(volume, sizeof(volume), "%s", ca.fixed ? "fixed" : ca.hw_volume ? "yes" : "no");
+	LOG_INFO("exclusive: %s, device volume: %s%s, buffer: %u frames", ca.exclusive ? "yes" : "no", volume,
+			 ca.hw_volume && ca.linear_volume ? " (linear)" : "", ca.buffer_frames);
 
 	if (tap_base && *tap_base) tap_init(tap_base);
 
@@ -1387,11 +1679,19 @@ void output_init_coreaudio(log_level level, const char *device, unsigned output_
 		find_volume(dev, &v);
 		ca.dev_has_volume = v.n > 0;
 		if (ca.hw_volume && !ca.dev_has_volume) LOG_INFO("device has no volume control: using software volume");
-		// LMS sends a volume only when a track starts (Squeezebox::play), so watch from now
+		// watch from now: the Mac's level can move before LMS sends one (at the connect, LMS SENDS
+		// VOLUME ON CONNECT, and at each stream start)
 		if (ca.hw_volume && ca.dev_has_volume && !ca.linear_volume) watch_volume(dev, &v, true);
+		// at once, not at the first open: with -C the device is not opened until LMS plays
+		if (ca.hold) {
+			ca.hold_dev = dev;
+			put_held_level(dev);
+		}
 	}
 
 	LOCK;
+	// Fixed: full scale from the start, not silence until LMS's first audg
+	if (ca.fixed) output.gainL = output.gainR = FIXED_ONE;
 	_ca_open();
 	UNLOCK;
 }

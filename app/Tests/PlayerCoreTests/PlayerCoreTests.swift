@@ -25,9 +25,17 @@ var hdmi: DeviceCaps {
 		""").first!
 }
 
-func args(_ settings: Settings, _ device: DeviceCaps) -> [String] {
-	EngineArguments.build(settings: settings, device: device, mac: "02:00:4c:4d:50:01",
-						  nameFile: "/tmp/name", logFile: "/tmp/engine.log")
+/// a player's engine arguments: the Mac's built-in outputs play through *Follow the macOS output*,
+/// every other device through its own player, unless `key` says otherwise
+func args(_ settings: Settings, _ device: DeviceCaps, key: String? = nil) -> [String] {
+	EngineArguments.build(settings: settings, key: key ?? (device.isBuiltIn ? PlayerKey.follow : device.uid),
+						  device: device, mac: "02:00:4c:4d:50:01", nameFile: "/tmp/name", logFile: "/tmp/engine.log")
+}
+
+func player(_ device: DeviceCaps, enabled: Bool = true, exclusive: Bool = true, dop: Bool = false,
+			volume: VolumeMode, held: Int? = nil, delay: Int = 0) -> PlayerSettings {
+	PlayerSettings(enabled: enabled, name: device.name, exclusive: exclusive, dop: dop, volume: volume,
+				   heldVolume: held, rateSwitchDelayMs: delay)
 }
 
 /// the value after an option, or nil when the option is absent
@@ -79,7 +87,7 @@ func value(_ option: String, in a: [String]) -> String? {
 
 	@Test func dopIsLastBecauseItTakesAnOptionalValue() {
 		var settings = Settings()
-		settings.devices[fiio.uid] = DeviceOptions(exclusive: true, dop: true, volume: .software)
+		settings.players[fiio.uid] = player(fiio, dop: true, volume: .software)
 		let a = args(settings, fiio)
 		#expect(a.last == "-D")
 	}
@@ -96,7 +104,7 @@ func value(_ option: String, in a: [String]) -> String? {
 		var settings = Settings()
 		settings.server = "plex"
 		settings.idleSeconds = 0
-		settings.devices[speakers.uid] = DeviceOptions(exclusive: false, dop: false, volume: .device, rateSwitchDelayMs: 500)
+		settings.players[PlayerKey.follow] = player(speakers, exclusive: false, volume: .device, delay: 500)
 		let a = args(settings, speakers)
 		#expect(value("-s", in: a) == "plex")
 		#expect(value("-C", in: a) == nil)
@@ -109,15 +117,27 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(value("-M", in: args(Settings(), fiio)) == "SqueezeLiteMac")
 	}
 
-	/// Fixed at 100%: the engine never moves the device's level, even on a device with a volume
-	/// control and an audg LMS sends before the agent has set it to fixed
-	@Test func fixedVolumeNeverTouchesTheDevice() {
+	/// FIXED HOLDS THE LMS VOLUME: Fixed passes -a's fixed field, so the engine itself keeps the
+	/// samples at full scale (no -V); on a device with a volume control, with the held level in dB
+	/// (LMS volume 17 = -48.84 dB, the curve the device's own volume uses)
+	@Test func fixedIsEnforcedByTheEngineAndHoldsALevel() {
 		var settings = Settings()
-		settings.devices[dragonfly.uid] = DeviceOptions(exclusive: true, dop: false, volume: .fixed)
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .fixed, held: 17)
 		#expect(!args(settings, dragonfly).contains("-V"))
-		// control: the device's own volume on the same device
-		settings.devices[dragonfly.uid]?.volume = .device
+		#expect(value("-a", in: args(settings, dragonfly)) == "0:1:1:-48.84")
+		// no level saved: Fixed, the device left alone (the agent says why)
+		settings.players[dragonfly.uid]?.heldVolume = nil
+		#expect(value("-a", in: args(settings, dragonfly)) == "0:1:1")
+		// a DAC with no volume control holds nothing: its knob sets the level
+		settings.players[fiio.uid] = player(fiio, volume: .fixed, held: 17)
+		#expect(value("-a", in: args(settings, fiio)) == "0:1:1")
+		// controls: the device's own volume, and software, are not fixed
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .device, held: 17)
 		#expect(args(settings, dragonfly).contains("-V"))
+		#expect(value("-a", in: args(settings, dragonfly)) == "0:1")
+		settings.players[dragonfly.uid]?.volume = .software
+		#expect(!args(settings, dragonfly).contains("-V"))
+		#expect(value("-a", in: args(settings, dragonfly)) == "0:1")
 	}
 
 	/// the Settings window warns that Fixed is louder when the mode being left scales the samples:
@@ -128,30 +148,28 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(!VolumeMode.device.scalesSamples)
 		#expect(!VolumeMode.fixed.scalesSamples)
 		// the device's own volume saved on a device with no volume control is read as software, so
-		// it still warns (/code-review 2026-10-12 (2), finding 3: the rule lives in options(for:))
+		// it still warns (/code-review 2026-10-12 (2), finding 3: the rule lives in player(_:device:))
 		var saved = Settings()
-		saved.devices[fiio.uid] = DeviceOptions(exclusive: true, dop: false, volume: .device)
-		#expect(saved.options(for: fiio).volume.scalesSamples)
-		saved.devices[dragonfly.uid] = DeviceOptions(exclusive: true, dop: false, volume: .device)
-		#expect(!saved.options(for: dragonfly).volume.scalesSamples)
-		// the engine agrees: only the device's own volume passes -V, so software and fixed run alike
-		var settings = Settings()
-		settings.devices[dragonfly.uid] = DeviceOptions(exclusive: true, dop: false, volume: .software)
-		let software = args(settings, dragonfly)
-		settings.devices[dragonfly.uid]?.volume = .fixed
-		#expect(software == args(settings, dragonfly))
+		saved.players[fiio.uid] = player(fiio, volume: .device)
+		#expect(saved.player(fiio.uid, device: fiio).volume.scalesSamples)
+		saved.players[dragonfly.uid] = player(dragonfly, volume: .device)
+		#expect(!saved.player(dragonfly.uid, device: dragonfly).volume.scalesSamples)
 	}
 
 	/// Simon, 2026-10-12: "block device volume as an option if it doesnt offer it, block fixed on MacOS
-	/// outputs" (every output that is not a DAC)
+	/// outputs" (every output that is not a DAC), and "MacOS 2 options": no Fixed for *Follow the
+	/// macOS output*, whatever it follows
 	@Test func eachDeviceOffersOnlyWhatItHas() {
 		#expect(VolumeMode.offered(by: dragonfly) == [.device, .software, .fixed])
 		#expect(VolumeMode.offered(by: fiio) == [.software, .fixed])       // a DAC with no volume control
 		#expect(VolumeMode.offered(by: speakers) == [.device, .software])  // a Mac output: no Fixed
 		#expect(VolumeMode.offered(by: hdmi) == [.software])               // a Mac output with no control
+		#expect(VolumeMode.offered(by: dragonfly, follow: true) == [.device, .software])
+		#expect(VolumeMode.offered(by: fiio, follow: true) == [.software])
 		// the defaults are always offered
 		for device in [dragonfly, fiio, speakers, hdmi] {
-			#expect(DeviceOptions.defaults(for: device).volume.isOffered(by: device))
+			#expect(PlayerSettings.defaults(for: device).volume.isOffered(by: device))
+			#expect(Settings().player(PlayerKey.follow, device: device).volume.isOffered(by: device, follow: true))
 		}
 	}
 
@@ -159,54 +177,82 @@ func value(_ option: String, in a: [String]) -> String? {
 	/// (Simon's choice), here the engine's arguments
 	@Test func aBlockedChoiceSavedIsReadAsOneOffered() {
 		var settings = Settings()
-		settings.devices[speakers.uid] = DeviceOptions(exclusive: false, dop: false, volume: .fixed)
-		settings.devices[fiio.uid] = DeviceOptions(exclusive: true, dop: true, volume: .device)
-		settings.devices[hdmi.uid] = DeviceOptions(exclusive: false, dop: false, volume: .fixed)
-		settings.devices[dragonfly.uid] = DeviceOptions(exclusive: true, dop: false, volume: .fixed)
-		#expect(settings.options(for: speakers).volume == .device)
+		settings.players[PlayerKey.follow] = player(speakers, exclusive: false, volume: .fixed)
+		settings.players[fiio.uid] = player(fiio, dop: true, volume: .device)
+		settings.players[hdmi.uid] = player(hdmi, exclusive: false, volume: .fixed)
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .fixed, held: 17)
+		#expect(settings.player(PlayerKey.follow, device: speakers).volume == .device)
 		#expect(args(settings, speakers).contains("-V"))
-		#expect(settings.options(for: fiio).volume == .software)
+		#expect(settings.player(fiio.uid, device: fiio).volume == .software)
 		#expect(!args(settings, fiio).contains("-V"))
-		#expect(settings.options(for: hdmi).volume == .software)
-		// control: an offered choice is kept, and the rest of the options with it
-		#expect(settings.options(for: dragonfly).volume == .fixed)
-		#expect(settings.options(for: fiio).dop && settings.options(for: fiio).exclusive)
-		// LMS's fixed setting follows what is read: the speakers' saved Fixed turns it back on
-		#expect(FixedVolumeSync.value(for: settings.options(for: speakers).volume) == 1)
+		#expect(settings.player(hdmi.uid, device: hdmi).volume == .software)
+		// the follow player saved as Fixed, now following the DragonFly: its own volume, never Fixed
+		#expect(settings.player(PlayerKey.follow, device: dragonfly).volume == .device)
+		#expect(value("-a", in: args(settings, dragonfly, key: PlayerKey.follow)) == "0:0")
+		// control: an offered choice is kept, and the rest of the settings with it
+		#expect(settings.player(dragonfly.uid, device: dragonfly).volume == .fixed)
+		#expect(settings.player(fiio.uid, device: fiio).dop && settings.player(fiio.uid, device: fiio).exclusive)
+		// LMS's fixed setting follows what is read: the follow player's saved Fixed turns it back on
+		#expect(FixedVolumeSync.value(for: settings.player(PlayerKey.follow, device: speakers).volume) == 1)
 	}
 
 	@Test func sameInputsGiveTheSameArguments() {
 		#expect(args(Settings(), fiio) == args(Settings(), fiio))
 		#expect(args(Settings(), fiio) != args(Settings(), speakers))
 	}
+
+	/// each player is its own LMS player: its own MAC, name file and log
+	@Test func eachPlayerHasItsOwnIdentity() {
+		let a = EngineArguments.build(settings: Settings(), key: fiio.uid, device: fiio, mac: "02:00:00:00:00:01",
+									  nameFile: "/a/name", logFile: "/a.log")
+		#expect(value("-m", in: a) == "02:00:00:00:00:01")
+		#expect(value("-N", in: a) == "/a/name")
+		#expect(value("-f", in: a) == "/a.log")
+	}
 }
 
 @Suite struct SettingsFile {
 	@Test func missingKeysTakeDefaults() throws {
-		let settings = try JSONDecoder().decode(Settings.self, from: Data(#"{"server":"plex"}"#.utf8))
+		let settings = try JSONDecoder().decode(Settings.self, from: Data(#"{"version":2,"server":"plex"}"#.utf8))
 		#expect(settings.server == "plex")
 		#expect(settings.idleSeconds == 30)
-		#expect(settings.outputDevice == Settings.followSystem)
+		#expect(settings.isOn(PlayerKey.follow))
 	}
 
 	@Test func roundTrip() throws {
 		var settings = Settings()
-		settings.outputDevice = fiio.uid
-		settings.devices[fiio.uid] = DeviceOptions(exclusive: true, dop: true, volume: .fixed)
-		settings.devices[speakers.uid] = DeviceOptions(exclusive: false, dop: false, volume: .software)
+		settings.players[fiio.uid] = player(fiio, dop: true, volume: .fixed)
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .fixed, held: 17)
 		let url = FileManager.default.temporaryDirectory.appendingPathComponent("lyrionplay-settings-\(UUID()).json")
 		defer { try? FileManager.default.removeItem(at: url) }
 		try settings.save(to: url)
 		#expect(Settings.load(from: url) == settings)
+		#expect(Settings.read(from: url) == .current(settings))
 	}
 
-	@Test func resolveFollowsSystemOrUID() {
-		var settings = Settings()
-		#expect(settings.resolveDevice(in: devices)?.uid == "BuiltInSpeakerDevice")
-		settings.outputDevice = fiio.uid
-		#expect(settings.resolveDevice(in: devices)?.name == "FiiO M11 Plus")
-		settings.outputDevice = "unplugged"
-		#expect(settings.resolveDevice(in: devices) == nil)
+	/// Simon, 2026-10-12: "We dont need to carry existing settings from a previosu install we can start
+	/// again no migration needed". A 0.3.x file is set aside, not read and not lost.
+	@Test func aFileFromBeforePlayersIsSetAside() throws {
+		let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lyrionplay-\(UUID())")
+		try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+		defer { try? FileManager.default.removeItem(at: dir) }
+		let url = dir.appendingPathComponent("settings.json")
+		let old = #"{"playerName":"Mac","outputDevice":"x","devices":{"x":{"exclusive":true,"dop":false,"volume":"fixed","rateSwitchDelayMs":0}}}"#
+		try Data(old.utf8).write(to: url)
+		#expect(Settings.read(from: url) == .older)
+		#expect(Settings.load(from: url) == Settings())
+		let aside = try Settings.setAsideOlder(at: url)
+		#expect(aside?.lastPathComponent == "settings-0.3.json")
+		#expect(try String(contentsOf: dir.appendingPathComponent("settings-0.3.json"), encoding: .utf8) == old)
+		#expect(Settings.read(from: url) == .current(Settings()))
+		// control: a current file is left where it is
+		#expect(try Settings.setAsideOlder(at: url) == nil)
+		#expect(Settings.read(from: dir.appendingPathComponent("missing.json")) == .missing)
+	}
+
+	@Test func followFollowsTheMacOSOutput() {
+		#expect(Settings().followDevice(in: devices)?.uid == "BuiltInSpeakerDevice")
+		#expect(Settings().followDevice(in: []) == nil)
 	}
 }
 
@@ -221,6 +267,150 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(firstByte & 0x01 == 0) // unicast
 		#expect(try PlayerIdentity.loadOrCreateMAC(at: url) == first)
 		#expect(!PlayerIdentity.isValid("02:00:4c:4d:50")) // control: a short address is refused
+	}
+
+	/// each player has its own folder and log, named so they can be read, and never shared
+	@Test func eachPlayerHasItsOwnFiles() {
+		#expect(Paths.slug(PlayerKey.follow) == "follow")
+		let slug = Paths.slug(dragonfly.uid)
+		#expect(slug.hasPrefix("AppleUSBAudioEngine-AudioQuest-AudioQuest-Dragon-")) // cut at 48
+		#expect(slug.range(of: "^[A-Za-z0-9.-]+-[0-9a-f]{4}$", options: .regularExpression) != nil)
+		#expect(Paths.slug(dragonfly.uid) == slug)                      // the same every time
+		#expect(Paths.slug(fiio.uid) != slug)
+		// two UIDs alike up to the cut, and alike once made file-safe, still differ
+		#expect(Paths.slug(String(repeating: "a", count: 60) + "1") != Paths.slug(String(repeating: "a", count: 60) + "2"))
+		#expect(Paths.slug("a:b") != Paths.slug("a b"))
+		#expect(Paths.mac(dragonfly.uid).deletingLastPathComponent().path == Paths.players.appendingPathComponent(slug).path)
+		#expect(Paths.engineLog(dragonfly.uid).lastPathComponent == "engine-\(slug).log")
+	}
+
+	/// 0.3.x's one player carries on as *Follow the macOS output* (Simon, 2026-10-12): its MAC and
+	/// name are taken once, copied, and never over the player's own
+	@Test func theOldPlayerCarriesOnAsFollow() throws {
+		let fm = FileManager.default
+		let dir = fm.temporaryDirectory.appendingPathComponent("lyrionplay-adopt-\(UUID())")
+		defer { try? fm.removeItem(at: dir) }
+		try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+		let oldMAC = dir.appendingPathComponent("mac"), oldName = dir.appendingPathComponent("player-name")
+		let mac = dir.appendingPathComponent("players/follow/mac"), name = dir.appendingPathComponent("players/follow/name")
+		try "96:57:54:14:bd:87\n".write(to: oldMAC, atomically: true, encoding: .utf8)
+		try "Study".write(to: oldName, atomically: true, encoding: .utf8)
+
+		#expect(try PlayerIdentity.adoptOldPlayer(mac: oldMAC, name: oldName, macAt: mac, nameAt: name) == "96:57:54:14:bd:87")
+		#expect(try PlayerIdentity.loadOrCreateMAC(at: mac) == "96:57:54:14:bd:87")
+		#expect(try String(contentsOf: name, encoding: .utf8) == "Study")
+		#expect(fm.fileExists(atPath: oldMAC.path) && fm.fileExists(atPath: oldName.path)) // copied, not moved
+
+		// once the player has its own, nothing is taken again: a rename LMS wrote stays
+		try "Study 2".write(to: name, atomically: true, encoding: .utf8)
+		try "02:11:22:33:44:55".write(to: oldMAC, atomically: true, encoding: .utf8)
+		#expect(try PlayerIdentity.adoptOldPlayer(mac: oldMAC, name: oldName, macAt: mac, nameAt: name) == nil)
+		#expect(try PlayerIdentity.loadOrCreateMAC(at: mac) == "96:57:54:14:bd:87")
+		#expect(try String(contentsOf: name, encoding: .utf8) == "Study 2")
+	}
+
+	/// with no usable 0.3.x MAC, the follow player is new, and takes no old name either
+	@Test func noOldPlayerMeansANewOne() throws {
+		let fm = FileManager.default
+		let dir = fm.temporaryDirectory.appendingPathComponent("lyrionplay-adopt-\(UUID())")
+		defer { try? fm.removeItem(at: dir) }
+		try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+		let oldMAC = dir.appendingPathComponent("mac"), oldName = dir.appendingPathComponent("player-name")
+		let mac = dir.appendingPathComponent("players/follow/mac"), name = dir.appendingPathComponent("players/follow/name")
+		try "Study".write(to: oldName, atomically: true, encoding: .utf8)
+
+		#expect(try PlayerIdentity.adoptOldPlayer(mac: oldMAC, name: oldName, macAt: mac, nameAt: name) == nil)
+		try "not a mac".write(to: oldMAC, atomically: true, encoding: .utf8)
+		#expect(try PlayerIdentity.adoptOldPlayer(mac: oldMAC, name: oldName, macAt: mac, nameAt: name) == nil)
+		#expect(!fm.fileExists(atPath: mac.path) && !fm.fileExists(atPath: name.path))
+		#expect(PlayerIdentity.isValid(try PlayerIdentity.loadOrCreateMAC(at: mac)))
+	}
+}
+
+/// Simon, 2026-10-12: Settings lists *Follow the macOS output*, then every device squeezelite lists
+/// except the Mac's built-in speakers/headphones; HDMI, Bluetooth and AirPlay included
+@Suite struct PlayerRows {
+	var all: [DeviceCaps] { devices + [dragonfly, hdmi] }
+
+	@Test func followFirstThenEveryDeviceButTheBuiltInOnes() {
+		let rows = PlayerList.rows(settings: Settings(), devices: all)
+		#expect(rows.map(\.key) == [PlayerKey.follow, fiio.uid, dragonfly.uid, hdmi.uid])
+		#expect(rows.first?.device?.uid == speakers.uid)              // what it follows now
+		#expect(!rows.contains { $0.key == speakers.uid })
+	}
+
+	/// a device with saved settings that is not plugged in keeps its row, its switch and its cog
+	@Test func aDeviceNotConnectedKeepsItsRow() {
+		var settings = Settings()
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .fixed, held: 17)
+		let rows = PlayerList.rows(settings: settings, devices: devices)
+		#expect(rows.map(\.key) == [PlayerKey.follow, fiio.uid, dragonfly.uid])
+		#expect(rows.last?.device == nil)
+	}
+
+	/// only the follow player is on to begin with; it is named after the Mac, a device's player after
+	/// the Mac then the device
+	@Test func defaults() {
+		let settings = Settings()
+		#expect(settings.isOn(PlayerKey.follow))
+		#expect(!settings.isOn(dragonfly.uid))
+		#expect(settings.player(PlayerKey.follow, device: speakers).name == PlayerSettings.macName)
+		#expect(settings.player(dragonfly.uid, device: dragonfly).name
+				== "\(PlayerSettings.macName) AudioQuest DragonFly Black v1.5")
+		#expect(settings.player(dragonfly.uid, device: dragonfly).exclusive)   // an external DAC
+		#expect(!settings.player(PlayerKey.follow, device: speakers).exclusive)
+	}
+}
+
+/// the agent runs one engine per player that is on and connected, and changes only what changed
+@Suite struct EnginePlanning {
+	func plan(_ settings: Settings, _ list: [DeviceCaps]) -> [String: EngineSpec] {
+		EnginePlan.make(settings: settings, devices: list, followDevice: settings.followDevice(in: list)) {
+			args(settings, $1, key: $0)
+		}
+	}
+
+	@Test func oneEnginePerPlayerThatIsOnAndConnected() {
+		var settings = Settings()
+		#expect(Set(plan(settings, devices + [dragonfly]).keys) == [PlayerKey.follow])
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .device)
+		let both = plan(settings, devices + [dragonfly])
+		#expect(Set(both.keys) == [PlayerKey.follow, dragonfly.uid])
+		#expect(both[dragonfly.uid]?.device.uid == dragonfly.uid && both[PlayerKey.follow]?.device.uid == speakers.uid)
+		#expect(Set(plan(settings, devices).keys) == [PlayerKey.follow])     // the DragonFly unplugged
+		settings.players[PlayerKey.follow]?.enabled = false
+		#expect(Set(plan(settings, devices + [dragonfly]).keys) == [dragonfly.uid])
+	}
+
+	@Test func onlyWhatChangedIsStoppedAndStarted() {
+		var settings = Settings()
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .device)
+		let before = plan(settings, devices + [dragonfly])
+		let running = before.mapValues(\.args)
+		#expect(EnginePlan.changes(running: running, wanted: before) == ([], []))
+		settings.players[dragonfly.uid]?.volume = .fixed                  // one player's setting
+		settings.players[dragonfly.uid]?.heldVolume = 17
+		let after = plan(settings, devices + [dragonfly])
+		#expect(EnginePlan.changes(running: running, wanted: after) == ([dragonfly.uid], [dragonfly.uid]))
+		settings.players[dragonfly.uid]?.enabled = false                  // switched off
+		#expect(EnginePlan.changes(running: running, wanted: plan(settings, devices + [dragonfly])) == ([dragonfly.uid], []))
+		#expect(EnginePlan.changes(running: [:], wanted: before) == ([], [PlayerKey.follow, dragonfly.uid].sorted()))
+	}
+}
+
+/// FIXED HOLDS THE LMS VOLUME: the level is the volume LMS has saved for the player
+@Suite struct HeldVolumes {
+	@Test func theSavedVolumeIsHeld() {
+		#expect(HeldVolume.from(lmsVolume: 17) == .held(17))
+		#expect(HeldVolume.from(lmsVolume: -17) == .held(17))           // muted: its level, kept negative by LMS
+		#expect(HeldVolume.from(lmsVolume: 37.5) == .held(38))
+		#expect(abs(HeldVolume.dB(17) - -48.84) < 1e-9)                 // as the DragonFly showed LMS 17
+	}
+
+	@Test func nothingToHoldIsRefused() {
+		guard case .refused = HeldVolume.from(lmsVolume: nil) else { Issue.record("no answer was held"); return }
+		guard case .refused = HeldVolume.from(lmsVolume: 0) else { Issue.record("0 was held"); return }
+		guard case .refused = HeldVolume.from(lmsVolume: -0.2) else { Issue.record("a muted 0 was held"); return }
 	}
 }
 
@@ -280,6 +470,22 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(LMSVolume.volume(forDB: -120) == 1)           // never 0: a level is not a mute
 		#expect(LMSVolume.volume(forDB: -19.5) == 60)         // a 0.5 dB device step still lands on 60
 	}
+
+	/// The engine predicts LMS's answer to each report from the whole volume the agent asks for, and
+	/// does not put that answer on the device (output_coreaudio.c `agent_volume`). These rows are the
+	/// engine suite's `the engine knows LMS's answer to each report`, read here as the engine prints
+	/// them: change both or neither.
+	@Test func theAgentsWholeVolumeIsTheEnginesToo() {
+		let rows: [(String, Int)] = [
+			("-74.00", 1), ("-100.00", 1), ("-63.50", 7), ("-50.00", 16), ("-37.00", 25), ("-36.75", 26),
+			("-33.05", 33), ("-30.00", 39), ("-29.60", 40), ("-29.40", 40), ("-29.35", 41), ("-29.11", 41),
+			("-28.61", 42), ("-20.00", 59), ("-0.20", 100), ("0.00", 100), ("5.00", 100),
+		]
+		for (printed, volume) in rows {
+			let report = VolumeReport(line: "lyrionplay:volume \(printed) 0 1")
+			#expect(report.map { LMSVolume.volume(forDB: $0.dB) } == volume, "\(printed) dB")
+		}
+	}
 }
 
 // MARK: - review 2026-10-10 regressions
@@ -297,21 +503,43 @@ func value(_ option: String, in a: [String]) -> String? {
 
 	@Test func staysOnTheDeviceItHolds() {
 		let settings = Settings() // follows the macOS output
-		#expect(settings.resolveDevice(in: whileHeld, holding: fiio.uid)?.uid == fiio.uid)
+		#expect(settings.followDevice(in: whileHeld, holding: fiio.uid)?.uid == fiio.uid)
 		// control: without the hold the macOS default wins, which is what moved the player before
-		#expect(settings.resolveDevice(in: whileHeld)?.uid == speakers.uid)
+		#expect(settings.followDevice(in: whileHeld)?.uid == speakers.uid)
 	}
 
 	@Test func aHeldDeviceThatIsGoneIsNotKept() {
 		let settings = Settings()
 		let withoutFiiO = whileHeld.filter { $0.uid != fiio.uid }
-		#expect(settings.resolveDevice(in: withoutFiiO, holding: fiio.uid)?.uid == speakers.uid)
+		#expect(settings.followDevice(in: withoutFiiO, holding: fiio.uid)?.uid == speakers.uid)
+	}
+}
+
+/// Simon, 2026-10-10: when the macOS output is a device with its own player on, *Follow the macOS
+/// output* plays to the Mac's built-in output; two engines never play to one device
+@Suite struct FollowAndOwnPlayers {
+	var fiioDefault: [DeviceCaps] {
+		var list = devices
+		for i in list.indices { list[i].isDefault = list[i].uid == fiio.uid }
+		return list
 	}
 
-	@Test func aChosenDeviceIgnoresTheHold() {
+	@Test func aDeviceWithItsOwnPlayerOnIsNotFollowed() {
 		var settings = Settings()
-		settings.outputDevice = speakers.uid
-		#expect(settings.resolveDevice(in: whileHeld, holding: fiio.uid)?.uid == speakers.uid)
+		#expect(settings.followDevice(in: fiioDefault)?.uid == fiio.uid) // control: its player is off
+		settings.players[fiio.uid] = player(fiio, volume: .software)
+		#expect(settings.followDevice(in: fiioDefault)?.uid == speakers.uid)
+		// held by the follow player when its own player is switched on: not kept either
+		#expect(settings.followDevice(in: fiioDefault, holding: fiio.uid)?.uid == speakers.uid)
+		// its player off again: followed
+		settings.players[fiio.uid]?.enabled = false
+		#expect(settings.followDevice(in: fiioDefault)?.uid == fiio.uid)
+	}
+
+	@Test func noBuiltInOutputMeansNoDevice() {
+		var settings = Settings()
+		settings.players[fiio.uid] = player(fiio, volume: .software)
+		#expect(settings.followDevice(in: fiioDefault.filter { !$0.isBuiltIn }) == nil)
 	}
 }
 
@@ -321,6 +549,12 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(VolumeReport(line: "lyrionplay:volume -28.72 0 1") == VolumeReport(dB: -28.72, muted: false, lms: .audible))
 		#expect(VolumeReport(line: "lyrionplay:volume -63.50 1 0") == VolumeReport(dB: -63.5, muted: true, lms: .silent))
 		#expect(VolumeReport(line: "lyrionplay:volume -30.00 0 -1")?.lms == .unknown)
+		// <moved>: 0 only the mute changed, 1 the level moved; a line without it moved
+		#expect(VolumeReport(line: "lyrionplay:volume -63.50 0 0 0") == VolumeReport(dB: -63.5, muted: false, lms: .silent, levelMoved: false))
+		#expect(VolumeReport(line: "lyrionplay:volume -30.00 0 0 1")?.levelMoved == true)
+		#expect(VolumeReport(line: "lyrionplay:volume -30.00 0 1")?.levelMoved == true)
+		#expect(VolumeReport(line: "lyrionplay:volume -30.00 0 0 2") == nil)
+		#expect(VolumeReport(line: "lyrionplay:volume -30.00 0 0 1 9") == nil)
 		// a line without <lms> asks LMS everything, as before
 		#expect(VolumeReport(line: "lyrionplay:volume -30.00 0")?.lms == .unknown)
 	}
@@ -394,7 +628,26 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(DeviceCaps.dsd(49_152_000) == "DSD1024 (49.1520 MHz)")
 	}
 
-	@Test func aStatusWrittenBeforeTheFieldStillLoads() throws {
+	/// one entry per player, each with its own device and format
+	@Test func aStatusRoundTripsWithItsPlayers() throws {
+		let url = FileManager.default.temporaryDirectory.appendingPathComponent("status-\(UUID()).json")
+		defer { try? FileManager.default.removeItem(at: url) }
+		var status = AgentStatus(agentPID: 1)
+		status.serverHost = "plex"
+		status.serverWebPort = 9000
+		var dac = PlayerStatus(key: dragonfly.uid, name: "DragonFly", mac: "02:00:00:00:00:02")
+		dac.currentRate = 176400
+		dac.dsdRate = 2_822_400
+		status.players = [PlayerStatus(key: PlayerKey.follow, name: "Mac", mac: "02:00:00:00:00:01"), dac]
+		status.updated = Date(timeIntervalSince1970: 1_800_000_000) // whole seconds: ISO 8601 keeps no fraction
+		try status.save(to: url)
+		let loaded = try #require(AgentStatus.load(from: url))
+		#expect(loaded == status)
+		#expect(loaded.player(dragonfly.uid)?.dsdRate == 2_822_400)
+	}
+
+	/// a status a 0.3.x agent wrote (one player, no list) loads with no players
+	@Test func aStatusFromBeforePlayersLoadsWithNone() throws {
 		let old = FileManager.default.temporaryDirectory.appendingPathComponent("status-\(UUID()).json")
 		defer { try? FileManager.default.removeItem(at: old) }
 		try Data("""
@@ -402,7 +655,7 @@ func value(_ option: String, in a: [String]) -> String? {
 			 "currentRate":176400,"devices":[]}
 			""".utf8).write(to: old)
 		let status = try #require(AgentStatus.load(from: old))
-		#expect(status.currentRate == 176400 && status.dsdRate == nil)
+		#expect(status.players.isEmpty)
 	}
 }
 
@@ -434,11 +687,22 @@ final class FakeLMS: @unchecked Sendable {
 
 	@Test func unmuteWhileLMSIsMutedAsksLMSToUnmute() async {
 		let lms = FakeLMS(fixed: false, volume: -42)
-		#expect(await lms.command(VolumeReport(dB: -63.5, muted: false, lms: .silent)) == ["mixer", "muting", "0"])
+		#expect(await lms.command(VolumeReport(dB: -63.5, muted: false, lms: .silent, levelMoved: false)) == ["mixer", "muting", "0"])
 		#expect(lms.volumeAsked == 1)
 		// control: LMS at volume 0, not muted, gets the level
 		let atZero = FakeLMS(fixed: false, volume: 0)
-		#expect(await atZero.command(VolumeReport(dB: -28.72, muted: false, lms: .silent)) == ["mixer", "volume", "42"])
+		#expect(await atZero.command(VolumeReport(dB: -28.72, muted: false, lms: .silent, levelMoved: false)) == ["mixer", "volume", "42"])
+	}
+
+	/// Simon, 2026-10-14: moving the Mac's volume while LMS is muted "should unmute LMS and move it
+	/// the correct position"; it unmuted LMS to the volume it kept instead
+	@Test func aLevelMovedWhileLMSIsMutedSetsThatLevel() async {
+		let lms = FakeLMS(fixed: false, volume: -42)
+		#expect(await lms.command(VolumeReport(dB: -28.72, muted: false, lms: .silent, levelMoved: true)) == ["mixer", "volume", "42"])
+		#expect(lms.volumeAsked == 0)                       // no question needed
+		// from the line as the engine prints it
+		let line = VolumeReport(line: "lyrionplay:volume -33.05 0 0 1")
+		#expect(await lms.command(line!) == ["mixer", "volume", "33"])
 	}
 
 	@Test func muteAsksNothing() async {
@@ -453,10 +717,15 @@ final class FakeLMS: @unchecked Sendable {
 		#expect(await fixed.command(VolumeReport(dB: -28.72, muted: false, lms: .unknown)) == nil)
 		#expect(await fixed.command(VolumeReport(dB: -28.72, muted: true, lms: .unknown)) == nil)
 		#expect(fixed.fixedAsked == 2)
-		// control: a player LMS controls gets the level, and unknown asks both questions
+		// control: a player LMS controls gets the level; unknown asks whether it is fixed, and a level
+		// that moved needs no volume question (it is sent even to a muted LMS, which it unmutes)
 		let free = FakeLMS(fixed: false, volume: 42)
 		#expect(await free.command(VolumeReport(dB: -28.72, muted: false, lms: .unknown)) == ["mixer", "volume", "42"])
-		#expect(free.fixedAsked == 1 && free.volumeAsked == 1)
+		#expect(free.fixedAsked == 1 && free.volumeAsked == 0)
+		// an unmute alone asks both
+		let unmuted = FakeLMS(fixed: false, volume: 42)
+		#expect(await unmuted.command(VolumeReport(dB: -28.72, muted: false, lms: .unknown, levelMoved: false)) == ["mixer", "volume", "42"])
+		#expect(unmuted.fixedAsked == 1 && unmuted.volumeAsked == 1)
 		// LMS not answering does not block the push
 		let silent = FakeLMS(fixed: nil, volume: nil)
 		#expect(await silent.command(VolumeReport(dB: -28.72, muted: false, lms: .unknown)) == ["mixer", "volume", "42"])
@@ -555,9 +824,10 @@ final class FakeLMS: @unchecked Sendable {
 	}
 
 	@Test func aSettingsFileWithFixedLoads() throws {
-		let json = #"{"devices":{"x":{"exclusive":true,"dop":false,"volume":"fixed","rateSwitchDelayMs":0}}}"#
+		let json = #"{"version":2,"players":{"x":{"enabled":true,"name":"X","exclusive":true,"dop":false,"volume":"fixed","heldVolume":17,"rateSwitchDelayMs":0}}}"#
 		let settings = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
-		#expect(settings.devices["x"]?.volume == .fixed)
+		#expect(settings.players["x"]?.volume == .fixed)
+		#expect(settings.players["x"]?.heldVolume == 17)
 	}
 }
 
@@ -711,13 +981,14 @@ final class FakeLMS: @unchecked Sendable {
 		#expect(!follow.shouldReconcile(holding: fiio.uid))
 	}
 
-	@Test func aChosenDeviceNeverDefers() {
+	/// a device whose own player is switched on is not kept by the hold, so nothing waits for it
+	@Test func aDeviceWithItsOwnPlayerNeverDefers() {
 		var follow = OutputFollow()
 		var settings = Settings()
-		settings.outputDevice = fiio.uid
-		#expect(follow.resolve(settings, in: speakersDefault, holding: fiio.uid)?.uid == fiio.uid)
+		settings.players[fiio.uid] = player(fiio, volume: .software)
+		#expect(follow.resolve(settings, in: speakersDefault, holding: fiio.uid)?.uid == speakers.uid)
 		#expect(!follow.deferred)
-		// control: the same probe while following the macOS output does defer
+		// control: with its own player off, the same probe does defer
 		#expect(follow.resolve(Settings(), in: speakersDefault, holding: fiio.uid)?.uid == fiio.uid && follow.deferred)
 	}
 
@@ -772,16 +1043,17 @@ final class FakeLMS: @unchecked Sendable {
 	/// playing) was cleared by the agent, outside this type and its tests
 	@Test func aServerChangeForgetsWhatTheOldServerSaid() {
 		var choice = ServerChoice(setting: "plex")
-		choice.checked(setting: "plex", found: a, state: LMSClient.PlayerState(connected: true, mode: "play"))
-		#expect(choice.playerState?.mode == "play")
+		let mac = "02:00:00:00:00:01"
+		choice.checked(setting: "plex", found: a, states: [mac: LMSClient.PlayerState(connected: true, mode: "play")])
+		#expect(choice.playerStates[mac]?.mode == "play")
 		choice.update(setting: "plex")                  // saved again, same server: kept
-		#expect(choice.playerState?.mode == "play")
+		#expect(choice.playerStates[mac]?.mode == "play")
 		choice.update(setting: "other")
-		#expect(choice.playerState == nil)
-		choice.checked(setting: "plex", found: a, state: LMSClient.PlayerState(connected: true, mode: "play"))
-		#expect(choice.playerState == nil)              // a late check of the old one: dropped
-		choice.checked(setting: "other", found: nil, state: LMSClient.PlayerState(connected: true))
-		#expect(choice.playerState == nil)              // no server, no state
+		#expect(choice.playerStates.isEmpty)
+		choice.checked(setting: "plex", found: a, states: [mac: LMSClient.PlayerState(connected: true, mode: "play")])
+		#expect(choice.playerStates.isEmpty)            // a late check of the old one: dropped
+		choice.checked(setting: "other", found: nil, states: [mac: LMSClient.PlayerState(connected: true)])
+		#expect(choice.playerStates.isEmpty)            // no server, no state
 	}
 
 	/// /code-review 2026-10-11, finding 6: after a change, the agent waited out its 5 s cadence
