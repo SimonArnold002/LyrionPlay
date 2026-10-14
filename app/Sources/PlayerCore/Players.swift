@@ -85,6 +85,9 @@ public enum HeldVolume: Equatable, Sendable {
 		return .held(level)
 	}
 
-	/// the device level for a held LMS volume: the curve *Device's own volume* uses (LMSVolume)
-	public static func dB(_ volume: Int) -> Double { LMSVolume.dB(volume) }
+	/// the device level for a held LMS volume: where *Device's own volume* puts the device for it, LMS's
+	/// gain for that volume (LMSVolume.gain). The curve before LMS rounds it moved the device on
+	/// choosing Fixed: the DragonFly from -25.9 to -25.6 dB at LMS 48 (live, 0.4.0), up to 0.5 dB at
+	/// 40 (/code-review 2026-10-14, finding 4).
+	public static func dB(_ volume: Int) -> Double { LMSVolume.dB(gain: LMSVolume.gain(volume)) }
 }

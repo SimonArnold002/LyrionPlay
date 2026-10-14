@@ -119,12 +119,12 @@ func value(_ option: String, in a: [String]) -> String? {
 
 	/// FIXED HOLDS THE LMS VOLUME: Fixed passes -a's fixed field, so the engine itself keeps the
 	/// samples at full scale (no -V); on a device with a volume control, with the held level in dB
-	/// (LMS volume 17 = -48.84 dB, the curve the device's own volume uses)
+	/// (LMS volume 17 = -48.83 dB, where the device's own volume puts it: HeldVolumes)
 	@Test func fixedIsEnforcedByTheEngineAndHoldsALevel() {
 		var settings = Settings()
 		settings.players[dragonfly.uid] = player(dragonfly, volume: .fixed, held: 17)
 		#expect(!args(settings, dragonfly).contains("-V"))
-		#expect(value("-a", in: args(settings, dragonfly)) == "0:1:1:-48.84")
+		#expect(value("-a", in: args(settings, dragonfly)) == "0:1:1:-48.83")
 		// no level saved: Fixed, the device left alone (the agent says why)
 		settings.players[dragonfly.uid]?.heldVolume = nil
 		#expect(value("-a", in: args(settings, dragonfly)) == "0:1:1")
@@ -290,7 +290,10 @@ func value(_ option: String, in a: [String]) -> String? {
 		try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 		defer { try? FileManager.default.removeItem(at: dir) }
 		let url = dir.appendingPathComponent("settings.json")
-		let old = #"{"playerName":"Mac","outputDevice":"x","devices":{"x":{"exclusive":true,"dop":false,"volume":"fixed","rateSwitchDelayMs":0}}}"#
+		// 0.3.14's keys, as its file has them (Simon's settings-0.3.json, set aside by 0.4.0): server,
+		// idleSeconds, resampleQuality and logLevel are this build's keys too, with the same types
+		// (/code-review 2026-10-15, finding 4)
+		let old = #"{"devices":{"x":{"dop":true,"exclusive":true,"rateSwitchDelayMs":0,"volume":"software"}},"idleSeconds":10,"logLevel":"info","outputDevice":"x","playerName":"Mac","resampleQuality":"v","server":""}"#
 		try Data(old.utf8).write(to: url)
 		#expect(Settings.read(from: url) == .older)
 		#expect(Settings.load(from: url) == Settings())
@@ -301,6 +304,78 @@ func value(_ option: String, in a: [String]) -> String? {
 		// control: a current file is left where it is
 		#expect(try Settings.setAsideOlder(at: url) == nil)
 		#expect(Settings.read(from: dir.appendingPathComponent("missing.json")) == .missing)
+	}
+
+	/// Simon, 2026-10-14: settings carry over from 0.4.0 on. A file from an earlier 0.4.x lacks the
+	/// keys a later build adds; each takes its default, and the file is not set aside
+	@Test func anEarlierVersionTwoFileStillLoads() throws {
+		let url = FileManager.default.temporaryDirectory.appendingPathComponent("lyrionplay-settings-\(UUID()).json")
+		defer { try? FileManager.default.removeItem(at: url) }
+		// only a name: every other key of a player missing, as a file before that key existed has it
+		let earlier = #"{"version":2,"server":"plex","players":{"follow":{"name":"Study","enabled":true},"x":{"name":"DAC","enabled":true,"volume":"fixed","heldVolume":48}}}"#
+		try Data(earlier.utf8).write(to: url)
+		guard case .current(let settings) = Settings.read(from: url) else { Issue.record("not read: \(Settings.read(from: url))"); return }
+		#expect(settings.server == "plex")
+		#expect(settings.players["follow"] == PlayerSettings(enabled: true, name: "Study", exclusive: false, dop: false, volume: .device))
+		#expect(settings.players["x"]?.volume == .fixed && settings.players["x"]?.heldVolume == 48)
+		#expect(settings.players["x"]?.rateSwitchDelayMs == 0)
+		#expect(try Settings.setAsideOlder(at: url) == nil)
+		#expect(try String(contentsOf: url, encoding: .utf8) == earlier)
+		// a key this build does not know (a later build's) is passed over, and a later version is read
+		try Data(#"{"version":3,"later":1,"players":{"follow":{"name":"Study","later":true}}}"#.utf8).write(to: url)
+		#expect(Settings.load(from: url).players["follow"]?.name == "Study")
+	}
+
+	/// /code-review 2026-10-14, finding 1: a file that does not decode was set aside as 0.3.x's, over
+	/// any settings-0.3.json, and the defaults written in its place
+	@Test func anUnreadableFileIsLeftAlone() throws {
+		let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lyrionplay-\(UUID())")
+		try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+		defer { try? FileManager.default.removeItem(at: dir) }
+		let url = dir.appendingPathComponent("settings.json"), aside = dir.appendingPathComponent("settings-0.3.json")
+		let bad = #"{"version":2,"players":{"follow":{"enabled":"yes","name":"Study"}}}"#
+		try Data(bad.utf8).write(to: url)
+		try Data("0.3".utf8).write(to: aside)
+		guard case .unreadable = Settings.read(from: url) else { Issue.record("read as \(Settings.read(from: url))"); return }
+		#expect(Settings.load(from: url) == Settings())
+		#expect(try Settings.setAsideOlder(at: url) == nil)
+		#expect(try String(contentsOf: url, encoding: .utf8) == bad)
+		#expect(try String(contentsOf: aside, encoding: .utf8) == "0.3")
+	}
+
+	/// /code-review 2026-10-15, finding 2: a later build's file read here (a rollback) was saved back
+	/// under the later version, with only this build's keys, so that build would skip its migration
+	@Test func aLaterVersionIsSavedAsThisOne() throws {
+		let url = FileManager.default.temporaryDirectory.appendingPathComponent("lyrionplay-settings-\(UUID()).json")
+		defer { try? FileManager.default.removeItem(at: url) }
+		try Data(#"{"version":3,"later":1,"server":"plex","players":{"follow":{"name":"Study","later":true}}}"#.utf8).write(to: url)
+		let read = Settings.load(from: url)
+		#expect(read.version == 3) // read as it is
+		try read.save(to: url)
+		let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+		#expect(saved?["version"] as? Int == Settings.currentVersion)
+		#expect(saved?["later"] == nil) // this build cannot keep what it does not know: why the version is its own
+		#expect(Settings.load(from: url).server == "plex")
+		#expect(Settings.load(from: url).players["follow"]?.name == "Study")
+	}
+
+	/// SETTINGS CARRY OVER FROM 0.4.0 ON: only a file before players (0.3.x) is set aside, whatever
+	/// `currentVersion` a later build raises it to. Compared with `currentVersion`, as it was, this fails
+	/// in the build that raises it: every 0.4.x file would be set aside and reset
+	@Test func everyFileFromVersionTwoOnIsRead() throws {
+		let url = FileManager.default.temporaryDirectory.appendingPathComponent("lyrionplay-settings-\(UUID()).json")
+		defer { try? FileManager.default.removeItem(at: url) }
+		for version in 0...(Settings.currentVersion + 1) {
+			try Data(#"{"version":\#(version),"players":{"follow":{"name":"Study"}}}"#.utf8).write(to: url)
+			if version < 2 {
+				#expect(Settings.read(from: url) == .older, "version \(version)")
+			} else {
+				guard case .current(let settings) = Settings.read(from: url) else {
+					Issue.record("version \(version) read as \(Settings.read(from: url))"); continue
+				}
+				#expect(settings.players["follow"]?.name == "Study", "version \(version)")
+			}
+		}
 	}
 
 	@Test func followFollowsTheMacOSOutput() {
@@ -360,6 +435,75 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(try PlayerIdentity.adoptOldPlayer(mac: oldMAC, name: oldName, macAt: mac, nameAt: name) == nil)
 		#expect(try PlayerIdentity.loadOrCreateMAC(at: mac) == "96:57:54:14:bd:87")
 		#expect(try String(contentsOf: name, encoding: .utf8) == "Study 2")
+	}
+
+	/// /code-review 2026-10-14, finding 2: a rename saved in Settings while the player (or LyrionPlay)
+	/// was off never reached LMS; a rename made in LMS (squeezelite writes it to the file) must stay
+	@Test func aRenameInSettingsReachesTheNameFile() throws {
+		let fm = FileManager.default
+		let dir = fm.temporaryDirectory.appendingPathComponent("lyrionplay-name-\(UUID())")
+		defer { try? fm.removeItem(at: dir) }
+		let name = dir.appendingPathComponent("players/x/name"), applied = dir.appendingPathComponent("players/x/settings-name")
+		func file() throws -> String { try String(contentsOf: name, encoding: .utf8) }
+
+		#expect(try PlayerIdentity.applyName("Mac DAC", at: name, applied: applied, saved: true) == false) // new: written
+		#expect(try file() == "Mac DAC")
+		#expect(try PlayerIdentity.applyName("Mac DAC", at: name, applied: applied, saved: true) == false) // control: no change
+		// renamed in Settings, however long ago, whatever ran meanwhile
+		#expect(try PlayerIdentity.applyName("Study DAC", at: name, applied: applied, saved: true) == true)
+		#expect(try file() == "Study DAC")
+		// renamed in LMS: squeezelite writes the file; the same Settings name leaves it
+		try "Lounge".write(to: name, atomically: true, encoding: .utf8)
+		#expect(try PlayerIdentity.applyName("Study DAC", at: name, applied: applied, saved: true) == false)
+		#expect(try file() == "Lounge")
+		// a player from before the record keeps its file, and a later rename in Settings lands
+		try fm.removeItem(at: applied)
+		#expect(try PlayerIdentity.applyName("Other", at: name, applied: applied, saved: true) == false)
+		#expect(try file() == "Lounge")
+		#expect(try PlayerIdentity.applyName("Desk", at: name, applied: applied, saved: true) == true)
+		#expect(try file() == "Desk")
+	}
+
+	/// /code-review 2026-10-15, finding 1: with settings.json unreadable at its start, the agent runs the
+	/// defaults, whose name (the Mac's) wrote over the name file and the record: a rename made in LMS
+	/// was lost for good, and LMS showed the Mac's name
+	@Test func theDefaultsNeverRenameAPlayer() throws {
+		let fm = FileManager.default
+		let dir = fm.temporaryDirectory.appendingPathComponent("lyrionplay-name-\(UUID())")
+		defer { try? fm.removeItem(at: dir) }
+		let name = dir.appendingPathComponent("players/follow/name"), applied = dir.appendingPathComponent("players/follow/settings-name")
+		func file() throws -> String { try String(contentsOf: name, encoding: .utf8) }
+		func record() -> String? { try? String(contentsOf: applied, encoding: .utf8) }
+
+		// named Study in Settings, then Lounge in LMS
+		try PlayerIdentity.applyName("Study", at: name, applied: applied, saved: true)
+		try "Lounge".write(to: name, atomically: true, encoding: .utf8)
+		// the file unreadable at the agent's start: the defaults' name touches nothing
+		#expect(try PlayerIdentity.applyName("Mac", at: name, applied: applied, saved: false) == false)
+		#expect(try file() == "Lounge")
+		#expect(record() == "Study")
+		// the file read again: Settings' name is the one it put there, so LMS's rename stays
+		#expect(try PlayerIdentity.applyName("Study", at: name, applied: applied, saved: true) == false)
+		#expect(try file() == "Lounge")
+		// control: the same name from settings.json is a rename in Settings, and lands
+		#expect(try PlayerIdentity.applyName("Mac", at: name, applied: applied, saved: true) == true)
+		#expect(try file() == "Mac")
+
+		// a player from before the record: the defaults write no record, so a later read keeps the file
+		try fm.removeItem(at: applied)
+		try "Lounge".write(to: name, atomically: true, encoding: .utf8)
+		#expect(try PlayerIdentity.applyName("Mac", at: name, applied: applied, saved: false) == false)
+		#expect(record() == nil)
+		#expect(try PlayerIdentity.applyName("Study", at: name, applied: applied, saved: true) == false)
+		#expect(try file() == "Lounge")
+
+		// no name file at all: the defaults make one, recorded as theirs, so Settings' name replaces it
+		try fm.removeItem(at: name)
+		try fm.removeItem(at: applied)
+		#expect(try PlayerIdentity.applyName("Mac", at: name, applied: applied, saved: false) == false)
+		#expect(try file() == "Mac")
+		#expect(try PlayerIdentity.applyName("Study", at: name, applied: applied, saved: true) == true)
+		#expect(try file() == "Study")
 	}
 
 	/// with no usable 0.3.x MAC, the follow player is new, and takes no old name either
@@ -457,7 +601,26 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(HeldVolume.from(lmsVolume: 17) == .held(17))
 		#expect(HeldVolume.from(lmsVolume: -17) == .held(17))           // muted: its level, kept negative by LMS
 		#expect(HeldVolume.from(lmsVolume: 37.5) == .held(38))
-		#expect(abs(HeldVolume.dB(17) - -48.84) < 1e-9)                 // as the DragonFly showed LMS 17
+	}
+
+	/// /code-review 2026-10-14, finding 4: Fixed holds the device where *Device's own volume* had it
+	/// for the same LMS volume, LMS's rounded gain, not the curve before LMS rounds it
+	@Test func fixedHoldsWhereTheDevicesOwnVolumeHadIt() {
+		#expect(String(format: "%.2f", HeldVolume.dB(17)) == "-48.83")     // the DragonFly reported LMS 17 at -48.83
+		#expect(String(format: "%.2f", HeldVolume.dB(48)) == "-25.89")     // and read LMS 48 at -25.89 (0.4.2)
+		#expect(String(format: "%.2f", HeldVolume.dB(40)) == "-30.10")     // the largest gap: 0.50 dB
+		#expect(HeldVolume.dB(100) == 0)
+		// control: the curve LMS rounds is not where the device goes (Fixed held -25.65 at 48 on 0.4.0)
+		#expect(abs(LMSVolume.dB(48) - HeldVolume.dB(48)) > 0.2)
+	}
+
+	/// LMS's gains, as the engine suite pins them (lms_gain, LMS_VOL33...LMS_VOL42), so the agent and
+	/// the engine agree on every level
+	@Test func lmsGainsMatchTheEngine() {
+		#expect(LMSVolume.gain(33) == 1458 && LMSVolume.gain(40) == 2048)
+		#expect(LMSVolume.gain(41) == 2304 && LMSVolume.gain(42) == 2304)   // LMS's own 8-bit rounding
+		#expect(LMSVolume.gain(48) == 3328 && LMSVolume.gain(17) == 237)
+		#expect(LMSVolume.gain(100) == 65536 && LMSVolume.gain(0) == 0)
 	}
 
 	@Test func nothingToHoldIsRefused() {
@@ -1043,6 +1206,18 @@ final class FakeLMS: @unchecked Sendable {
 		#expect(!follow.deferred)
 		// control: with its own player off, the same probe does defer
 		#expect(follow.resolve(Settings(), in: speakersDefault, holding: fiio.uid)?.uid == fiio.uid && follow.deferred)
+	}
+
+	/// /code-review 2026-10-14, finding 3: switched off while it waited, the wait never ended, and the
+	/// agent reconciled (a device probe) every 2 s until it was on again
+	@Test func switchedOffEndsTheWait() {
+		var follow = OutputFollow()
+		_ = follow.resolve(Settings(), in: speakersDefault, holding: fiio.uid)
+		#expect(follow.deferred)                                   // control: it waits
+		var off = Settings()
+		off.players[PlayerKey.follow]?.enabled = false
+		#expect(follow.resolve(off, in: speakersDefault, holding: nil) == nil)
+		#expect(!follow.deferred && !follow.shouldReconcile(holding: nil))
 	}
 
 	@Test func noDeviceClearsIt() {

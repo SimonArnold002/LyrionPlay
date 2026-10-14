@@ -22,6 +22,19 @@ public enum LMSVolume {
 		return (stepDB - bottomDB) / stepPoint * v + bottomDB
 	}
 
+	/// LMS 9.1's audg gain (16.16) for whole volume N: the level above through dBToFixed, which keeps 8
+	/// bits from -30 to 0 dB. The engine's `lms_gain` (output_coreaudio.c), in the same arithmetic;
+	/// both suites pin the same gains.
+	public static func gain(_ volume: Int) -> UInt32 {
+		guard volume > 0 else { return 0 }
+		let level = dB(volume), m = pow(10, level / 20)
+		return level >= -30 && level <= 0 ? UInt32(Int(m * 256 + 0.5)) * 256 : UInt32(Int(m * 65536 + 0.5))
+	}
+
+	/// the level a gain puts on the device under the device's own volume (-V): the engine's
+	/// 20 log10(gain / 65536) (output_coreaudio.c)
+	public static func dB(gain: UInt32) -> Double { 20 * log10(Double(gain) / 65536) }
+
 	/// the slider position whose level is nearest to a device level; at least 1, because a
 	/// level is not a mute
 	public static func volume(forDB level: Double) -> Int {

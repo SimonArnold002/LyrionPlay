@@ -77,10 +77,14 @@ Used for the 0.2.8, 0.2.9 and 0.2.10 live tests (§C). The suite proves a rule; 
 frames the real device got.
 1. Ask Simon which player and device. Check the player's mode before every LMS command, and note
    the queue to put back.
-2. `launchctl bootout gui/$(id -u)/com.crystalgipsy.lyrionplay.agent`. The agent stops its engine:
-   check that the PID in `~/Library/Application Support/LyrionPlay/engine.pid` has exited.
-3. Run the INSTALLED engine by hand on the arguments of agent.log's last "engine N started:" line
-   (not `ps`: squeezelite splits `-a 0:1` in place, so `ps` shows it mangled), with a scratch log
+2. Since 0.4.0 the agent runs one engine per player that is on, each with its own
+   `~/Library/Application Support/LyrionPlay/players/<slug>/engine.pid` (`follow` for *Follow the
+   macOS output*, `Paths.slug` of the UID for a device) and its own `engine-<slug>.log`. Read every
+   `players/*/engine.pid` FIRST (the agent deletes each as it stops that engine), then
+   `launchctl bootout gui/$(id -u)/com.crystalgipsy.lyrionplay.agent` and check that each of those
+   PIDs has exited.
+3. Run the INSTALLED engine by hand on the arguments of agent.log's last "engine N of <player name>
+   started:" line for the player under test, never another player's (not `ps`: squeezelite splits `-a 0:1` in place, so `ps` shows it mangled), with a scratch log
    for `-f` and the PID captured at launch:
    `sh -c 'echo $$ > DIR/engine.pid; exec env LYRIONPLAY_TAP=DIR/tap /Applications/LyrionPlay.app/Contents/MacOS/squeezelite <args>'`
 4. Drive LMS over JSON-RPC (`playlistcontrol cmd:load track_id:N`, `stop`) and watch the engine
@@ -126,7 +130,7 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "LMS can be told the DAC's rate list" | **WRONG** (§A3) | `NO RATE LIST` |
 | `set_volume` with LMS fixed volume (`output.volume_fixed`) leaves the device level alone | by design; differs from `output_alsa.c` `-V` | `FIXED VOLUME LEAVES THE DEVICE ALONE` |
 | Fixed on a DAC with a volume control holding LMS's saved volume, not 0 dB as upstream; Material showing fixed at 100 meanwhile; `-a <f>:<e>:<x>:<h>`, `ca.fixed`, `ca.hold`, `put_held_level`, `HeldVolume`, `PlayerSettings.heldVolume`, `chooseVolume`; Fixed ignoring LMS's level in the engine whatever `adjust` says | **DECIDED by Simon 2026-10-12, BUILT the same day, INSTALLED as 0.4.0**, NOT live-tested (§A2) | `FIXED HOLDS THE LMS VOLUME` |
-| settings.json from 0.3.x (no `version` 2) moved to settings-0.3.json and replaced by the defaults | **BY DESIGN, Simon 2026-10-12** ("no migration needed"; `Settings.setAsideOlder`) | `ONE PLAYER PER DAC` |
+| settings.json from 0.3.x (no `version` 2) moved to settings-0.3.json and replaced by the defaults | **BY DESIGN, Simon 2026-10-12** ("no migration needed"; `Settings.setAsideOlder`); a version-2 file is never set aside (`SETTINGS CARRY OVER FROM 0.4.0 ON`) | `ONE PLAYER PER DAC` |
 | 0.3.x's `mac` and `player-name` taken over by *Follow the macOS output* (`PlayerIdentity.adoptOldPlayer`, `Paths.oldMAC`/`oldPlayerName`), so the 0.3.x LMS player carries on; device players are new LMS players | **DECIDED by Simon 2026-10-12** ("Keep the old ID"); my earlier row here called new MACs for every player "BY DESIGN, Simon" from "no migration needed", which was about SETTINGS: WRONG, corrected | `THE OLD PLAYER CARRIES ON` |
 | "Fixed at 100%" per DAC; `VolumeMode.fixed`, `FixedVolumeSync` (`checked`/`recordRefusal`, was `sent`), `syncFixedVolume`, `playerpref digitalVolumeControl`, `PlayerState.digitalVolumeControl`; LyrionPlay putting back a fixed/variable setting made in LMS or Material | **BUILT 2026-10-11, DECIDED by Simon** ("LyrionPlay, per DAC"): LyrionPlay OWNS the pref, both ways; **INSTALLED as 0.3.0** 2026-10-11, the put-back in 0.3.1; the switch BOTH WAYS **VERIFIED LIVE 2026-10-12** on the DragonFly (agent.log + LMS); still owed: a change made in Material put back, the FiiO on 0.3.1, the DragonFly's level after a switch (§B) | `FIXED AT 100% PER DAC` |
 | "a `digitalVolumeControl` set from outside takes effect only at the next track" | **WRONG** (§A3): LMS sends an audg at once | `SETTING DVC SENDS AN AUDG AT ONCE` |
@@ -217,6 +221,11 @@ disproven belief or a cleared finding that is not written here will be re-report
 | LMS's slider doing nothing to DSD sent as DoP on a *Software* player (`dopCaption`, upstream `output.c` FIXED_ONE for non-PCM) | **NOT A BUG**, said on screen at Simon's request 2026-10-14, **INSTALLED as 0.4.4, VERIFIED LIVE** (§A2) | `DOP PLAYS AT FULL LEVEL` |
 | the picker's *Fixed at 100%* label (`Text("Fixed")`, INSTALL.md); LMS's own "Output level is fixed at 100%" | **DECIDED by Simon 2026-10-14**: the choice is *Fixed* (it holds LMS's level on a DAC with a volume control); LMS's setting keeps its own name; **INSTALLED as 0.4.3** (§A2) | `FIXED, NOT FIXED AT 100%` |
 | inline review of 0.4.0-0.4.2 (15fa252..b6b929f): `PlayerModel.save` / the switch / the cog writing *Follow the macOS output*'s volume as its device of the moment offers it (`Settings.forSaving`); the Fixed caption's "turn it down before saving" (`volumeCaption`, INSTALL.md) | **1 VERIFIED + FIXED 2026-10-14** (Simon: "yes fix that"), pinned + 2 mutants; **2 FIXED by Simon's wording** ("just remove the turn it down bit all is correct up to that"); **INSTALLED as 0.4.3**, not live-tested (§C) | `INLINE REVIEW 2026-10-14` |
+| `PlayerSettings.init(from:)`, `Settings.read` (`.older`, `.unreadable`), `setAsideOlder`: a 0.4.x settings.json read by a later build | **DECIDED by Simon 2026-10-14**: carried over, never reset; only 0.3.x's set aside (§A2) | `SETTINGS CARRY OVER FROM 0.4.0 ON` |
+| "`Host.current().localizedName` stalls" (`PlayerSettings.macName`, read per `Settings()` decode and per unsaved device row) | **WRONG** (§A3, measured 2026-10-14) | `THE MAC'S NAME LOOKUP STALLS` |
+| "a status check holds up a volume push" (`LMSClient.playerStates`, `status` per player in turn) | **WRONG** (§A3, source 2026-10-14) | `A STATUS CHECK HOLDS UP A PUSH` |
+| /code-review 2026-10-14 of 0.2.10-0.4.5 (7faf2f8..682cab2): a settings file that did not decode set aside (`Settings.read`); a rename saved while off (`PlayerIdentity.applyName`, `settings-name`, was `ensureNameFile`); Follow switched off while deferred (`OutputFollow.resolve`); Fixed's held level off LMS's gain (`HeldVolume.dB`, `LMSVolume.gain`); engines stopped one at a time (`stopEngines`); the tap procedure's `engine.pid`; `macName`; serial `playerStates` | **1-4, 6, 8 VERIFIED + FIXED 2026-10-14** (Simon: "Verify the rest and look to fix"; 1 for 0.4.0 on only), 5 mutants killed, suite PASS; **5, 7 CLEARED** (§A3); not built (§C) | `CODE-REVIEW 2026-10-14` |
+| /code-review 2026-10-15 of the CODE-REVIEW 2026-10-14 fixes (tree): an unreadable settings.json at agent start renaming Follow (`applyName`, `loadSettings`); a version above 2 saved back unchanged (`Settings.read`, `save`); `applyName`'s two writes; the 0.3.x comment in `Settings.read`; `stopping` appended twice in `reconcile` | **1, 2, 4 VERIFIED + FIXED 2026-10-15** (Simon: "verify them all and look to fix check for all carriees and callers"), plus the 0.3.x cut-off off `currentVersion` (`firstPlayersVersion`, found in the carrier audit); 7 mutants killed; suite PASS; **3, 5 CLEARED** (3 measured: the next call repairs it, no writer; 5: a no-op repeat, comment added); not built | `CODE-REVIEW 2026-10-15` |
 
 ### HOW TO LOG A VERDICT so the next round finds it
 Every new decision goes in §A2 (declined or by design), §A3 (a belief a measurement killed), §B
@@ -606,7 +615,7 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
   (`PlayerModel.chooseVolume`, `HeldVolume.from`: a muted player's negative volume gives its level; 0
   or no answer refuses) and shows it in the caption; Save refuses a Fixed with no level. The level is
   saved in `PlayerSettings.heldVolume`; the agent passes `-a 0:<e>:1:<dB>` (`LMSVolume.dB`, 17 =
-  -48.84). The engine (`ca.fixed`) keeps the samples at `FIXED_ONE` from init and on every audg,
+  -48.84; since CODE-REVIEW 2026-10-14 (4), LMS's rounded gain, `HeldVolume.dB`: 17 = -48.83). The engine (`ca.fixed`) keeps the samples at `FIXED_ONE` from init and on every audg,
   ignores `-V`, and (`ca.hold`) puts the level on, unmuted, at init and at the first open of each
   device ID (`put_held_level`, `ca.hold_dev`), never moved by LMS. Fixed without a held level
   (`-a 0:<e>:1`) leaves the device alone. Replay gain, an LMS setting of its own, still applies.
@@ -931,6 +940,17 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
     first; suite PASS in build.sh). agent.log: "agent started: LyrionPlay 0.2.7 (202610111446)", then
     "LMS: using Simons Music (192.168.1.234:9000)" 2 s later, and no further LMS line while checks
     ran normally. Player connected again ~10 s after the restart.
+- **SETTINGS CARRY OVER FROM 0.4.0 ON — Simon, 2026-10-14** ("I dont care about migrating older ones
+  to this new build", "if we are moving up version from now then we need to ensure that does keep
+  settings"). A settings.json written by any 0.4.x loads in every later build. `PlayerSettings`
+  requires only `name`; a key a later build adds MUST decode as optional with a default, at both
+  levels (`Settings.init(from:)`, `PlayerSettings.init(from:)`). Only a file below version 2 (0.3.x)
+  is set aside; a file that does not decode is `Settings.Stored.unreadable`, never moved or written
+  over by the agent. A change of format that cannot be read that way needs version 3 and a migration
+  from 2, never a reset. The set-aside cut-off is `firstPlayersVersion` (2), never `currentVersion`;
+  `save` always writes `currentVersion` (CODE-REVIEW 2026-10-15). While a file cannot be read at the
+  agent's start, the defaults' names never write over a name file (`applyName`'s `saved`). Settings from before 0.4: not migrated (`ONE PLAYER PER DAC`); never report
+  their set-aside as a defect.
 
 ### A3. DISPROVEN — beliefs the code suggests that measurement killed
 
@@ -983,6 +1003,8 @@ evidence it cites.
 | NO STRAY IDLE ON A REOPEN: `_ca_open` sets `ca.dev = kAudioObjectUnknown` and drops the output lock while it stops the old IOProc, so a `ca_report_format` tick during a mid-play reopen for a rate change sees the device closed and prints `lyrionplay:format idle` between two tracks | **WRONG** (source, 2026-10-12, /code-review 2026-10-12 (4)) | The rate-change reopen is `output.ca_reopen` -> `_ca_open()` on the slimproto thread (`slimproto.c:717-720`), and `ca_report_format()` is called later in the SAME loop iteration on the same thread (`slimproto.c:751`), so it can never run inside that window. The only other caller of `_ca_open` is the monitor thread (`monitor()`), which `_ca_open` starts only on `err` (the open failed, `ca.dev` already unknown). So the report has already said idle, correctly, before any monitor open. Re-raise only with a third `_ca_open` caller, or a report call moved off the slimproto thread. |
 | LMS FIXED IS A FLAG, NOT A LEVEL: LMS's "Output level is fixed at 100%" holds the level the player had when it was set, so setting the volume first and then fixed keeps that volume (Simon's manual method, 2026-10-12) | **WRONG** (LMS 9.1 + squeezelite source, read 2026-10-12 at Simon's request: "Check on how LMS sets the fixed value first before deciding as with the dragonfly this seems to vary") | `digitalVolumeControl` is read in only two places: `Squeezebox2::volume` (squeezelite is a `squeezeplay` device, `Slim::Player::SqueezePlay`, which inherits it) and the settings page (`Settings/Player/Audio.pm`). Every `audg` carries the CURRENT volume's gain (`dBToFixed(getVolume(volume))`, 0 at volume <= 0) with the pref as its `adjust` byte (Squeezebox2.pm:275-315); LMS does not refuse a volume change on a fixed player, it only flags it. LMS's own text: "You can fix the volume control at 100% if you are using the volume control on your amplifier … This affects both digital and analog volume." squeezelite ignores the gain when `adjust` is 0 and plays at 100% (`process_audg`, slimproto.c:450, as upstream). Upstream `output_alsa.c` with `-V` then sets its mixer to 0 dB (`set_volume(FIXED_ONE)` -> `set_mixer(.., 0, 0)`, output_alsa.c:229-250): full, whatever the volume was before. So on squeezelite a fixed player's level is 100%; only an amplifier or a DAC's own knob sets it. LyrionPlay differs on purpose (§A2 `FIXED VOLUME LEAVES THE DEVICE ALONE`): Fixed runs without `-V` and never touches the device, so the DragonFly's own level in Fixed is whatever was last put on it. That is why it varies: LMS's level from the last *Device's own volume* engine (agent.log 17:29:53Z and 17:33:08Z put back a saved volume of 100, so 0 dB), muted at -64 dB after a pause fade (`FIXED SET UP WHILE PAUSED`), or what macOS restores when it is plugged back in (17:31:50-17:32:07Z). LMS keeps ONE saved volume per player (`mixer volume ?` reads the pref), so it follows a change of output (`ONE PLAYER PER DAC`). |
 | DOP WORKS WITHOUT EXCLUSIVE MODE: DoP cannot reach a DAC in shared mode (*Follow the macOS output* with Exclusive off), since the engine sets an integer physical format only when it holds the device (`_configure`: `if (ca.hogged) set_physical_format`) and macOS's mixer would alter the DoP markers | **WRONG** (Simon, tested on the FiiO 2026-10-14) | My claim from the code, never tried on a DAC. Simon first saw no DoP through Follow; Follow's DoP switch was off ("My mistake it does work, i had. not enabled DoP on the MacOS player"). With it on, Exclusive off: engine-follow.log 22:55:03Z "exclusive: no", then "opened FiiO M11 Plus at 176400 Hz" and "at 352800 Hz" (DSD64, DSD128 as DoP), no "exclusive"; Simon: it works. Never tie DoP to Exclusive or take it off Follow on this belief. Confirmed again on 0.4.4 ("DoP works on follow without Exclusive mode"). Not tried: a device whose macOS volume is applied in software below full |
+| THE MAC'S NAME LOOKUP STALLS: `Host.current().localizedName` (NSHost) can block, so `PlayerSettings.macName`, read in every `Settings()` decode and for each unsaved device row at every Settings redraw, can stall the window or the agent | **WRONG** (measured 2026-10-14 on prodmac46, /code-review 2026-10-14 finding 5) | A scratch Swift binary timed it five times in one process: 3.1 ms the first call, then 0.05-0.12 ms each; `SCDynamicStoreCopyComputerName` 0.06 ms; both gave "prodmac46". Not measured: a Mac with no network or a slow DNS. Re-raise only with a measured stall. |
+| A STATUS CHECK HOLDS UP A PUSH: `LMSClient.playerStates` asks `status` for each player in turn, so with several players a Mac volume push waits behind the check | **WRONG** (source, 2026-10-14, /code-review 2026-10-14 finding 7) | The check runs on its own detached task (`refreshLMS`), and each push is its own `URLSession.shared` request from that player's `LatestValueSender` (`PlayerSlot.volumeSender`); nothing orders the two (no lock or queue in `LMSClient.call`; URLSession opens several connections per host). The calls in turn only delay what the menu shows, by about one LMS answer per extra player (38-49 ms, §B MAC SLIDER LAG), in a check every 5 s. Re-raise only with a push measured waiting on a check. |
 
 ### B. KNOWN-OPEN AND ACCEPTED — do not re-report as new
 
@@ -1519,6 +1541,124 @@ evidence it cites.
 
 Each entry records that a defect, as described, was fixed. It does not cover the code written to
 fix it (see HOW TO LOG).
+
+- **CODE-REVIEW 2026-10-15 — /code-review of the CODE-REVIEW 2026-10-14 fixes (uncommitted tree), FIXED,
+  not built** (Simon: "lets do another /code-review lyrionPlay", then "verify them all and look to fix
+  check for all carriees and callers that might be affected"). Five findings, all about code the
+  2026-10-14 fixes added (a hit on `applyName`/`Settings.read` in that round is not a suppression).
+  1. **An unreadable settings.json at agent start renamed Follow in LMS** — VERIFIED: `run` set
+     `settings = loadSettings() ?? Settings()`, so Follow ran `followDefaults` (the Mac's name), and
+     `makeSlot` -> `applyName(macName)` differed from `settings-name`: it wrote the name file and the
+     record, so an LMS rename was lost for good and LMS showed the Mac's name; `tick` did the same at
+     any later mtime change while the file still did not read. Writer: a Follow renamed away from the
+     Mac's name (any user who renamed it) with a file that does not decode at the agent's start (a
+     rollback over a later build's file, a hand edit). Not on this rig today: every player has its
+     default name and no record (0.4.5 has none). FIXED: `applyName(_:at:applied:saved:)`; `saved`
+     false (the agent's `settingsRead`, set only by a file that read) never writes over an existing
+     file and never writes a record over one, and a missing file is made with both, so Settings' name
+     replaces it later. Both callers (`makeSlot`, `tick`) pass it; the agent sends no name to LMS any
+     other way (only `-N`). Test `theDefaultsNeverRenameAPlayer`; MUTANTS: `saved` ignored (5
+     expectations fail), a record written under the defaults (3 fail).
+     Unchanged, the 2026-10-14 behaviour while on the defaults: the menu shows Follow under the Mac's
+     name (`slot.name`) while LMS keeps the file's; device players are off; `syncFixedVolume` sets LMS's
+     fixed pref from the defaults' Follow mode (never Fixed, so never louder) and puts it back at the
+     first check once the file reads.
+  2. **A file above version 2 was saved back marked that version** — VERIFIED: `read` gives `.current`
+     above 2 with its `version`, the app's `draft` came from `Settings.load()`, and `save` encoded it as
+     read, with only this build's keys: the later build would skip its migration from this one.
+     Writer: a rollback, then any Save. FIXED: `save` writes `currentVersion` (a copy, so every caller:
+     the app's `PlayerModel.save`, the agent's missing-file save, `setAsideOlder`, the tests). The app
+     reads no `version` and compares no settings, so the number kept in memory is never used. Test
+     `aLaterVersionIsSavedAsThisOne`; MUTANT: no stamp fails it.
+     - **Found in the carrier audit of `version`:** `read` set aside any file below `currentVersion`,
+       not below 2 as §A2 says. Today the same; in the build that raises `currentVersion` to 3, every
+       0.4.x file would have been set aside and reset, the case `SETTINGS CARRY OVER FROM 0.4.0 ON`
+       forbids. FIXED: `firstPlayersVersion` (2). Test `everyFileFromVersionTwoOnIsRead` (versions 0 to
+       `currentVersion + 1`); it cannot fail today, by design: MUTANT (the old rule with `currentVersion`
+       3) fails it; control (the new rule with 3) passes.
+  3. **`applyName` throws after replacing the name file if the record write fails** — CLEARED,
+     MEASURED (scratch probe, the record made immutable so only the second write fails): it threw with
+     the file "New" and the record "Old"; the next call wrote both and returned true (a running engine
+     restarts). No writer fails the second write and not the first (both in `players/<slug>/`, back to
+     back). The order is the one that repairs itself (record first would lose the rename); now said in
+     `applyName`'s comment. A directory at the record's path reads as no record and fails before the
+     file is written: a hand-made case.
+  4. **The comment "0.3.x's keys are all unknown here" was false** — VERIFIED against Simon's real
+     settings-0.3.json (0.3.14): `server`, `idleSeconds`, `resampleQuality`, `logLevel`, same types.
+     FIXED: the comment names them and what a type change would do; the test's 0.3.x file is now
+     0.3.14's shape. ANTI-RUN: a real type change of a shared key (`server` written and read as an
+     object) PASSED `aFileFromBeforePlayersIsSetAside` with the old sample and FAILS it with the new.
+  5. **`reconcile` passes a switched-off slot to `stopEngines` twice** — CLEARED: `EnginePlan` plans
+     only players that are on, so one with an engine is in `changes.stop` and the switched-off loop;
+     `stopEngines` nils `slot.engine` in the first pass, so the second does nothing. The second append
+     is NEEDED for a slot waiting to restart (no engine, not in `changes.stop`): `stopEngines` cancels
+     its `restartWork`. Removing it, the review's simplification, would leave that restart pending.
+     Comment added, no code change.
+  - After: `scripts/test.sh` PASS (engine conversion; engine output 69/69; swift 102 in 21 suites;
+    install.sh 3/3); `swift build` of every target, the one known warning. Mutants in the scratchpad,
+    one copy each. Not built, not installed, not live-tested.
+
+- **CODE-REVIEW 2026-10-14 — /code-review of 0.2.10-0.4.5, FIXED, not built** (Simon: "lets do a
+  /code-review of lyrionPlay"; on finding 1 "I dont care about migrating older ones to this new build"
+  but "if we are moving up version from now then we need to ensure that does keep settings"; then
+  "Verify the rest and look to fix"). Scope `origin/dev` 7faf2f8..682cab2 (0.4.5), tree clean; the code
+  new since the 2026-10-12 rounds is 15fa252..682cab2. Eight findings, each verified before a fix:
+  1. **A settings file that did not decode was set aside as 0.3.x's** (`Settings.read`,
+     `setAsideOlder`): any decode failure, or a version other than 2, gave `.older`, so the agent moved
+     the file over settings-0.3.json and wrote the defaults. The 0.3.x part is BY DESIGN (index row,
+     `ONE PLAYER PER DAC`; the review missed it at Gate 3). The live part is FORWARD: every
+     `PlayerSettings` field but `heldVolume` was required, so a later build adding one would have read
+     every 0.4.x file as `.older` and reset it. FIXED: `PlayerSettings.init(from:)` requires only
+     `name`; `read` gives `.older` only below version 2, reads a version above 2, and gives
+     `.unreadable(why)` for a file that does not decode: never moved or written over by the agent,
+     which logs "settings.json cannot be read, left as it is" and keeps the settings it had (at its
+     start, the defaults). The rule is §A2 `SETTINGS CARRY OVER FROM 0.4.0 ON`. Tests
+     `anEarlierVersionTwoFileStillLoads`, `anUnreadableFileIsLeftAlone`. Not covered: the app's
+     `Settings.load()` shows the defaults for an unreadable file, and a Save there writes over it.
+  2. **A rename saved while the player, or LyrionPlay, was off never reached LMS** — VERIFIED in the
+     code: `tick` rewrote the name file only for players in `slots` (those on), and `makeSlot`'s
+     `ensureNameFile` wrote only a missing file. Writer: the cog's Name field with the player's switch
+     off, or with LyrionPlay off (the Settings window saves either way). Writing the Settings name
+     whenever it differs from the file would undo a rename made in LMS (squeezelite writes LMS's
+     renames to the file). FIXED: `PlayerIdentity.applyName` with `players/<slug>/settings-name`, the
+     name Settings last put in the file: the file is written when there is none, or when Settings'
+     name differs from the record; a player from 0.4.0-0.4.5 (no record) keeps its file and gets a
+     record. `makeSlot` logs "<name>: renamed in Settings since it last ran"; `tick` restarts a running
+     engine only when `applyName` wrote over its file. Checked on this Mac first: all four name files
+     equal settings.json's names, so the first start with the record moves nothing. Test
+     `aRenameInSettingsReachesTheNameFile` (an LMS rename kept; a player from before the record).
+     `ensureNameFile` removed (no other caller).
+  3. **Follow switched off while deferred: a reconcile every 2 s** — VERIFIED: `follow.resolve` ran
+     only while Follow was on, so `deferred` stayed set and `shouldReconcile(holding: nil)` held at
+     every tick (each reconcile runs `squeezelite -l`). FIXED in PlayerCore, still with no reset API
+     (`REVIEW OF THE FIXES`, finding 3): `resolve` clears `deferred` and returns nil while Follow is
+     off, and `reconcile` calls it every time. Test `switchedOffEndsTheWait`.
+  4. **Choosing Fixed moved the DAC by up to 0.5 dB** — VERIFIED: `HeldVolume.dB` was `LMSVolume.dB`,
+     the curve before LMS's `dBToFixed` rounding, while *Device's own volume* puts the rounded gain on
+     the device. Already in the record: 0.4.0 live, "device volume held at -25.6 dB (was -25.9 dB)" at
+     LMS 48 (`PLAYERS AND FIXED BUILT 2026-10-12`); the DragonFly reported LMS 17 at -48.83 dB, not the
+     test's -48.84. Largest gap 0.50 dB, at LMS 40 (-29.60 vs -30.10). FIXED: `LMSVolume.gain` (the
+     engine's `lms_gain`, the same arithmetic) and `LMSVolume.dB(gain:)`; `HeldVolume.dB` is the level
+     of LMS's gain. A held DragonFly's `-a` changes once (-25.65 -> -25.89 at 48), so its engine
+     restarts once. Tests `fixedHoldsWhereTheDevicesOwnVolumeHadIt`, `lmsGainsMatchTheEngine` (the
+     engine suite's LMS_VOL33-42 gains), the `-a` test now -48.83. Residual: after a Mac-key move the
+     device sits at the Mac's exact level (`THE DEVICE STAYS WHERE THE MAC PUT IT`), which a whole LMS
+     volume's level can differ from by LMS's rounding.
+  5. **`PlayerSettings.macName` stalls the Settings window** — CLEARED, measured (§A3 `THE MAC'S NAME
+     LOOKUP STALLS`). No change.
+  6. **`stopEngine` stopped engines one at a time on the main queue** — VERIFIED (SIGTERM, then up to
+     3 s each; ~0.2 s each to `close output`, CODE-REVIEW 2026-10-12 (7)). FIXED: `stopEngines` signals
+     every engine, then waits once, 3 s for all; `reconcile` (still stopping before any start) and
+     `shutdown` use it. No suite runs the agent; `swift build` of every target is clean.
+  7. **`playerStates` asks `status` per player in turn, so a volume push waits** — CLEARED (§A3
+     `A STATUS CHECK HOLDS UP A PUSH`). No change.
+  8. **The tap procedure named 0.3.x's one `engine.pid`** — FIXED: each player's
+     `players/<slug>/engine.pid`, read BEFORE the bootout (the agent deletes it as it stops an engine),
+     and the "engine N of <name> started:" line of the player under test.
+  - After: `scripts/test.sh` PASS (engine conversion; engine output 69/69; swift 99 in 21 suites;
+    install.sh 3/3). MUTANTS in a scratch copy, one per fix (the old `read`, the strict decode, no
+    off-guard in `resolve`, the curve in `HeldVolume.dB`, a name file never rewritten): each FAILS its
+    test(s). Not built, not installed, not live-tested.
 
 - **INLINE REVIEW 2026-10-14 — of 0.4.0-0.4.2, FIXED, INSTALLED as 0.4.3, not live-tested** (Simon: "lets do an
   inline review of lyrionplay"). Scope `origin/dev` 7faf2f8..b6b929f, tree clean; rounds 2026-10-12

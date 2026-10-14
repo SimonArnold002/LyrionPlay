@@ -85,6 +85,20 @@ public struct PlayerSettings: Codable, Equatable, Sendable {
 		self.rateSwitchDelayMs = rateSwitchDelayMs
 	}
 
+	/// Only the name is required: a key a later build adds is absent from an earlier 0.4.x file and
+	/// takes its default here, so settings carry over from 0.4.0 on (Simon, 2026-10-14). A field a
+	/// later build adds must be optional in the same way.
+	public init(from decoder: Decoder) throws {
+		let c = try decoder.container(keyedBy: CodingKeys.self)
+		name = try c.decode(String.self, forKey: .name)
+		enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+		exclusive = try c.decodeIfPresent(Bool.self, forKey: .exclusive) ?? false
+		dop = try c.decodeIfPresent(Bool.self, forKey: .dop) ?? false
+		volume = try c.decodeIfPresent(VolumeMode.self, forKey: .volume) ?? .device
+		heldVolume = try c.decodeIfPresent(Int.self, forKey: .heldVolume)
+		rateSwitchDelayMs = try c.decodeIfPresent(Int.self, forKey: .rateSwitchDelayMs) ?? 0
+	}
+
 	/// the Mac's name, as in System Settings > General > Sharing
 	public static var macName: String { Host.current().localizedName ?? "Mac" }
 
@@ -105,6 +119,10 @@ public struct PlayerSettings: Codable, Equatable, Sendable {
 public struct Settings: Codable, Equatable, Sendable {
 	/// 0.3.x files have none; they are set aside, not carried over (Simon, 2026-10-12: "no migration")
 	public static let currentVersion = 2
+	/// 0.4.0's version, the first with players: every file from it on is read, never set aside
+	/// (SETTINGS CARRY OVER FROM 0.4.0 ON). Not `currentVersion`, which a later build raises: a file
+	/// below that one needs that build's migration, not a reset.
+	public static let firstPlayersVersion = 2
 
 	public var version: Int
 	/// "" = find the server on the network; otherwise host or host:port (slimproto port)
@@ -128,7 +146,8 @@ public struct Settings: Codable, Equatable, Sendable {
 		players = [PlayerKey.follow: .followDefaults]
 	}
 
-	// missing keys take the defaults, so a hand-edited file still loads
+	// missing keys take the defaults, so a file from an earlier 0.4.x, without a key a later build
+	// added, still loads (PlayerSettings likewise)
 	public init(from decoder: Decoder) throws {
 		let defaults = Settings()
 		let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -183,19 +202,29 @@ public struct Settings: Codable, Equatable, Sendable {
 		return output
 	}
 
-	/// What a file holds: the current settings, or a file from before players (0.3.x), which is
-	/// set aside rather than carried over.
+	/// What a file holds: settings from 0.4.0 on (version 2 or later), a file from before players
+	/// (0.3.x, no version), which is set aside rather than carried over, or a file that does not decode.
 	public enum Stored: Equatable {
 		case current(Settings)
 		case older
+		/// never set aside or written over by the agent, which says why: anything that did not decode
+		/// was set aside as 0.3.x's, so a version-2 file a later build could not read was lost
+		/// (/code-review 2026-10-14, finding 1)
+		case unreadable(String)
 		case missing
 	}
 
 	public static func read(from url: URL = Paths.settings) -> Stored {
 		guard let data = try? Data(contentsOf: url) else { return .missing }
-		guard let settings = try? JSONDecoder().decode(Settings.self, from: data),
-			  settings.version == currentVersion else { return .older }
-		return .current(settings)
+		do {
+			// a 0.3.x file decodes, with version 0: its other keys are unknown here, but `server`,
+			// `idleSeconds`, `resampleQuality` and `logLevel` are 0.3.x's too, with the same types. A
+			// change of their type here would read every 0.3.x file as unreadable, never set aside
+			let settings = try JSONDecoder().decode(Settings.self, from: data)
+			return settings.version < firstPlayersVersion ? .older : .current(settings)
+		} catch {
+			return .unreadable("\(error)")
+		}
 	}
 
 	/// A missing, unreadable or older file gives the defaults.
@@ -216,10 +245,15 @@ public struct Settings: Codable, Equatable, Sendable {
 		return aside
 	}
 
+	/// Always as this build's version: a later build's file read here keeps its number in `version`,
+	/// and saved back under it with only this build's keys, that build would skip its migration from
+	/// this one (/code-review 2026-10-15, finding 2).
 	public func save(to url: URL = Paths.settings) throws {
+		var stamped = self
+		stamped.version = Settings.currentVersion
 		let encoder = JSONEncoder()
 		encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-		try encoder.encode(self).write(to: url, options: .atomic)
+		try encoder.encode(stamped).write(to: url, options: .atomic)
 	}
 }
 
@@ -236,6 +270,12 @@ public struct OutputFollow: Sendable {
 
 	/// the device to play to; holding is the device the follow player's engine holds exclusively now
 	public mutating func resolve(_ settings: Settings, in devices: [DeviceCaps], holding: String?) -> DeviceCaps? {
+		// switched off, it waits for nothing: switched off while it waited, the agent reconciled every
+		// 2 s until it was on again (/code-review 2026-10-14, finding 3)
+		guard settings.isOn(PlayerKey.follow) else {
+			deferred = false
+			return nil
+		}
 		let device = settings.followDevice(in: devices, holding: holding)
 		deferred = device != nil && holding != nil && settings.followDevice(in: devices)?.uid != device?.uid
 		return device

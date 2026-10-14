@@ -102,6 +102,9 @@ final class PlayerSlot {
 
 final class Supervisor {
 	private var settings: Settings
+	/// `settings` came from settings.json; false while the agent runs on the defaults because the file
+	/// it started with cannot be read (PlayerIdentity.applyName's `saved`)
+	private var settingsRead = false
 	private var settingsDate: Date?
 	private var devices: [DeviceCaps] = []
 	/// one per player that is on
@@ -155,7 +158,12 @@ final class Supervisor {
 		} catch {
 			log("cannot set the older settings aside: \(error)")
 		}
-		settings = Settings.load()
+		if let read = loadSettings() {
+			settings = read
+			settingsRead = true
+		} else {
+			settings = Settings()
+		}
 		lms = ServerChoice(setting: settings.server)
 		if !FileManager.default.fileExists(atPath: Paths.settings.path) {
 			try? settings.save()
@@ -206,6 +214,17 @@ final class Supervisor {
 		}
 	}
 
+	/// the settings file; nil when it does not decode, which is said and left as it is (Settings.Stored)
+	private func loadSettings() -> Settings? {
+		switch Settings.read() {
+		case .current(let settings): return settings
+		case .older, .missing: return Settings()
+		case .unreadable(let why):
+			log("settings.json cannot be read, left as it is: \(why)")
+			return nil
+		}
+	}
+
 	/// device notifications arrive in bursts: act once, a second after the first
 	private func scheduleReconcile(_ reason: String) {
 		guard !reconcilePending else { return }
@@ -226,15 +245,13 @@ final class Supervisor {
 	private func reconcile(_ reason: String) {
 		devices = DeviceCaps.probe(engine: engineURL)
 		let on = playersOn
-		var followDevice: DeviceCaps?
-		if on.contains(PlayerKey.follow) {
-			let wasDeferred = follow.deferred
-			followDevice = follow.resolve(settings, in: devices, holding: heldDevice(PlayerKey.follow))
-			// Taking exclusive access moves the macOS default output elsewhere; that is not the user
-			// choosing another output. Follow it once the engine lets go (tick).
-			if follow.deferred && !wasDeferred, let device = followDevice {
-				log("\(reason): the macOS output is elsewhere while \(settings.player(PlayerKey.follow, device: device).name) holds \(device.name) exclusively; staying on it until it lets go")
-			}
+		let wasDeferred = follow.deferred
+		// nil while *Follow the macOS output* is off, which also ends a wait (OutputFollow)
+		let followDevice = follow.resolve(settings, in: devices, holding: heldDevice(PlayerKey.follow))
+		// Taking exclusive access moves the macOS default output elsewhere; that is not the user
+		// choosing another output. Follow it once the engine lets go (tick).
+		if follow.deferred && !wasDeferred, let device = followDevice {
+			log("\(reason): the macOS output is elsewhere while \(settings.player(PlayerKey.follow, device: device).name) holds \(device.name) exclusively; staying on it until it lets go")
 		}
 		for key in on where slots[key] == nil {
 			guard let slot = makeSlot(key) else { continue }
@@ -250,18 +267,23 @@ final class Supervisor {
 			return slot.restartWanted ? [] : slot.args ?? []
 		}
 		let changes = EnginePlan.changes(running: running, wanted: plan)
+		var stopping: [PlayerSlot] = []
 		for key in changes.stop {
 			guard let slot = slots[key] else { continue }
 			if plan[key] == nil {
 				log("\(reason): stopping the engine of \(slot.name)\(on.contains(key) ? ": its device is not present" : ": switched off")")
 			}
-			stopEngine(slot)
+			stopping.append(slot)
 		}
-		// players switched off: their engines are stopped above; nothing more is known of them
+		// players switched off: their engines are stopped with the others; nothing more is known of them.
+		// One with an engine is in changes.stop too, so it is passed twice: stopEngines skips the second
+		// (its engine is nil by then). One without (waiting to restart) is only here, and stopEngines
+		// cancels its restart.
 		for key in slots.keys where !on.contains(key) {
-			if let slot = slots[key] { stopEngine(slot) }
+			if let slot = slots[key] { stopping.append(slot) }
 			slots[key] = nil
 		}
+		stopEngines(stopping)
 		for key in changes.start {
 			guard let slot = slots[key], let spec = plan[key] else { continue }
 			log("\(reason): \(running[key] == nil ? "starting" : "restarting") the engine of \(slot.name) on \(spec.device.name)")
@@ -290,7 +312,9 @@ final class Supervisor {
 				log("\(name) carries on as the earlier version's player \(mac)")
 			}
 			let mac = try PlayerIdentity.loadOrCreateMAC(at: Paths.mac(key))
-			try PlayerIdentity.ensureNameFile(at: Paths.playerName(key), name: name)
+			if try PlayerIdentity.applyName(name, at: Paths.playerName(key), applied: Paths.settingsName(key), saved: settingsRead) {
+				log("\(name): renamed in Settings since it last ran")
+			}
 			return PlayerSlot(key: key, mac: mac, name: name)
 		} catch {
 			log("cannot create the identity of \(name): \(error)")
@@ -375,21 +399,28 @@ final class Supervisor {
 		log("engine \(process.processIdentifier) of \(slot.name) started: \(spec.args.joined(separator: " "))")
 	}
 
-	private func stopEngine(_ slot: PlayerSlot) {
-		slot.restartWork?.cancel()
-		slot.restartWork = nil
-		guard let process = slot.engine else { return }
-		slot.engine = nil
-		slot.args = nil
-		slot.device = nil
-		slot.format = nil
-		try? FileManager.default.removeItem(at: Paths.enginePID(slot.key))
-		slot.expectedExit = process.processIdentifier
-		process.terminate()
+	/// SIGTERM to every engine first, then one wait of up to 3 s for them all. One at a time, a server
+	/// change (which restarts every engine) or a shutdown held the main queue ~0.2 s per engine, and up
+	/// to 3 s for each that hung (/code-review 2026-10-14, finding 6).
+	private func stopEngines(_ stopping: [PlayerSlot]) {
+		var stopped: [(name: String, process: Process)] = []
+		for slot in stopping {
+			slot.restartWork?.cancel()
+			slot.restartWork = nil
+			guard let process = slot.engine else { continue }
+			slot.engine = nil
+			slot.args = nil
+			slot.device = nil
+			slot.format = nil
+			try? FileManager.default.removeItem(at: Paths.enginePID(slot.key))
+			slot.expectedExit = process.processIdentifier
+			process.terminate()
+			stopped.append((slot.name, process))
+		}
 		let deadline = Date().addingTimeInterval(3)
-		while process.isRunning && Date() < deadline { usleep(50_000) }
-		if process.isRunning {
-			log("engine \(process.processIdentifier) of \(slot.name) did not stop; killing it")
+		while stopped.contains(where: { $0.process.isRunning }) && Date() < deadline { usleep(50_000) }
+		for (name, process) in stopped where process.isRunning {
+			log("engine \(process.processIdentifier) of \(name) did not stop; killing it")
 			kill(process.processIdentifier, SIGKILL)
 		}
 	}
@@ -441,18 +472,22 @@ final class Supervisor {
 		let date = modificationDate(Paths.settings)
 		if date != settingsDate {
 			settingsDate = date
-			let old = settings
-			settings = Settings.load()
+			// a file that does not decode leaves the players as they are
+			if let read = loadSettings() {
+				settings = read
+				settingsRead = true
+			}
 			if lms.update(setting: settings.server) { // check the new one now, and say what it finds
 				lastLMSCheck = .distantPast
 				checkLog.settingChanged()
 			}
+			// a player that is not on takes a rename when it starts (makeSlot)
 			for (key, slot) in slots {
 				let name = settings.player(key, device: slot.device).name
-				guard name != old.player(key, device: slot.device).name else { continue }
-				// a rename in the app replaces the name file; the engine reads it at start
-				try? name.write(to: Paths.playerName(key), atomically: true, encoding: .utf8)
 				slot.name = name
+				// a rename in the app replaces the name file; the engine reads it at start
+				guard (try? PlayerIdentity.applyName(name, at: Paths.playerName(key), applied: Paths.settingsName(key),
+													 saved: settingsRead)) == true else { continue }
 				slot.restartWanted = true
 			}
 			reconcile("settings changed")
@@ -616,7 +651,7 @@ final class Supervisor {
 	private func shutdown(_ sig: Int32) {
 		shuttingDown = true
 		log("signal \(sig): stopping")
-		for slot in slots.values { stopEngine(slot) }
+		stopEngines(Array(slots.values))
 		problem = nil
 		lms.forgetPlayers()
 		writeStatus()
