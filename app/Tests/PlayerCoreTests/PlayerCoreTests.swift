@@ -418,11 +418,16 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(!PlayerIdentity.isValid("02:00:4c:4d:50")) // control: a short address is refused
 	}
 
-	/// each player has its own folder and log, named so they can be read, and never shared
+	/// each player has its own folder and log, named so they can be read; two units of one model share
+	/// one only when the 4 hex digits match (Paths.slug)
 	@Test func eachPlayerHasItsOwnFiles() {
 		#expect(Paths.slug(PlayerKey.follow) == "follow")
 		let slug = Paths.slug(dragonfly.uid)
 		#expect(slug.hasPrefix("AppleUSBAudioEngine-AudioQuest-AudioQuest-Dragon-")) // cut at 48
+		// the folders these real devices' players have had since 0.4.0: a slug that changes makes each
+		// a new LMS player (/code-review 2026-10-15 (7) finding 5)
+		#expect(slug == "AppleUSBAudioEngine-AudioQuest-AudioQuest-Dragon-ea39")
+		#expect(Paths.slug(fiio.uid) == "AppleUSBAudioEngine-FiiO-FiiO-M11-Plus-3fa90f5-1-2a05")
 		#expect(slug.range(of: "^[A-Za-z0-9.-]+-[0-9a-f]{4}$", options: .regularExpression) != nil)
 		#expect(Paths.slug(dragonfly.uid) == slug)                      // the same every time
 		#expect(Paths.slug(fiio.uid) != slug)

@@ -44,8 +44,11 @@ public enum Paths {
 	}
 
 	/// A file-safe name for a player key: "follow", or a device UID made readable (letters, digits,
-	/// '.' and '-'), cut to 48 characters, plus 4 hex digits of the UID's hash, so two keys never share
-	/// a folder or a log.
+	/// '.' and '-'), cut to 48 characters, plus 4 hex digits of the UID's hash. Two units of one model
+	/// can differ only past the cut (the DragonFly's serial comes after "…AudioQuest-Dragon"), so the
+	/// 4 digits alone tell them apart: 1 in 65,536 that the two share a folder and a log. Never
+	/// widened: the slug names each player's folder, which holds its MAC, so a new slug makes every
+	/// device player a new LMS player (pinned in PlayerCoreTests `eachPlayerHasItsOwnFiles`).
 	public static func slug(_ key: String) -> String {
 		if key == PlayerKey.follow { return key }
 		var readable = ""

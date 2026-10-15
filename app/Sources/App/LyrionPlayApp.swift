@@ -109,6 +109,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	}
 }
 
+/// Fixed with no level to hold yet: LMS's volume being read, or why there is none. Each read is its
+/// own, so an answer is taken only while its read is still the one shown (PlayerModel.chooseVolume);
+/// the caption was the state until /code-review 2026-10-15 (7) finding 7.
+enum HeldNote: Equatable {
+	case reading(UUID)
+	case note(String)
+
+	var text: String {
+		switch self {
+		case .reading: "Reading the volume LMS has for this player…"
+		case .note(let text): text
+		}
+	}
+}
+
 @MainActor @Observable
 final class PlayerModel {
 	static let shared = PlayerModel()
@@ -130,7 +145,7 @@ final class PlayerModel {
 	var editingPlayer: String?
 	/// Fixed on a device with a volume control: what reading LMS's volume gave, while there is no level
 	/// to hold (reading, or why not), by player
-	var heldNote: [String: String] = [:]
+	var heldNote: [String: HeldNote] = [:]
 	/// the player whose Remove is being confirmed, the one being removed, and what removing found
 	var confirmRemove: String?
 	var removing: String?
@@ -270,25 +285,26 @@ final class PlayerModel {
 		heldNote[row.key] = nil
 		guard mode == .fixed, let device = row.device, device.volume != nil else { return }
 		guard let server = statusServer else {
-			heldNote[row.key] = "LyrionPlay is not connected to LMS, so the volume to hold is not known: Fixed is not saved."
+			heldNote[row.key] = .note("LyrionPlay is not connected to LMS, so the volume to hold is not known: Fixed is not saved.")
 			return
 		}
 		guard let mac = PlayerIdentity.mac(at: Paths.mac(row.key)) else {
-			heldNote[row.key] = "LMS does not know this player yet: switch it on, let it connect, set its volume in LMS, then choose Fixed."
+			heldNote[row.key] = .note("LMS does not know this player yet: switch it on, let it connect, set its volume in LMS, then choose Fixed.")
 			return
 		}
-		heldNote[row.key] = "Reading the volume LMS has for this player…"
-		let key = row.key
+		let key = row.key, read = HeldNote.reading(UUID())
+		heldNote[key] = read
 		Task {
 			let volume = await LMSClient(server: server).volume(player: mac)
-			// chosen again, or another mode, meanwhile: this answer is not wanted
-			guard heldNote[key] == "Reading the volume LMS has for this player…", draft.players[key]?.volume == .fixed else { return }
+			// chosen again, another mode, Revert or a reload meanwhile: this answer is not wanted (each
+			// read is its own, so one started by choosing Fixed again does not take an earlier one's)
+			guard heldNote[key] == read, draft.players[key]?.volume == .fixed else { return }
 			switch HeldVolume.from(lmsVolume: volume) {
 			case .held(let level):
 				draft.players[key]?.heldVolume = level
 				heldNote[key] = nil
 			case .refused(let reason):
-				heldNote[key] = reason
+				heldNote[key] = .note(reason)
 			}
 		}
 	}
@@ -375,7 +391,7 @@ final class PlayerModel {
 			guard let device = row.device, device.volume != nil, draft.players[row.key] != nil else { continue }
 			let player = draft.player(row.key, device: device)
 			guard player.volume == .fixed, player.heldVolume == nil else { continue }
-			lastError = "\(lmsName(row)): Fixed has no level to hold. \(heldNote[row.key] ?? "Choose Fixed again.")"
+			lastError = "\(lmsName(row)): Fixed has no level to hold. \(heldNote[row.key]?.text ?? "Choose Fixed again.")"
 			saveError = lastError
 			return false
 		}
@@ -735,7 +751,7 @@ struct PlayerSettingsView: View {
 		} else if let held = player.heldVolume {
 			caption = "LMS sends full level; \(device.name) holds LMS volume \(held) (\(String(format: "%.1f", HeldVolume.dB(held))) dB). To change it, choose Device's own volume, set the volume in LMS, then Fixed again."
 		} else {
-			caption = model.heldNote[row.key] ?? "Choose Fixed again to read the volume LMS has for this player."
+			caption = model.heldNote[row.key]?.text ?? "Choose Fixed again to read the volume LMS has for this player."
 		}
 		if model.settings.player(row.key, device: device).volume.scalesSamples {
 			caption += " From software volume this is louder."

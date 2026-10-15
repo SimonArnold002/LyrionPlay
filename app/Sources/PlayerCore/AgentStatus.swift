@@ -55,7 +55,8 @@ public struct AgentStatus: Codable, Equatable, Sendable {
 public struct PlayerStatus: Codable, Equatable, Sendable {
 	public var key: String
 	public var name: String
-	/// its LMS player ID
+	/// its LMS player ID; empty for a player that is on but whose identity could not be made (its
+	/// problem says why)
 	public var mac: String
 	public var engineRunning: Bool
 	public var enginePID: Int32?

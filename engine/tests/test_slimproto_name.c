@@ -21,8 +21,9 @@
  *     side sends; more than LOOP_LIMIT is a loop. The model reproduces the loop seen on the rig
  *     (control: "the model sees the loop when the name crosses a held rename").
  *
- * Each test runs in its own child process (fresh statics) with a timeout. Prints one line per test
- * and a summary line; exits 0 only if every test passed.
+ * Each test runs in its own child process (fresh statics) with a timeout, in a scratch folder the
+ * parent makes and removes. Prints one line per test and a summary line; exits 0 only if every test
+ * passed.
  *
  * Build and run: make -f Makefile.coreaudio tests/test_slimproto_name && ./tests/test_slimproto_name
  * Against an older copy (anti-run), into another file:
@@ -111,19 +112,26 @@ static const char *read_line(const char *path, int n) {
 static const char *read_file(const char *path) { return read_line(path, 1); }
 
 
-static void setup(void) {
-	int fds[2];
-	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) { perror("socketpair"); exit(2); }
-	sock = fds[0];
-	peer = fds[1];
-	loglevel = lERROR;
+// The scratch folder is made by the parent before each test's fork and removed by it after the
+// wait, so a test that crashes or times out leaves nothing in $TMPDIR (/code-review 2026-10-15 (7)
+// finding 8: removed in the child, a killed test left its folder).
+static void make_dir(void) {
 	snprintf(dir, sizeof(dir), "%s/lyrionplay-name-XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
 	if (!mkdtemp(dir)) { perror("mkdtemp"); exit(2); }
 	snprintf(name_path, sizeof(name_path), "%s/name", dir);
 	snprintf(stamp_path, sizeof(stamp_path), "%s/name.server", dir);
 }
 
-static void teardown(void) {
+// in the test's child
+static void setup(void) {
+	int fds[2];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) { perror("socketpair"); exit(2); }
+	sock = fds[0];
+	peer = fds[1];
+	loglevel = lERROR;
+}
+
+static void remove_dir(void) {
 	char tmp[320];
 	unlink(name_path);
 	unlink(stamp_path);
@@ -986,17 +994,18 @@ int main(int argc, char **argv) {
 		if (argc > 1 && !strstr(tests[i].name, argv[1])) continue;
 		run++;
 		fflush(stdout);
+		make_dir();
 		pid_t pid = fork();
 		if (pid == 0) {
 			alarm(10);
 			setup();
 			tests[i].run();
-			teardown();
 			fflush(stdout);
 			_exit(failures ? 1 : 0);
 		}
 		int status = 0;
 		waitpid(pid, &status, 0);
+		remove_dir();
 		bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
 		if (ok) passed++;
 		printf("%s %s%s\n", ok ? "✔" : "✘", tests[i].name,

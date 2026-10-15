@@ -96,7 +96,9 @@ and its own settings. Settings lists them:
   and it is the way to the Mac's own speakers and headphones.
 - **Each other output** the Mac has (a USB DAC, HDMI, AirPlay, Bluetooth) has a player of its own,
   named after your Mac and the device (for example "MacBook Pro AudioQuest DragonFly Black v1.5"),
-  off until you switch it on. A device that is unplugged keeps its row and its settings.
+  off until you switch it on. Once you have switched it on or changed its settings, it keeps its row
+  and its settings while it is unplugged; a device you never set up is listed only while it is
+  plugged in.
 
 Each row has a switch, to turn that player on or off, and a cog, which opens its settings. If the
 Mac's sound output is a device whose own player is on, *Follow the macOS output* plays to the Mac's

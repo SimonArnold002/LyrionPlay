@@ -20,7 +20,9 @@ to an upstream file is listed here, so a later upstream update can be merged by 
 
 New files (ours): `output_coreaudio.c`, `output_coreaudio_conv.h`, `Makefile.coreaudio`,
 `tests/test_conversion.c`, `tests/test_output_coreaudio.c` (built with upstream's `output.c`,
-`buffer.c`, `output_pack.c` and `dop.c`, which it links as they are).
+`buffer.c`, `output_pack.c` and `dop.c`, which it links as they are), `tests/test_slimproto_name.c`
+(which `#include`s `slimproto.c` with our changes, so a merge that changes the player name's code
+there, such as `process_setd` or `load_player_name`, must update it too).
 
 Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines, the
 `load_player_name` split in `slimproto.c`, and `send_packet`/`sendSETDName` returning whether they

@@ -243,6 +243,9 @@ disproven belief or a cleared finding that is not written here will be re-report
 | /code-review 2026-10-15 (5) of a0e6c7f + the tree: a server offered the player's name it already has never stamped (`process_setd`'s offer, `add_name_server`), so a rename it holds loops; the stamp unread with an empty name file (`load_player_name`, `load_name_servers`), so the next name cut it to one server; the name file and stamp written in place (`store_name`, `store_name_servers`, `open_replacement`/`replace_file`) and a failed write still restamped; no test of an unstamped server holding the name; two stale ledger lines; `makeSlot` reading `playerName` up to 3 times | **ALL 8 VERIFIED, ALL FIXED 2026-10-15** (Simon: "verify these and look to fix, test fixes and check for regrressions"); 4 new engine tests FAIL on a0e6c7f, 6 mutants killed; suite PASS; finding 3's stated cause (a stop mid-write) WRONG (§A3 `A STOP CANNOT CUT THE NAME WRITE`), its fix kept for a full disk / power cut; **INSTALLED as 0.4.11** 2026-10-15 19:12Z, committed (§C) | `CODE-REVIEW 2026-10-15 (5)` |
 | "the agent stopping the engine (Off, a device change, a restart) can cut `process_setd`'s name write between the truncate and the write" | **WRONG** (§A3, source 2026-10-15) | `A STOP CANNOT CUT THE NAME WRITE` |
 | /code-review 2026-10-15 (6) of 481dfa4 (0.4.11): a long LMS name stored cut inside a UTF-8 character (`strncpy` 64, `fgets` 63; now `fit_name`); "power cut" claimed with a plain `fsync` (now `flush_to_disk`, `F_FULLFSYNC`); a server stamped after an offer that was never written (`send_packet`/`sendSETDName` now return bool, `name_offered`); a new player's `-n` offer never stamped when LMS already had it (`name_offered` for every offer); `put_lms_level` reading `now` before `lv.lock` (a report stamped between wrapped `now - at`: LMS's answer put on mid-drag); the failed-write test's FAILED lines lost under `RLIMIT_FSIZE` (`limit_file_size`); the name file and stamp rewritten unchanged at every connect (`file_holds`); `refresh()` assigning unchanged values; `writeStatus` keeping a stale `slot.name` | **1-7 and 9 VERIFIED + FIXED 2026-10-15** (Simon: "yes look to fix these"; on 5: "if you can make it work first go with none then go for it"): 10 new engine name tests (9 FAIL on 481dfa4, 1 control) + 1 output test (FAILS on 481dfa4: the drag pulled back to -30.10 dB); 9 mutants killed; suite PASS; **8 DISPROVEN** (§A3 `AN EQUAL ASSIGNMENT NOTIFIES NO ONE`); committed bb5a583 (dev, unpushed); **INSTALLED as 0.4.12** 2026-10-15 20:47Z; every live check VERIFIED (an unchanged connect writes nothing, an LMS rename stores once, a new player names itself at the offer) (§C) | `CODE-REVIEW 2026-10-15 (6)` |
+| two LMS on ONE host on different slimproto ports judged as one server: `ask_server_uuid(slimproto_ip, PORT)` asking UDP 3483 whatever port the player connected to; `struct name_server` / `is_connected_server` / `name_servers` holding no port | **DECLINED by Simon 2026-10-15, NOT A FINDING** (/code-review 2026-10-15 (7) finding 1: "not supporting that use case at all its also highly unlikely on the same machine, not even sure its possible"); never re-raise, and do not offer the one-argument fix (§A2) | `TWO LMS ON ONE HOST` |
+| *Follow the macOS output*'s fallback when the macOS output is a DAC whose own player is on: `devices.first(where: \.isBuiltIn)` (Settings.swift) taking the first built-in output in `squeezelite -l` order, so speakers over plugged-in headphones | **DECLINED by Simon 2026-10-15, NOT A FINDING** (/code-review 2026-10-15 (7) finding 2: "headphones become primary output when they are plugged in") (§A2) | `FOLLOW'S BUILT-IN FALLBACK` |
+| /code-review 2026-10-15 (7) of 8371589 (0.4.12; `origin/dev` 7faf2f8..HEAD, tree clean): two LMS on one host (`ask_server_uuid(slimproto_ip, PORT)`); Follow's built-in fallback; a player that is on with no identity left out of status.json (`makeSlot`, `writeStatus`, now `identityProblems`); INSTALL.md's "keeps its row"; `Paths.slug`'s "never share" (4 hex of FNV-1a); UPSTREAM.md's new-files list without `tests/test_slimproto_name.c`; `chooseVolume` comparing the caption (now `HeldNote`, `.reading(UUID)`); the name suite's scratch folder left by a killed test (`setup`/`teardown`, now `make_dir`/`remove_dir` in the parent) | **1, 2 DECLINED by Simon** (`TWO LMS ON ONE HOST`, `FOLLOW'S BUILT-IN FALLBACK`); **3-8 VERIFIED + FIXED 2026-10-15** (Simon: "verify the rest", "fix the 7 issues"); 5's proposed fix (`%08x`) REFUSED: it renames every device player's folder (`THE SLUG IS NEVER WIDENED`); suite PASS; **INSTALLED as 0.4.13** 2026-10-15 22:15Z, committed to dev (unpushed); 3 and 7 not live-tested (§C) | `CODE-REVIEW 2026-10-15 (7)` |
 | "`@Observable` notifies observers on every assignment, so `PlayerModel.refresh()` (`isOn`, `status`, `devices`, every 1.5 s) redraws the menu and Settings for unchanged values" | **WRONG** (§A3, measured 2026-10-15, Swift 6.4) | `AN EQUAL ASSIGNMENT NOTIFIES NO ONE` |
 | a name offer written but lost with the connection before LMS read it, so the server is stamped (or a new player named) without LMS having the name, and the next connect takes LMS's own (a new LMS's default); `name_offered`, `sendSETDName`/`send_packet`'s result, the stamp at an offer, any "confirmation" for it | **ACCEPTED by Simon 2026-10-15, NOT A FINDING** ("i am fine to accept that compromise make sure it isnt raised again"): it replaces the rename loop; re-raise only with the drop seen live (§A2) | `AN OFFER LOST IN FLIGHT` |
 
@@ -579,6 +582,9 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
       INSTALLED 19:12Z, suite PASS inside build.sh; details in §C.
     - **0.4.12** (Simon: "build and install", "Yes, 0.4.12", 2026-10-15): `CODE-REVIEW 2026-10-15 (6)`
       (commit bb5a583). INSTALLED 20:47Z, suite PASS inside build.sh; details in §C.
+    - **0.4.13** (Simon: "build install and commit", "Yes, 0.4.13", 2026-10-15): `CODE-REVIEW 2026-10-15
+      (7)`. INSTALLED 22:15Z (202610152314), suite PASS inside build.sh; the agent restarted on it and
+      used Simons Music, each player on its old MAC (the slug unchanged); details in §C.
 - **APPLE SILICON ONLY — Simon, 2026-10-09.** arm64 only, macOS 14+. No universal builds.
 - **NO VIRTUAL AUDIO DRIVERS — Simon, 2026-10-09.**
   - Simon: "we dont need blackhole it messes up things last time i installed it and was hard to
@@ -1166,6 +1172,24 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
   in the ~2 s between Save and the engine's restart is overwritten by Save's name; a Save within ~5 s
   of an LMS rename, before the agent's next `players` check, restarts the engine once on the name
   it already has.
+
+- **TWO LMS ON ONE HOST — DECLINED by Simon 2026-10-15** (/code-review 2026-10-15 (7) finding 1:
+  "not supporting that use case at all its also highly unlikely on the same machine, not even sure
+  its possible"). `ask_server_uuid(slimproto_ip, PORT)` asks for the UUID on UDP 3483 whatever
+  slimproto port the Server setting names, and the name stamp (`struct name_server`,
+  `is_connected_server`) holds no port. So two LMS on one host on different ports (a port mapping,
+  e.g. a second Docker instance on 3484) would count as one server, and the second could store its
+  default name over the player's. That setup is not supported. Not a finding, and passing
+  `slimproto_port` is not to be offered as a fix. Re-raise only with a real user running two LMS on
+  one host.
+
+- **FOLLOW'S BUILT-IN FALLBACK — DECLINED by Simon 2026-10-15** (/code-review 2026-10-15 (7) finding
+  2). When the macOS output is a DAC whose own player is on, *Follow the macOS output* takes
+  `devices.first(where: \.isBuiltIn)` (Settings.swift), the first built-in output in `squeezelite -l`
+  order. The review's case (headphones in the jack, speakers listed first, sound out loud) is not a
+  finding: "headphones become primary output when they are plugged in", so plugging them in moves
+  the macOS output off the DAC and the fallback does not run. Do not re-raise the choice between
+  built-in outputs.
 
 ### A3. DISPROVEN — beliefs the code suggests that measurement killed
 
@@ -1783,6 +1807,64 @@ evidence it cites.
 
 Each entry records that a defect, as described, was fixed. It does not cover the code written to
 fix it (see HOW TO LOG).
+
+- **CODE-REVIEW 2026-10-15 (7) — /code-review of 8371589 (0.4.12; `origin/dev` 7faf2f8..HEAD, tree
+  clean), 1 and 2 DECLINED, 3-8 VERIFIED + FIXED 2026-10-15, INSTALLED as 0.4.13 2026-10-15 22:15Z,
+  committed to dev (unpushed, Simon: "build install and commit")** (Simon: "lets do
+  another /code-review lyrionplay", then "verify the rest", "fix the 7 issues": the six left after 1
+  and 2). Gates: nothing in the index or the rounds for any of the eight. Baseline suite PASS (engine
+  name 43, swift 108) before any change.
+  1. **Two LMS on one host, different slimproto ports, judged as one server** — DECLINED by Simon (§A2
+     `TWO LMS ON ONE HOST`). The code claim was true (`ask_server_uuid(slimproto_ip, PORT)` asks UDP
+     3483; the connect uses `slimproto_port`).
+  2. **Follow's built-in fallback takes the first built-in output** — DECLINED by Simon (§A2 `FOLLOW'S
+     BUILT-IN FALLBACK`).
+  3. **A player that is on but has no identity was left out of status.json** — VERIFIED: `makeSlot`
+     throws only when its folder or MAC file cannot be written (a full disk, `players/` unwritable, a
+     file in the way); `reconcile` skipped the slot and `writeStatus` skipped the player, so the menu
+     said "No player is on" (or left that player out), the cause only in agent.log, logged again at
+     every reconcile. FIXED: `identityProblems` (by player: set in `makeSlot`'s catch, cleared on
+     success and for players no longer on); `writeStatus` lists such a player with `mac` "" and the
+     problem "Could not create this player's files: <reason>"; the log line only when the reason
+     changes. Carriers checked: every reader of `status.players` (the menu, `status?.player(follow)`'s
+     `exclusive`, Remove's wait for the player to leave: a removed player is not on, so not listed); no
+     reader uses a status's `mac`. Not covered by a suite (agent main); compiled; not reproduced live.
+  4. **INSTALL.md: "A device that is unplugged keeps its row and its settings"** — VERIFIED against
+     `PlayerList.rows` (§A2 `AN UNPLUGGED DEVICE WITH NO SAVED SETTINGS`): only a device with an entry
+     in settings.json, i.e. switched on or changed and saved. FIXED: the sentence says so; INSTALL.html
+     regenerated (README.html and index.html unchanged).
+  5. **`Paths.slug`: "two keys never share a folder or a log"** — VERIFIED: the DragonFly's UID
+     (`…AudioQuest DragonFly Black v1.5:AQDFBL0100009556:1`) is cut at `…AudioQuest-Dragon`, before its
+     serial, so two units of one model differ only in the 4 hex digits (1 in 65,536).
+     **THE SLUG IS NEVER WIDENED**: the review's fix (`%08x`, all 32 bits) renames every device player's folder,
+     which holds its MAC, so each DAC would come back as a new LMS player and settings from 0.4.0 on
+     must carry over. FIXED: the comment states the odds and the rule; PlayerCoreTests
+     `eachPlayerHasItsOwnFiles` pins the rig's real folder names (DragonFly `…-Dragon-ea39`, FiiO
+     `…-3fa90f5-1-2a05`). Mutants: `%08x` failed the pins and the old regex (the old test already
+     caught a wider hash; my claim that it would not was WRONG); a changed FNV seed failed ONLY the new
+     pins.
+  6. **UPSTREAM.md's 5(a) "New files (ours)" left out `tests/test_slimproto_name.c`** — VERIFIED (named
+     only in passing at the `load_player_name` split). FIXED: listed, with why a merge of the name code
+     must update it (it `#include`s `slimproto.c`).
+  7. **`chooseVolume` told a wanted answer from a stale one by comparing the caption** — VERIFIED, and
+     the comment was not the contract: Fixed, another mode, Fixed again set the same caption, so the
+     first read's answer passed the guard ("chosen again … not wanted" claimed otherwise). Harmless
+     today (both read the same LMS volume). FIXED: `HeldNote` (`.reading(UUID)` per read, `.note(text)`),
+     `heldNote: [String: HeldNote]`; an answer is taken only while its own read is shown, and the
+     `.fixed` guard stays. Every reset of `heldNote` (reload, revert, Remove, a new choice) still drops
+     a read in flight, now structurally. Readers: Save's error and the cog's caption use `.text`. Not
+     covered by a suite (app UI); compiled.
+  8. **The name suite's scratch folder left by a test that crashes or times out** — VERIFIED by an
+     anti-run: the 500 ms test's child killed mid-test (SIGKILL to the child of the PID launched, own
+     TMPDIR) left 1 folder; the claimed build-up was NOT there (0 `lyrionplay-name-*` in $TMPDIR after
+     rounds (3)-(6)'s mutant sweeps). FIXED: `make_dir` in the parent before the fork, `remove_dir`
+     after `waitpid`, `setup` (socket pair) in the child; the same kill, three times: 0 left.
+  Suite PASS after (engine name 43, swift 108, all 5 suites); the rebuilt test binary is tracked, as
+  before. INSTALLED as 0.4.13 (build.sh --install, suite PASS inside): agent.log "agent started:
+  LyrionPlay 0.4.13 (202610152314)", the DragonFly's and Follow's engines on their old MACs
+  (b6:4e:cb:e9:16:34, 96:57:54:14:bd:87: the slug, so each folder, unchanged), "LMS: using Simons
+  Music". Owed live: 3 (needs a player whose files cannot be written) and 7 (Fixed, another mode,
+  Fixed again on the DragonFly in the cog); neither makes sound.
 
 - **CODE-REVIEW 2026-10-15 (6) — /code-review of 481dfa4 (0.4.11; `origin/dev` 7faf2f8..HEAD, tree
   clean), 1-7 and 9 VERIFIED + FIXED 2026-10-15, 8 DISPROVEN, committed bb5a583 to dev (unpushed, Simon: "commit"), INSTALLED as 0.4.12 2026-10-15 20:47Z** (Simon: "lets

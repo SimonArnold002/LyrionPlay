@@ -119,6 +119,9 @@ final class Supervisor {
 	private var checkLog = LMSCheckLog()
 	/// a problem of the whole player (the engine missing from the app)
 	private var problem: String?
+	/// why a player that is on has no identity (makeSlot could not make its files), by player: the
+	/// menu shows it, and agent.log says it when it changes, not at every reconcile
+	private var identityProblems: [String: String] = [:]
 	private let engineURL = Paths.executable("squeezelite")
 	private var shuttingDown = false
 	private var nextMenuOpen = Date.distantPast
@@ -245,6 +248,7 @@ final class Supervisor {
 			guard let slot = makeSlot(key) else { continue }
 			slots[key] = slot
 		}
+		identityProblems = identityProblems.filter { on.contains($0.key) }
 		let plan = EnginePlan.make(settings: settings, devices: devices, followDevice: followDevice) { key, device in
 			guard let slot = slots[key] else { return [] }
 			return EngineArguments.build(settings: settings, key: key, device: device, mac: slot.mac,
@@ -307,9 +311,12 @@ final class Supervisor {
 			let name = playerName(key)
 			if let adopted { log("\(name) carries on as the earlier version's player \(adopted)") }
 			let mac = try PlayerIdentity.loadOrCreateMAC(at: Paths.mac(key))
+			identityProblems[key] = nil
 			return PlayerSlot(key: key, mac: mac, name: name)
 		} catch {
-			log("cannot create the identity of \(playerName(key)): \(error)")
+			let problem = "Could not create this player's files: \(error.localizedDescription)"
+			if identityProblems[key] != problem { log("cannot create the identity of \(playerName(key)): \(error)") }
+			identityProblems[key] = problem
 			return nil
 		}
 	}
@@ -598,7 +605,17 @@ final class Supervisor {
 		status.serverWebPort = lms.server?.webPort
 		status.problem = problem
 		for key in playersOn {
-			guard let slot = slots[key] else { continue }
+			guard let slot = slots[key] else {
+				// on, but with no identity: shown with why, not left out, so the menu never says no
+				// player is on (/code-review 2026-10-15 (7) finding 3). Any other player on with no slot
+				// is one switched on since the last reconcile, which makes it.
+				if let problem = identityProblems[key] {
+					var player = PlayerStatus(key: key, name: playerName(key), mac: "")
+					player.problem = problem
+					status.players.append(player)
+				}
+				continue
+			}
 			// LMS's name (the name file): a rename made in LMS shows in the menu within 2 s. playerName,
 			// as the log: a file that reads as none gave settings.json's name there but kept an older
 			// name here (/code-review 2026-10-15 (6) finding 9)
