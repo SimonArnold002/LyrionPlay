@@ -300,13 +300,14 @@ final class Supervisor {
 	private func makeSlot(_ key: String) -> PlayerSlot? {
 		do {
 			// before the name is read: the adopted name file is 0.3.x's LMS name
-			if key == PlayerKey.follow,
-			   let mac = try PlayerIdentity.adoptOldPlayer(mac: Paths.oldMAC, name: Paths.oldPlayerName,
-															macAt: Paths.mac(key), nameAt: Paths.playerName(key)) {
-				log("\(playerName(key)) carries on as the earlier version's player \(mac)")
-			}
+			let adopted = key == PlayerKey.follow
+				? try PlayerIdentity.adoptOldPlayer(mac: Paths.oldMAC, name: Paths.oldPlayerName,
+													macAt: Paths.mac(key), nameAt: Paths.playerName(key))
+				: nil
+			let name = playerName(key)
+			if let adopted { log("\(name) carries on as the earlier version's player \(adopted)") }
 			let mac = try PlayerIdentity.loadOrCreateMAC(at: Paths.mac(key))
-			return PlayerSlot(key: key, mac: mac, name: playerName(key))
+			return PlayerSlot(key: key, mac: mac, name: name)
 		} catch {
 			log("cannot create the identity of \(playerName(key)): \(error)")
 			return nil

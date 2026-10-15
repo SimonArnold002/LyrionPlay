@@ -101,8 +101,10 @@ static bool name_from_lms = false;
 // Only those servers get the empty answer: the loop needs a rename LMS holds for this player, and only
 // a server the player was connected to can hold one (LMS keeps a disconnected player, and its held
 // rename, for 300 s: Slimproto.pm $forget_disconnected_time), and every server it was connected to
-// named it. All of them, not only the last: a rename held by A while the player went to B and came
-// back is the loop again. Any other server (the Server setting changed, a new LMS, LMS's serv switch)
+// is in the stamp: it named the player, or was offered the name (an offer equal to LMS's name
+// changes nothing there, so LMS sends nothing back; process_setd stamps the offer itself). All of
+// them, not only the last: a rename held by A while the player went to B and came back is the loop
+// again. Any other server (the Server setting changed, a new LMS, LMS's serv switch)
 // is offered the name, as upstream offers it, so the player keeps its name there instead of taking
 // that server's default (SqueezeLiteMac). Slimproto carries no server identity, so the UUID is asked
 // at each connect by LMS's discovery request sent to the server's own address (ask_server_uuid): one
@@ -521,23 +523,48 @@ static void add_name_server(void) {
 	name_servers[name_server_count - 1] = s;
 }
 
+// The name file and the stamp are written as "<path>.tmp", then renamed over the file, so a write
+// cut short (a full disk, a power cut) leaves the old file whole: an empty name file would read as a
+// new player and offer the -n name over LMS's, an empty stamp as none.
+static FILE *open_replacement(const char *path, char *tmp, size_t size) {
+	if ((size_t)snprintf(tmp, size, "%s.tmp", path) >= size) return NULL;
+	return fopen(tmp, "w");
+}
+
+static bool replace_file(FILE *fp, const char *tmp, const char *path) {
+	bool ok = fflush(fp) == 0 && !ferror(fp) && fsync(fileno(fp)) == 0;
+	if (fclose(fp) != 0) ok = false;
+	if (ok && rename(tmp, path) == 0) return true;
+	unlink(tmp);
+	return false;
+}
+
+// the name LMS sent, into the -N file
+static bool store_name(void) {
+	char tmp[PATH_MAX];
+	FILE *fp = open_replacement(name_file, tmp, sizeof(tmp));
+	if (!fp) return false;
+	fputs(player_name, fp);
+	return replace_file(fp, tmp, name_file);
+}
+
 // the servers, after the name file, so a failed write leaves an older stamp, which at worst offers
-// a server the name instead of the empty answer
+// a server the name instead of the empty answer (and that offer stamps it)
 static void store_name_servers(void) {
+	char tmp[PATH_MAX];
 	FILE *fp;
 	int i;
 	if (!name_server_file) return;
-	fp = fopen(name_server_file, "w");
-	if (!fp) {
-		LOG_WARN("unable to store the name's servers in %s", name_server_file);
-		return;
+	fp = open_replacement(name_server_file, tmp, sizeof(tmp));
+	if (fp) {
+		for (i = 0; i < name_server_count; i++) {
+			struct in_addr addr;
+			addr.s_addr = name_servers[i].ip;
+			fprintf(fp, "%s%s%s\n", inet_ntoa(addr), name_servers[i].uuid[0] ? " " : "", name_servers[i].uuid);
+		}
+		if (replace_file(fp, tmp, name_server_file)) return;
 	}
-	for (i = 0; i < name_server_count; i++) {
-		struct in_addr addr;
-		addr.s_addr = name_servers[i].ip;
-		fprintf(fp, "%s%s%s\n", inet_ntoa(addr), name_servers[i].uuid[0] ? " " : "", name_servers[i].uuid);
-	}
-	fclose(fp);
+	LOG_WARN("unable to store the name's servers in %s", name_server_file);
 }
 
 // a line that is not an address is skipped; none readable is no stamp
@@ -627,14 +654,21 @@ static void process_setd(u8_t *pkt, int len) {
 			// LMS until it stops, so after a reconnect both names were in flight and LMS and the player
 			// confirmed each other's for good (2026-10-15, ~150 a second on the DragonFly). An empty
 			// answer has LMS send its own name instead (Squeezebox2.pm playerSettingsFrame), so only
-			// LMS's name ever moves. A new player offers its -n name, which LMS takes; so does a server
-			// other than the one that named it (named_by_this_server).
+			// LMS's name ever moves. A new player offers its -n name, which LMS takes; a server that has
+			// not named it is offered the name the player has (named_by_this_server), and is stamped:
+			// LMS's name is then this one whether or not it answers, and it can hold a rename from now on.
 			if (name_from_lms && named_by_this_server()) {
 				sendSETDName("");
 			} else
 #endif
 			if (strlen(player_name)) {
 				sendSETDName(player_name);
+#if COREAUDIO
+				if (name_from_lms) {
+					add_name_server();
+					store_name_servers();
+				}
+#endif
 			}
 		} else if (len > 5) {
 #if COREAUDIO
@@ -648,17 +682,23 @@ static void process_setd(u8_t *pkt, int len) {
 			sendSETDName(setd->data);
 			// write name to name_file if -N option set
 			if (name_file) {
+#if COREAUDIO
+				if (store_name()) {
+					LOG_INFO("storing name in %s", name_file);
+					store_name_servers();
+				} else {
+					LOG_WARN("unable to store new name in %s", name_file);
+				}
+#else
 				FILE *fp = fopen(name_file, "w");
 				if (fp) {
 					LOG_INFO("storing name in %s", name_file);
 					fputs(player_name, fp);
 					fclose(fp);
-#if COREAUDIO
-					store_name_servers();
-#endif
 				} else {
 					LOG_WARN("unable to store new name in %s", name_file);
 				}
+#endif
 			}
 		}
 	}
@@ -1058,11 +1098,15 @@ static void load_player_name(const char *name, const char *namefile) {
 					strncpy(player_name, name, PLAYER_NAME_LEN);
 					player_name[PLAYER_NAME_LEN] = '\0';
 				}
-				if (name_from_lms) load_name_servers();
 #endif
 			}
 			fclose(fp);
 		}
+#if COREAUDIO
+		// whatever the name file holds: the -n name offered to a server the stamp names is sent back,
+		// and the stamp written then must keep the other servers
+		load_name_servers();
+#endif
 	}
 }
 

@@ -25,7 +25,8 @@ public enum Paths {
 
 	public static var agentLog: URL { logs.appendingPathComponent("agent.log") }
 
-	/// a player's folder: its MAC address, name file and engine PID
+	/// a player's folder: its MAC address, name file (and the engine's `name.server` beside it, the
+	/// servers that have named the player) and engine PID
 	public static func player(_ key: String) -> URL { players.appendingPathComponent(slug(key)) }
 	/// the player's MAC address, generated once
 	public static func mac(_ key: String) -> URL { player(key).appendingPathComponent("mac") }
@@ -37,7 +38,7 @@ public enum Paths {
 	public static func enginePID(_ key: String) -> URL { player(key).appendingPathComponent("engine.pid") }
 	public static func engineLog(_ key: String) -> URL { logs.appendingPathComponent("engine-\(slug(key)).log") }
 	/// everything LyrionPlay keeps for one player, which removing it deletes: its folder (MAC, name
-	/// file, engine PID) and its engine log with the older copy `rotate` keeps
+	/// file, `name.server`, engine PID) and its engine log with the older copy `rotate` keeps
 	public static func files(of key: String) -> [URL] {
 		[player(key), engineLog(key), engineLog(key).appendingPathExtension("1")]
 	}

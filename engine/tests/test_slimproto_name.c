@@ -3,9 +3,9 @@
  * engine it tests (../LICENSE.txt).
  *
  * Regression suite for the player name in slimproto.c (LMS OWNS THE PLAYER NAME): what the engine
- * answers to LMS's name query, what it stores when LMS sends a name, and the server that name came
- * from (the -N file's ".server": its address and LMS server_uuid, asked at each connect by
- * ask_server_uuid, here against a stand-in LMS on 127.0.0.1).
+ * answers to LMS's name query, what it stores when LMS sends a name, and the servers that have named
+ * the player (the -N file's ".server": one line each, its address and LMS server_uuid, asked at each
+ * connect by ask_server_uuid, here against a stand-in LMS on 127.0.0.1).
  *
  * slimproto.c is #included (NAME_SOURCE names it, so the suite can be built against an older copy
  * to prove a test fails there) with the rest of the engine stubbed out; its packets go to a socket
@@ -38,6 +38,7 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <pthread.h>
+#include <sys/resource.h>
 
 // ---- the rest of the engine, stubbed: nothing here is reached by the name code ----
 
@@ -113,8 +114,13 @@ static void setup(void) {
 }
 
 static void teardown(void) {
+	char tmp[320];
 	unlink(name_path);
 	unlink(stamp_path);
+	snprintf(tmp, sizeof(tmp), "%s.tmp", name_path);
+	unlink(tmp);
+	snprintf(tmp, sizeof(tmp), "%s.tmp", stamp_path);
+	unlink(tmp);
 	rmdir(dir);
 }
 
@@ -497,6 +503,99 @@ static void test_new_lms_old_address_keeps_both(void) {
 	CHECK(answer && !answer[0], "plex, at another address, still gets the empty answer, got %s", answer ? answer : "nothing");
 }
 
+static void test_offered_server_is_stamped(void) {
+	// /code-review 2026-10-15 (5) finding 1: B already has the player's name (set by hand the same on
+	// two LMS, a line dropped past NAME_SERVERS, plex at an address whose UUID reply was lost), so the
+	// offer changes nothing there and LMS sends nothing back. B can still hold a rename after it
+	write_file(name_path, "Desk DAC");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_B);
+	struct lms b = { "Desk DAC", false, 0 };
+	int messages = lms_connect(&b);
+	CHECK(messages == 1, "one engine message (the offer), LMS answers nothing, got %d", messages);
+	CHECK(!strcmp(read_line(stamp_path, 2), SERVER_B), "the server offered the name is stamped, got \"%s\"", read_line(stamp_path, 2));
+	CHECK(!strcmp(read_line(stamp_path, 1), SERVER_A), "the first server stays, got \"%s\"", read_line(stamp_path, 1));
+	// renamed in B while it plays: held; a reconnect in this run
+	strcpy(b.pref, "Study");
+	b.held = true;
+	messages = lms_connect(&b);
+	CHECK(messages >= 0, "a reconnect: no loop (stopped after %d messages)", LOOP_LIMIT);
+	CHECK(!strcmp(read_file(name_path), "Study"), "the player takes B's rename, got \"%s\"", read_file(name_path));
+}
+
+static void test_offered_server_is_stamped_restart(void) {
+	// the same with the engine restarted before the stop (the stamp read back from the file)
+	write_file(name_path, "Desk DAC");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_B);
+	struct lms b = { "Desk DAC", false, 0 };
+	CHECK(lms_connect(&b) >= 0, "first connect: no loop");
+	strcpy(b.pref, "Study");
+	b.held = true;
+	name_server_count = 0;
+	engine_start("x", SERVER_B);
+	int messages = lms_connect(&b);
+	CHECK(messages >= 0, "after a restart: no loop (stopped after %d messages)", LOOP_LIMIT);
+	CHECK(!strcmp(b.pref, "Study"), "B keeps its rename, got \"%s\"", b.pref);
+	CHECK(!strcmp(read_file(name_path), "Study"), "the player takes it, got \"%s\"", read_file(name_path));
+}
+
+static void test_empty_name_file_keeps_stamp(void) {
+	// /code-review 2026-10-15 (5) finding 2: the name file empty, the stamp naming two servers. The
+	// -n name is offered (a new player), LMS sends it back, and both servers stay stamped
+	write_file(name_path, "");
+	write_file(stamp_path, SERVER_A "\n" SERVER_B "\n");
+	engine_start("Kitchen DAC", SERVER_A);
+	struct lms a = { "Desk DAC", false, 0 };
+	CHECK(lms_connect(&a) >= 0, "no loop");
+	CHECK(!strcmp(read_line(stamp_path, 1), SERVER_B), "the other server stays stamped, got \"%s\"", read_line(stamp_path, 1));
+	CHECK(!strcmp(read_line(stamp_path, 2), SERVER_A), "the naming server moves last, got \"%s\"", read_line(stamp_path, 2));
+}
+
+static bool exists(const char *path) {
+	struct stat st;
+	return stat(path, &st) == 0;
+}
+
+static void test_failed_write_keeps_name(void) {
+	// finding 3 and 4: a write that fails part way (a full disk; here the file size limit, so the
+	// truncate works and the data does not) leaves the name and the stamp as they were
+	char tmp[320];
+	struct rlimit limit = { 0, RLIM_INFINITY };
+	write_file(name_path, "Desk DAC");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_A);
+	signal(SIGXFSZ, SIG_IGN);
+	if (setrlimit(RLIMIT_FSIZE, &limit) != 0) { perror("setrlimit"); exit(2); }
+	to_engine("Study");
+	engine_sent();
+	CHECK(!strcmp(read_file(name_path), "Desk DAC"), "the name file keeps the name it had, got \"%s\"", read_file(name_path));
+	CHECK(!strcmp(read_file(stamp_path), SERVER_A), "the stamp keeps what it had, got \"%s\"", read_file(stamp_path));
+	// the stamp's own write: another server offered the name
+	engine_connect(SERVER_B, "");
+	const char *answer = query();
+	CHECK(answer && !strcmp(answer, "Study"), "B is offered the name, got %s", answer ? answer : "nothing");
+	CHECK(!strcmp(read_file(stamp_path), SERVER_A), "a stamp write that fails keeps the stamp, got \"%s\"", read_file(stamp_path));
+	snprintf(tmp, sizeof(tmp), "%s.tmp", name_path);
+	CHECK(!exists(tmp), "no part-written name left beside it");
+	snprintf(tmp, sizeof(tmp), "%s.tmp", stamp_path);
+	CHECK(!exists(tmp), "no part-written stamp left beside it");
+}
+
+static void test_write_leaves_no_temporary(void) {
+	char tmp[320];
+	engine_start("Kitchen DAC", SERVER_A);
+	query();
+	to_engine("Kitchen DAC");
+	engine_sent();
+	CHECK(!strcmp(read_file(name_path), "Kitchen DAC"), "the name is stored, got \"%s\"", read_file(name_path));
+	CHECK(!strcmp(read_file(stamp_path), SERVER_A), "its server is stored, got \"%s\"", read_file(stamp_path));
+	snprintf(tmp, sizeof(tmp), "%s.tmp", name_path);
+	CHECK(!exists(tmp), "no name.tmp left");
+	snprintf(tmp, sizeof(tmp), "%s.tmp", stamp_path);
+	CHECK(!exists(tmp), "no name.server.tmp left");
+}
+
 static void test_stamp_is_bounded(void) {
 	// past NAME_SERVERS the oldest is dropped; a server naming it again moves last
 	char server[32];
@@ -632,6 +731,11 @@ static const struct test tests[] = {
 	{ "a connect without a UUID answer keeps the stamp's UUID", test_lost_uuid_answer_keeps_uuid },
 	{ "a UUID joins its address's line", test_uuid_fills_address_line },
 	{ "a new LMS at an old address is added, the old one kept", test_new_lms_old_address_keeps_both },
+	{ "a server offered a name it already has is stamped", test_offered_server_is_stamped },
+	{ "the same across an engine restart before the stop", test_offered_server_is_stamped_restart },
+	{ "an empty name file keeps every server in the stamp", test_empty_name_file_keeps_stamp },
+	{ "a write that fails keeps the name and the stamp", test_failed_write_keeps_name },
+	{ "a name stored leaves no temporary file", test_write_leaves_no_temporary },
 	{ "the stamp keeps the last NAME_SERVERS servers", test_stamp_is_bounded },
 	{ "LMS's discovery reply gives the UUID", test_parse_reply },
 	{ "the UUID is asked of the server's own address", test_ask_uuid },
