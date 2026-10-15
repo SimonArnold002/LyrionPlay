@@ -247,6 +247,41 @@ public struct LMSClient: Sendable {
 		return Int("\(value)")
 	}
 
+	/// What `forget` did: the player is gone from LMS's list, was never in it, is still connected
+	/// (so LMS kept it), or LMS did not answer.
+	public enum ForgetResult: Equatable, Sendable {
+		case forgotten, notListed, stillConnected, noAnswer
+	}
+
+	/// a player in a `players` answer: whether LMS lists it, and whether it is connected
+	public static func listing(of mac: String, in players: [String: Any]) -> (listed: Bool, connected: Bool) {
+		let loop = players["players_loop"] as? [[String: Any]] ?? []
+		guard let me = loop.first(where: { ($0["playerid"] as? String)?.lowercased() == mac.lowercased() }) else {
+			return (false, false)
+		}
+		return (true, "\(me["connected"] ?? 0)" == "1")
+	}
+
+	/// `client forget`: LMS drops the player from its list, as its own Forget does (Commands.pm
+	/// `clientForgetCommand`, LMS 9.1). LMS ignores it, saying nothing, while the player is connected,
+	/// so this first waits up to `wait` for the stopped engine's disconnect, and after it asks
+	/// `players` whether the player went. LMS keeps the player's prefs under its MAC, which LyrionPlay
+	/// never uses again (a removed device comes back with a new one).
+	public func forget(player mac: String, wait: Duration = .seconds(5)) async -> ForgetResult {
+		let clock = ContinuousClock(), deadline = clock.now + wait
+		while true {
+			guard let players = await call(player: "", ["players", "0", "99"]) else { return .noAnswer }
+			let me = Self.listing(of: mac, in: players)
+			if !me.listed { return .notListed }
+			if !me.connected { break }
+			if clock.now >= deadline { return .stillConnected }
+			try? await Task.sleep(for: .milliseconds(500))
+		}
+		guard await call(player: mac, ["client", "forget"]) != nil,
+			  let after = await call(player: "", ["players", "0", "99"]) else { return .noAnswer }
+		return Self.listing(of: mac, in: after).listed ? .stillConnected : .forgotten
+	}
+
 	public func volumeFixed(player: String) async -> Bool? {
 		await digitalVolumeControl(player: player).map { $0 == 0 }
 	}

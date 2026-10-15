@@ -34,12 +34,18 @@ Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines:
   - `" COREAUDIO"` added to the build options.
   - `ca_hw_volume` / `ca_linear_volume` variables and their `case 'V'` / `case 'X'`.
   - `output_init_coreaudio()` and `output_close_coreaudio()` calls.
+  - `-n` and `-N` together are allowed: `-n` is the name a new player offers, `-N` the file that holds
+    LMS's name once LMS has named the player.
 - `slimproto.c`
   - In the main loop, `output.ca_reopen` is cleared, then `_ca_open()` is called; the
     PortAudio block clears after its call, which would lose a request raised meanwhile.
   - `process_audg` sets `output.volume_fixed = !audg->adjust` before `set_volume()`.
   - In the main loop, after `UNLOCK_O`, `ca_report_format()` (DoP or PCM, and the idle release, for
     the agent's menu).
+  - `name_from_lms`: set when the `-N` file held a name at start or LMS set one. `process_setd`
+    answers LMS's name query with an empty name while it is set, so LMS sends its own: LMS owns the
+    name, and a queued LMS rename and the player's name can no longer chase each other. An empty
+    `-N` file falls back to `-n`.
 - `Makefile`
   - `OPT_COREAUDIO`.
   - `output_coreaudio.c` added to `SOURCES`.

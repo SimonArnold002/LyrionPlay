@@ -115,9 +115,10 @@ public struct PlayerSettings: Codable, Equatable, Sendable {
 					   volume: device.volume != nil ? .device : .software)
 	}
 
-	/// The most of a name squeezelite's -N keeps: one line, 63 bytes (slimproto.c reads the name file
+	/// The most of a name squeezelite keeps: one line, 63 bytes (slimproto.c reads the name file
 	/// with `fgets` into 64), so it is cut at a whole character here, never mid-character there. A
 	/// Mac and a DAC with long names passed it in the defaults (/code-review 2026-10-15 (2), finding 3).
+	/// Applied to the defaults, the only names LyrionPlay gives.
 	public static let nameBytes = 63
 
 	/// one line, trimmed, at most `nameBytes` bytes of whole characters; "" for a blank name
@@ -200,19 +201,13 @@ public struct Settings: Codable, Equatable, Sendable {
 		return player
 	}
 
-	/// The players whose name is not the one `earlier` gives them, with the new name. The Settings
-	/// window compares with what it opened on, so these are the names typed there; the agent compares
-	/// with the settings it ran on, so a file that went missing gives the defaults' names here too
-	/// (PlayerIdentity.renameReached guards against those). `devices`: for the defaults of a device
-	/// player with no saved settings.
-	public func renames(since earlier: Settings, devices: [DeviceCaps]) -> [String: String] {
-		var renamed: [String: String] = [:]
-		for key in players.keys {
-			let device = devices.first { $0.uid == key }
-			let name = player(key, device: device).name
-			if name != earlier.player(key, device: device).name { renamed[key] = name }
-		}
-		return renamed
+	/// Without a device's player: its settings go, so it is off, and a device still connected is listed
+	/// again with the defaults, as a new one. *Follow the macOS output* is never removed.
+	public func removing(_ key: String) -> Settings {
+		guard key != PlayerKey.follow else { return self }
+		var settings = self
+		settings.players[key] = nil
+		return settings
 	}
 
 	public func isOn(_ key: String) -> Bool {

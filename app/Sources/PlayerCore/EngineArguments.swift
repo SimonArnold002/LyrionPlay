@@ -14,7 +14,9 @@ public enum EngineArguments {
 	public static let lmsPCMRateCap = 384_000
 
 	/// One player's engine (`key`: PlayerKey.follow or a device UID) on `device`, with its own LMS
-	/// identity (`mac`, `nameFile`) and log.
+	/// identity (`mac`, `nameFile`) and log. `-n` is the name a new player offers LMS; once LMS has
+	/// named it, the `-N` file holds LMS's name and the engine leaves the name to LMS (LMS OWNS THE
+	/// PLAYER NAME). Both together only in this fork (main.c).
 	public static func build(settings: Settings, key: String, device: DeviceCaps, mac: String, nameFile: String,
 							 logFile: String) -> [String] {
 		let options = settings.player(key, device: device)
@@ -22,6 +24,7 @@ public enum EngineArguments {
 			"-o", device.uid,
 			"-M", modelName,
 			"-m", mac,
+			"-n", options.name,
 			"-N", nameFile,
 			"-Z", String(min(device.maxRate, lmsPCMRateCap)),
 			// E: resample only when the device lacks the track's rate

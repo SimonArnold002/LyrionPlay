@@ -260,6 +260,7 @@ func value(_ option: String, in a: [String]) -> String? {
 									  nameFile: "/a/name", logFile: "/a.log")
 		#expect(value("-m", in: a) == "02:00:00:00:00:01")
 		#expect(value("-N", in: a) == "/a/name")
+		#expect(value("-n", in: a) == PlayerSettings.defaults(for: fiio).name)
 		#expect(value("-f", in: a) == "/a.log")
 	}
 }
@@ -457,52 +458,34 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(try String(contentsOf: name, encoding: .utf8) == "Study 2")
 	}
 
-	/// The name file has two writers: Settings' Save, for a Name typed there, and squeezelite, for a
-	/// rename in LMS. /code-review 2026-10-14, finding 2: a rename saved while the player (or LyrionPlay)
-	/// was off never reached LMS. /code-review 2026-10-15 (2), finding 1: a settings.json gone missing
-	/// gave the defaults' name, which the agent wrote over LMS's rename
-	@Test func onlyANameTypedInSettingsWritesTheNameFile() throws {
+	/// LMS OWNS THE PLAYER NAME (Simon, 2026-10-15: "remove renaming as an option in the app and leave
+	/// it to LMS"). LyrionPlay reads the name file, which only the engine writes (every name LMS sends),
+	/// and gives a name only as a new player's -n
+	@Test func lmsOwnsThePlayerName() throws {
 		let fm = FileManager.default
 		let dir = fm.temporaryDirectory.appendingPathComponent("lyrionplay-name-\(UUID())")
 		defer { try? fm.removeItem(at: dir) }
-		let name = dir.appendingPathComponent("players/follow/name")
-		func file() -> String? { PlayerIdentity.name(at: name) }
+		try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+		let name = dir.appendingPathComponent("name")
+		// before LMS has named the player: nothing to show, settings.json's name is offered
+		#expect(PlayerIdentity.name(at: name) == nil)
+		try "".write(to: name, atomically: true, encoding: .utf8)
+		#expect(PlayerIdentity.name(at: name) == nil) // an empty file (0.4.5's blank Name) is none
+		// squeezelite writes LMS's name with no newline; a hand edit may add one
+		try "Lounge\n".write(to: name, atomically: true, encoding: .utf8)
+		#expect(PlayerIdentity.name(at: name) == "Lounge")
 
-		// the agent's first start: made from the settings
-		try PlayerIdentity.createNameFile("Mac", at: name)
-		#expect(file() == "Mac")
-		// renamed in Settings, the player off or on: Save writes it, and a running engine restarts
-		var saved = Settings()
-		saved.players[PlayerKey.follow]?.name = "Mac"
-		var typed = saved
-		typed.players[PlayerKey.follow]?.name = "Study"
-		let renamed = typed.renames(since: saved, devices: devices)
-		#expect(renamed == [PlayerKey.follow: "Study"])
-		for (_, new) in renamed { try PlayerIdentity.writeName(new, at: name) }
-		#expect(file() == "Study")
-		#expect(PlayerIdentity.renameReached("Study", at: name))
-		// control: nothing typed, nothing renamed
-		#expect(typed.renames(since: typed, devices: devices).isEmpty)
-
-		// renamed in LMS: squeezelite writes the file; the agent's start makes no change to it
-		try "Lounge".write(to: name, atomically: true, encoding: .utf8)
-		try PlayerIdentity.createNameFile("Study", at: name)
-		#expect(file() == "Lounge")
-		// settings.json gone: the agent runs the defaults, whose name differs from Study, but the file
-		// holds LMS's, so no restart, and nothing writes it
-		let missing = Settings()
-		#expect(missing.renames(since: typed, devices: devices)[PlayerKey.follow] == PlayerSettings.followDefaults.name)
-		#expect(!PlayerIdentity.renameReached(PlayerSettings.followDefaults.name, at: name))
-		try PlayerIdentity.createNameFile(PlayerSettings.followDefaults.name, at: name)
-		#expect(file() == "Lounge")
-
-		// a device player switched on in Settings keeps the defaults' name: not a rename, so an
-		// existing file (LMS's rename, from before settings.json went missing) stays
-		var on = missing
-		var dac = on.forSaving(fiio.uid, device: fiio)
-		dac.enabled = true
-		on.players[fiio.uid] = dac
-		#expect(on.renames(since: missing, devices: devices).isEmpty)
+		// the engine offers settings.json's name with -n and keeps LMS's in -N; neither changes when LMS
+		// renames the player, so an LMS rename restarts nothing
+		var settings = Settings()
+		settings.players[fiio.uid] = PlayerSettings.defaults(for: fiio)
+		let a = EngineArguments.build(settings: settings, key: fiio.uid, device: fiio, mac: "02:00:00:00:00:01",
+									  nameFile: name.path, logFile: "/a.log")
+		#expect(value("-n", in: a) == PlayerSettings.defaults(for: fiio).name)
+		#expect(value("-N", in: a) == name.path)
+		try "Kitchen".write(to: name, atomically: true, encoding: .utf8)
+		#expect(EngineArguments.build(settings: settings, key: fiio.uid, device: fiio, mac: "02:00:00:00:00:01",
+									  nameFile: name.path, logFile: "/a.log") == a)
 	}
 
 	/// squeezelite keeps 63 bytes of the name file's first line (fgets into 64): a longer name was cut
@@ -1472,5 +1455,100 @@ final class FakeLMS: @unchecked Sendable {
 		lines += check(&log, answer: 0.03, found: b, answered: true)
 		#expect(lines == ["LMS: using Simons Music (plex:9000)", "LMS check of Simons Music (plex:9000) took 5.0 s",
 						  "LMS: using Other (other:9000)"])
+	}
+}
+
+/// LMS answering JSON-RPC from a script, through URLSession.shared (what LMSClient uses)
+final class StubLMS: URLProtocol {
+	nonisolated(unsafe) static var answer: (_ player: String, _ command: [String]) -> [String: Any]? = { _, _ in nil }
+	nonisolated(unsafe) static var commands: [String] = []
+
+	override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "stub.lms" }
+	override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+	override func startLoading() {
+		var body = request.httpBody
+		if body == nil, let stream = request.httpBodyStream {
+			stream.open()
+			var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)
+			while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: 4096); if n <= 0 { break }; data.append(buffer, count: n) }
+			stream.close()
+			body = data
+		}
+		let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+		let params = json?["params"] as? [Any] ?? []
+		let player = params.first as? String ?? "", command = (params.dropFirst().first as? [String]) ?? []
+		StubLMS.commands.append(([player] + command).joined(separator: " "))
+		let result = StubLMS.answer(player, command)
+		let data = try! JSONSerialization.data(withJSONObject: result.map { ["result": $0] } ?? [:])
+		client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+							cacheStoragePolicy: .notAllowed)
+		client?.urlProtocol(self, didLoad: data)
+		client?.urlProtocolDidFinishLoading(self)
+	}
+	override func stopLoading() {}
+}
+
+/// Removing a device's player (Simon, 2026-10-15: "if I no longer owned one of the devices its stuck
+/// forever. This should remove it from LMS as well"). LMS ignores `client forget` while the player is
+/// connected (Commands.pm clientForgetCommand), so it is sent only once LMS shows it disconnected
+@Suite(.serialized) struct RemovingAPlayer {
+	let mac = "02:aa:bb:cc:dd:ee"
+	var client: LMSClient { LMSClient(server: LMSServer(host: "stub.lms", webPort: 9000, name: nil)) }
+
+	init() { URLProtocol.registerClass(StubLMS.self); StubLMS.commands = [] }
+
+	func players(_ connected: Int?) -> [String: Any] {
+		["players_loop": connected.map { [["playerid": mac.uppercased(), "connected": $0]] } ?? []]
+	}
+
+	@Test func forgottenOnceLMSSeesItDisconnected() async {
+		var checks = 0, forgotten = false
+		StubLMS.answer = { player, command in
+			if command == ["client", "forget"] { forgotten = true; return [:] }
+			checks += 1
+			return players(forgotten ? nil : (checks < 3 ? 1 : 0))
+		}
+		#expect(await client.forget(player: mac) == .forgotten)
+		// asked twice while connected, never told to forget then
+		let sent = StubLMS.commands
+		#expect(sent.filter { $0.hasSuffix("client forget") }.count == 1)
+		#expect(sent.firstIndex { $0.hasSuffix("client forget") } == 3)
+	}
+
+	@Test func stillConnectedIsNeverForgotten() async {
+		StubLMS.answer = { _, command in command == ["client", "forget"] ? [:] : players(1) }
+		#expect(await client.forget(player: mac, wait: .milliseconds(600)) == .stillConnected)
+		#expect(!StubLMS.commands.contains { $0.hasSuffix("client forget") })
+	}
+
+	@Test func aRefusedForgetIsSaid() async {
+		StubLMS.answer = { _, command in command == ["client", "forget"] ? [:] : players(0) }
+		#expect(await client.forget(player: mac) == .stillConnected)
+	}
+
+	@Test func notListedOrNoAnswerSendsNothing() async {
+		StubLMS.answer = { _, _ in players(nil) }
+		#expect(await client.forget(player: mac) == .notListed)
+		StubLMS.answer = { _, _ in nil }
+		#expect(await client.forget(player: mac) == .noAnswer)
+		#expect(!StubLMS.commands.contains { $0.hasSuffix("client forget") })
+	}
+
+	@Test func itsSettingsAndFilesGoButFollowStays() {
+		var settings = Settings()
+		settings.players[fiio.uid] = player(fiio, volume: .software)
+		let removed = settings.removing(fiio.uid)
+		#expect(removed.players[fiio.uid] == nil)
+		#expect(!removed.isOn(fiio.uid))
+		// a device still connected is listed again, as a new one with the defaults
+		#expect(PlayerList.rows(settings: removed, devices: devices).contains { $0.key == fiio.uid })
+		#expect(removed.forSaving(fiio.uid, device: fiio) == PlayerSettings.defaults(for: fiio))
+		// control: Follow is never removed
+		#expect(settings.removing(PlayerKey.follow) == settings)
+		// its folder and both its logs
+		let files = Paths.files(of: fiio.uid)
+		#expect(files.contains(Paths.player(fiio.uid)) && files.contains(Paths.engineLog(fiio.uid)))
+		#expect(files.contains { $0.lastPathComponent == Paths.engineLog(fiio.uid).lastPathComponent + ".1" })
+		#expect(!files.contains(Paths.players) && !files.contains(Paths.logs))
 	}
 }

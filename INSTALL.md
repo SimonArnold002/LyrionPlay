@@ -113,7 +113,14 @@ back to what is saved. If a save fails, the window says why and keeps your chang
 ### A player's settings (the cog)
 
 **Name** is the player's name in LMS; it starts as your Mac's name, or your Mac's name followed by
-the device's.
+the device's. To rename a player, use its player settings in LMS (or Material); LyrionPlay shows the
+new name.
+
+**Remove This Player…** (a device's player, not *Follow the macOS output*) removes it for good: its
+settings, its identity and logs, and its player in LMS. Use it for a device you no longer have, or to
+start a device afresh: if it is still connected it is listed again as a new player, switched off, and
+switching it on makes a new LMS player. If LMS can't be reached, or still shows the player, LyrionPlay
+says so; forget it in LMS's player settings.
 
 **Exclusive mode** is on by default for external DACs (USB, Thunderbolt and the like), and off for
 the Mac's own outputs. While playing, LyrionPlay:

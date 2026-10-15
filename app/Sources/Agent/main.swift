@@ -292,9 +292,10 @@ final class Supervisor {
 		writeStatus()
 	}
 
-	/// a player's identity in LMS, made once and kept (PlayerIdentity)
+	/// a player's identity in LMS, made once and kept (PlayerIdentity), and its name in LMS for the log
+	/// and the menu (LMS OWNS THE PLAYER NAME): settings.json's until LMS has named it
 	private func makeSlot(_ key: String) -> PlayerSlot? {
-		let name = settings.player(key, device: devices.first { $0.uid == key }).name
+		let name = PlayerIdentity.name(at: Paths.playerName(key)) ?? settings.player(key, device: devices.first { $0.uid == key }).name
 		do {
 			if key == PlayerKey.follow,
 			   let mac = try PlayerIdentity.adoptOldPlayer(mac: Paths.oldMAC, name: Paths.oldPlayerName,
@@ -302,8 +303,6 @@ final class Supervisor {
 				log("\(name) carries on as the earlier version's player \(mac)")
 			}
 			let mac = try PlayerIdentity.loadOrCreateMAC(at: Paths.mac(key))
-			// a rename typed in Settings is already in the file (its Save wrote it), and LMS's are too
-			try PlayerIdentity.createNameFile(name, at: Paths.playerName(key))
 			return PlayerSlot(key: key, mac: mac, name: name)
 		} catch {
 			log("cannot create the identity of \(name): \(error)")
@@ -461,20 +460,10 @@ final class Supervisor {
 		let date = modificationDate(Paths.settings)
 		if date != settingsDate {
 			settingsDate = date
-			let earlier = settings
 			readSettings()
 			if lms.update(setting: settings.server) { // check the new one now, and say what it finds
 				lastLMSCheck = .distantPast
 				checkLog.settingChanged()
-			}
-			// Save wrote a rename to the name file before settings.json; a running engine reads it at its
-			// next start, so it restarts. A player that is not on reads it when it starts
-			let renamed = settings.renames(since: earlier, devices: devices)
-			for (key, slot) in slots {
-				slot.name = settings.player(key, device: slot.device).name
-				if let name = renamed[key], PlayerIdentity.renameReached(name, at: Paths.playerName(key)) {
-					slot.restartWanted = true
-				}
 			}
 			reconcile("settings changed")
 			// a player's "LMS volume" may have changed: check LMS at once (FixedVolumeSync). A change to
@@ -607,6 +596,8 @@ final class Supervisor {
 		status.problem = problem
 		for key in playersOn {
 			guard let slot = slots[key] else { continue }
+			// LMS's name (the name file): a rename made in LMS shows in the menu within 2 s
+			if let name = PlayerIdentity.name(at: Paths.playerName(key)) { slot.name = name }
 			var player = PlayerStatus(key: key, name: slot.name, mac: slot.mac)
 			player.engineRunning = slot.engine?.isRunning ?? false
 			player.enginePID = slot.engine?.processIdentifier

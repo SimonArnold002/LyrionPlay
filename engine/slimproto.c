@@ -91,6 +91,12 @@ char *new_server_cap;
 #define PLAYER_NAME_LEN 64
 char player_name[PLAYER_NAME_LEN + 1] = "";
 const char *name_file = NULL;
+#if COREAUDIO
+// LMS owns the player's name (LyrionPlay, Simon 2026-10-15). Set once LMS has named this player:
+// the -N file held a name at start (squeezelite wrote it from LMS), or LMS set one since. Until
+// then the -n name is offered once, for a new player.
+static bool name_from_lms = false;
+#endif
 
 void send_packet(u8_t *packet, size_t len) {
 	u8_t *ptr = packet;
@@ -456,10 +462,24 @@ static void process_setd(u8_t *pkt, int len) {
 	// handle player name query and change
 	if (setd->id == 0) {
 		if (len == 5) {
+#if COREAUDIO
+			// LMS asks at every (re)connect. Upstream answers with this player's name, and LMS takes it
+			// as a rename and sends it back; a rename made in LMS while the player played is held by
+			// LMS until it stops, so after a reconnect both names were in flight and LMS and the player
+			// confirmed each other's for good (2026-10-15, ~150 a second on the DragonFly). An empty
+			// answer has LMS send its own name instead (Squeezebox2.pm playerSettingsFrame), so only
+			// LMS's name ever moves. A new player offers its -n name, which LMS takes.
+			if (name_from_lms) {
+				sendSETDName("");
+			} else
+#endif
 			if (strlen(player_name)) {
 				sendSETDName(player_name);
 			}
 		} else if (len > 5) {
+#if COREAUDIO
+			name_from_lms = true;
+#endif
 			strncpy(player_name, setd->data, PLAYER_NAME_LEN);
 			player_name[PLAYER_NAME_LEN] = '\0';
 			LOG_INFO("set name: %s", setd->data);
@@ -886,6 +906,14 @@ void slimproto(log_level level, char *server, u8_t mac[6], const char *name, con
 					player_name[len - 1] = '\0';
 				}
 				LOG_INFO("retrieved name %s from %s", player_name, name_file);
+#if COREAUDIO
+				name_from_lms = strlen(player_name) > 0;
+				// an empty file: the -n name, as upstream when fgets reads nothing
+				if (!name_from_lms && name) {
+					strncpy(player_name, name, PLAYER_NAME_LEN);
+					player_name[PLAYER_NAME_LEN] = '\0';
+				}
+#endif
 			}
 			fclose(fp);
 		}

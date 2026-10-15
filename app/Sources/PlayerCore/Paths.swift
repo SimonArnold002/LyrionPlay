@@ -29,13 +29,17 @@ public enum Paths {
 	public static func player(_ key: String) -> URL { players.appendingPathComponent(slug(key)) }
 	/// the player's MAC address, generated once
 	public static func mac(_ key: String) -> URL { player(key).appendingPathComponent("mac") }
-	/// squeezelite -N: the player name. The agent makes a missing one; after that only Settings' Save and
-	/// LMS's renames write it (PlayerIdentity.name)
+	/// squeezelite -N: the player's name as LMS has it, written by the engine only (PlayerIdentity.name)
 	public static func playerName(_ key: String) -> URL { player(key).appendingPathComponent("name") }
 	/// the player's running engine's PID, so a restarted agent can stop an engine its crashed
 	/// predecessor left
 	public static func enginePID(_ key: String) -> URL { player(key).appendingPathComponent("engine.pid") }
 	public static func engineLog(_ key: String) -> URL { logs.appendingPathComponent("engine-\(slug(key)).log") }
+	/// everything LyrionPlay keeps for one player, which removing it deletes: its folder (MAC, name
+	/// file, engine PID) and its engine log with the older copy `rotate` keeps
+	public static func files(of key: String) -> [URL] {
+		[player(key), engineLog(key), engineLog(key).appendingPathExtension("1")]
+	}
 
 	/// A file-safe name for a player key: "follow", or a device UID made readable (letters, digits,
 	/// '.' and '-'), cut to 48 characters, plus 4 hex digits of the UID's hash, so two keys never share

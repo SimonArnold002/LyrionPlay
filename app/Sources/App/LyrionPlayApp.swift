@@ -131,7 +131,18 @@ final class PlayerModel {
 	/// Fixed on a device with a volume control: what reading LMS's volume gave, while there is no level
 	/// to hold (reading, or why not), by player
 	var heldNote: [String: String] = [:]
+	/// the player whose Remove is being confirmed, the one being removed, and what removing found
+	var confirmRemove: String?
+	var removing: String?
+	var removeNote: String?
+	/// each player's name as LMS has it (its name file), read at every refresh: a file is nothing the
+	/// window can observe, so read in the view a rename in LMS never showed until it was reopened
+	/// (live 2026-10-15, 0.4.8: "but not in the app")
+	var lmsNames: [String: String] = [:]
 	@ObservationIgnored private var timer: Timer?
+	/// while no agent reports the devices (the player off), a device plugged in or out is probed here
+	@ObservationIgnored private var deviceWatcher: AudioDeviceWatcher?
+	@ObservationIgnored private var probePending = false
 
 	init() {
 		reload()
@@ -139,12 +150,36 @@ final class PlayerModel {
 		timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
 			MainActor.assumeIsolated { self?.refresh() }
 		}
+		deviceWatcher = AudioDeviceWatcher { [weak self] in
+			MainActor.assumeIsolated { self?.devicesChanged() }
+		}
 	}
 
+	/// The devices from a running agent (it probes them); else the window's own probe. A status.json
+	/// left by an agent that stopped is not read for them: it lists the devices of that moment.
 	func refresh() {
 		isOn = LaunchAgent.isOn
 		status = AgentStatus.load()
-		if isOn, let status, !status.devices.isEmpty { devices = status.devices }
+		if agentAlive, let status, !status.devices.isEmpty { devices = status.devices }
+		let keys = Set(draft.players.keys).union(devices.map(\.uid)).union([PlayerKey.follow])
+		var names: [String: String] = [:]
+		for key in keys { names[key] = PlayerIdentity.name(at: Paths.playerName(key)) }
+		if names != lmsNames { lmsNames = names }
+	}
+
+	/// With the player off nothing else probed: a device plugged in while the Settings window was open
+	/// never showed until it was opened again (live 2026-10-15: the DragonFly, removed and plugged
+	/// back in). Notifications come in bursts, so one probe a second after the first, as the agent does.
+	private func devicesChanged() {
+		guard !agentAlive, !probePending else { return }
+		probePending = true
+		DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+			MainActor.assumeIsolated {
+				guard let self else { return }
+				self.probePending = false
+				if !self.agentAlive { self.loadDevices() }
+			}
+		}
 	}
 
 	/// the device *Follow the macOS output* holds exclusively, which it stays on (Settings.followDevice)
@@ -187,14 +222,21 @@ final class PlayerModel {
 	}
 
 	/// what is saved now, for the window to edit (the volume warning compares with it; Revert goes back
-	/// to it; Save writes the names changed from it). A file that does not decode shows the defaults,
-	/// and Save keeps it as settings-unreadable.json (Settings.save)
+	/// to it). A file that does not decode shows the defaults, and Save keeps it as
+	/// settings-unreadable.json (Settings.save)
 	func reload() {
 		let stored = PlayerCore.Settings.read()
 		if case .current(let read) = stored { settings = read } else { settings = PlayerCore.Settings() }
 		if case .unreadable = stored { settingsUnreadable = true } else { settingsUnreadable = false }
 		draft = settings
 		heldNote = [:]
+	}
+
+	/// A player's name as LMS has it (its name file), shown and never edited here (LMS OWNS THE
+	/// PLAYER NAME); settings.json's, the name it offers LMS, until LMS has named it. Never put in
+	/// the draft: saved, it would change the engine's -n and restart it.
+	func lmsName(_ row: PlayerRow) -> String {
+		lmsNames[row.key] ?? draft.player(row.key, device: row.device).name
 	}
 
 	func loadDevices() {
@@ -236,13 +278,76 @@ final class PlayerModel {
 		}
 	}
 
-	private var statusServer: LMSServer? {
-		guard agentAlive, let status, let host = status.serverHost, let port = status.serverWebPort else { return nil }
+	private var statusServer: LMSServer? { agentAlive ? lastServer : nil }
+
+	/// the server the agent last used, from status.json, also while the player is off
+	private var lastServer: LMSServer? {
+		guard let status, let host = status.serverHost, let port = status.serverWebPort else { return nil }
 		return LMSServer(host: host, webPort: port, name: status.serverName)
 	}
 
-	/// false when a file could not be written, a Name is blank, or Fixed has no level to hold
-	/// (lastError says why)
+	/// Removes a device's player for good, so the device can be added fresh (Simon, 2026-10-15: "if I no
+	/// longer owned one of the devices its stuck forever"): its settings, its identity (MAC, name file)
+	/// and logs, and its player in LMS. Not part of Save: it acts at once and keeps the window's other
+	/// edits. In order, because a running engine would reconnect: the settings first (the agent stops
+	/// the engine at its next tick), then wait until the agent no longer lists the player, then the
+	/// files, then LMS (`LMSClient.forget`, which waits for LMS to see it disconnected).
+	func removePlayer(_ row: PlayerRow) async {
+		guard !row.isFollow, removing == nil else { return }
+		let key = row.key, name = lmsName(row)
+		removing = key
+		defer { removing = nil }
+		editingPlayer = nil
+		removeNote = nil
+		switch PlayerCore.Settings.read() {
+		case .current(let stored):
+			do {
+				try stored.removing(key).save()
+			} catch {
+				removeNote = "Could not remove \(name): \(error.localizedDescription)"
+				return
+			}
+		case .unreadable:
+			removeNote = "Could not remove \(name): settings.json cannot be read."
+			return
+		case .older, .missing:
+			break
+		}
+		settings = settings.removing(key)
+		draft = draft.removing(key)
+		heldNote[key] = nil
+		let mac = PlayerIdentity.mac(at: Paths.mac(key)), server = lastServer
+		for _ in 0..<20 {
+			refresh()
+			if !agentAlive || status?.player(key) == nil { break }
+			try? await Task.sleep(for: .milliseconds(500))
+		}
+		if agentAlive, status?.player(key) != nil {
+			removeNote = "\(name) did not stop, so its identity and LMS's player were kept: try Remove again."
+			return
+		}
+		for url in Paths.files(of: key) { try? FileManager.default.removeItem(at: url) }
+		lmsNames[key] = nil
+		// never started: LMS never knew it
+		guard let mac else {
+			removeNote = "Removed \(name)."
+			return
+		}
+		guard let server else {
+			removeNote = "Removed \(name) from LyrionPlay. LMS's server is not known: forget the player in LMS."
+			return
+		}
+		switch await LMSClient(server: server).forget(player: mac) {
+		case .forgotten, .notListed:
+			removeNote = "Removed \(name) from LyrionPlay and LMS."
+		case .stillConnected:
+			removeNote = "Removed \(name) from LyrionPlay. LMS still shows it connected: forget the player in LMS."
+		case .noAnswer:
+			removeNote = "Removed \(name) from LyrionPlay. LMS did not answer: forget the player in LMS."
+		}
+	}
+
+	/// false when the file could not be written, or Fixed has no level to hold (lastError says why)
 	@discardableResult
 	func save(_ draft: PlayerCore.Settings) -> Bool {
 		// a saved volume choice a device does not offer is read as one it does (Settings.player);
@@ -250,16 +355,6 @@ final class PlayerModel {
 		var draft = draft
 		for row in rows where draft.players[row.key] != nil {
 			draft.players[row.key] = draft.forSaving(row.key, device: row.device)
-		}
-		// a Name typed here, as squeezelite keeps it (PlayerSettings.fitName); never blank
-		for (key, name) in draft.renames(since: settings, devices: devices) {
-			let fitted = PlayerSettings.fitName(name)
-			guard !fitted.isEmpty else {
-				lastError = "\(key == PlayerKey.follow ? "Follow the macOS output" : devices.first { $0.uid == key }?.name ?? "A player") needs a name."
-				saveError = lastError
-				return false
-			}
-			draft.players[key]?.name = fitted
 		}
 		for row in rows {
 			guard let device = row.device, device.volume != nil, draft.players[row.key] != nil else { continue }
@@ -271,11 +366,6 @@ final class PlayerModel {
 		}
 		do {
 			try Paths.createDirectories()
-			// the names typed here go to the name files first, so the agent finds them there when it
-			// sees settings.json change (PlayerIdentity.renameReached); nothing else here touches them
-			for (key, name) in draft.renames(since: settings, devices: devices) {
-				try PlayerIdentity.writeName(name, at: Paths.playerName(key))
-			}
 			try draft.save()
 			settings = draft
 			self.draft = draft
@@ -443,6 +533,11 @@ struct SettingsView: View {
 				Text("settings.json could not be read, so these are the defaults. Save replaces it; the old file is kept as settings-unreadable.json.")
 					.font(.caption).foregroundStyle(.orange)
 			}
+			if model.removing != nil {
+				Text("Removing the player…").font(.caption).foregroundStyle(.secondary)
+			} else if let note = model.removeNote {
+				Text(note).font(.caption).foregroundStyle(.secondary)
+			}
 			if let error = model.saveError {
 				Text(error).font(.caption).foregroundStyle(.red)
 			}
@@ -465,6 +560,7 @@ struct SettingsView: View {
 		}
 		.onAppear {
 			model.clearSaveError() // from an earlier opening
+			model.removeNote = nil
 			model.loadDevices()
 			model.reload()
 		}
@@ -480,7 +576,7 @@ struct PlayerRowView: View {
 		let player = model.draft.player(row.key, device: row.device)
 		HStack {
 			VStack(alignment: .leading, spacing: 2) {
-				Text(row.isFollow ? "Follow the macOS output" : player.name)
+				Text(row.isFollow ? "Follow the macOS output" : model.lmsName(row))
 				Text(subtitle(player)).font(.caption).foregroundStyle(.secondary)
 			}
 			Spacer()
@@ -505,7 +601,7 @@ struct PlayerRowView: View {
 
 	private func subtitle(_ player: PlayerSettings) -> String {
 		guard let device = row.device else { return row.isFollow ? "No output device" : "Not connected" }
-		return row.isFollow ? "\(player.name), now on \(device.name) (\(device.rateSummary))" : device.rateSummary
+		return row.isFollow ? "\(model.lmsName(row)), now on \(device.name) (\(device.rateSummary))" : device.rateSummary
 	}
 }
 
@@ -517,7 +613,10 @@ struct PlayerSettingsView: View {
 	var body: some View {
 		Form {
 			Section(row.isFollow ? "Follow the macOS output" : (row.device?.name ?? model.draft.player(row.key, device: nil).name)) {
-				TextField("Name", text: setting(\.name))
+				// renamed in LMS only (LMS OWNS THE PLAYER NAME, Simon 2026-10-15)
+				LabeledContent("Name", value: model.lmsName(row))
+				Text("Rename this player in LMS, in its player settings.")
+					.font(.caption).foregroundStyle(.secondary)
 				if let device = row.device {
 					Toggle("Exclusive mode", isOn: setting(\.exclusive))
 					// macOS moves its own output away from a device held exclusively, so the keys move that one
@@ -553,6 +652,14 @@ struct PlayerSettingsView: View {
 						.font(.caption).foregroundStyle(.secondary)
 				}
 			}
+			if !row.isFollow {
+				Section {
+					Button("Remove This Player…", role: .destructive) { model.confirmRemove = row.key }
+						.disabled(model.removing != nil)
+					Text("Forgets this player's settings and its player in LMS, so the device can be added fresh. A device still connected is listed again as a new player, switched off.")
+						.font(.caption).foregroundStyle(.secondary)
+				}
+			}
 			HStack {
 				Spacer()
 				Button("Done") { model.editingPlayer = nil }
@@ -561,6 +668,17 @@ struct PlayerSettingsView: View {
 		}
 		.formStyle(.grouped)
 		.frame(width: 460)
+		.confirmationDialog("Remove \(model.lmsName(row))?",
+							isPresented: Binding(get: { model.confirmRemove == row.key },
+												 set: { if !$0 { model.confirmRemove = nil } }),
+							titleVisibility: .visible) {
+			Button("Remove", role: .destructive) {
+				model.confirmRemove = nil
+				Task { await model.removePlayer(row) }
+			}
+		} message: {
+			Text("Its settings, its identity and its player in LMS are removed. This cannot be undone.")
+		}
 	}
 
 	/// Under the DoP switch. DoP plays at full scale whatever LMS's level (upstream output.c: the gain

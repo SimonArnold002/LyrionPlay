@@ -879,10 +879,15 @@ int main(int argc, char **argv) {
 	}
 #endif
 
+#if !COREAUDIO
 	if (name && namefile) {
 		fprintf(stderr, "-n and -N option should not be used at same time\n");
 		exit(1);
 	}
+#else
+	// both: the -N file holds LMS's name once LMS has named the player; -n is the name a new player
+	// offers (slimproto.c, name_from_lms)
+#endif
 
 	slimproto(log_slimproto, server, mac, name, namefile, modelname, maxSampleRate);
 

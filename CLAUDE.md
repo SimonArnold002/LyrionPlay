@@ -226,8 +226,10 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "a status check holds up a volume push" (`LMSClient.playerStates`, `status` per player in turn) | **WRONG** (§A3, source 2026-10-14) | `A STATUS CHECK HOLDS UP A PUSH` |
 | /code-review 2026-10-14 of 0.2.10-0.4.5 (7faf2f8..682cab2): a settings file that did not decode set aside (`Settings.read`); a rename saved while off (`PlayerIdentity.applyName`, `settings-name`, was `ensureNameFile`); Follow switched off while deferred (`OutputFollow.resolve`); Fixed's held level off LMS's gain (`HeldVolume.dB`, `LMSVolume.gain`); engines stopped one at a time (`stopEngines`); the tap procedure's `engine.pid`; `macName`; serial `playerStates` | **1-4, 6, 8 VERIFIED + FIXED 2026-10-14** (Simon: "Verify the rest and look to fix"; 1 for 0.4.0 on only), 5 mutants killed, suite PASS; **5, 7 CLEARED** (§A3); not built (§C) | `CODE-REVIEW 2026-10-14` |
 | /code-review 2026-10-15 of the CODE-REVIEW 2026-10-14 fixes (tree): an unreadable settings.json at agent start renaming Follow (`applyName`, `loadSettings`); a version above 2 saved back unchanged (`Settings.read`, `save`); `applyName`'s two writes; the 0.3.x comment in `Settings.read`; `stopping` appended twice in `reconcile` | **1, 2, 4 VERIFIED + FIXED 2026-10-15** (Simon: "verify them all and look to fix check for all carriees and callers"), plus the 0.3.x cut-off off `currentVersion` (`firstPlayersVersion`, found in the carrier audit); 7 mutants killed; suite PASS; **3, 5 CLEARED** (3 measured: the next call repairs it, no writer; 5: a no-op repeat, comment added); not built | `CODE-REVIEW 2026-10-15` |
-| the player name file's writers; the agent writing settings.json's names to it (`applyName`, `settings-name`, `saved:`, `settingsRead` are GONE); `PlayerIdentity.createNameFile`/`writeName`/`renameReached`, `Settings.renames(since:devices:)` | **DECIDED 2026-10-15** (my design, on Simon's "Saving settins should not be so complicated"): two writers only, Settings' Save for a Name typed there and squeezelite for an LMS rename; the agent only makes a missing file (§A2) | `THE NAME FILE HAS TWO WRITERS` |
-| /code-review 2026-10-15 (2) of the 2026-10-15 fixes (tree): the defaults' name over a name file when settings.json is missing (`loadSettings`, `settingsRead`); the app's Save over an unreadable file; names past squeezelite's 63 bytes or blank (`fitName`); the engine's `<lms>` -1 comment; `applyName`'s `saved:`; the duplicated settings adopt in `run`/`tick`; `chooseVolume`'s inline MAC parse (`PlayerIdentity.mac(at:)`) | **ALL 7 VERIFIED + FIXED 2026-10-15** (Simon: "review this area thorouhgly … Verify and fix all"); 1, 5, 6 by removing the agent's name writing (`THE NAME FILE HAS TWO WRITERS`); 6 mutants killed; suite PASS; not built | `CODE-REVIEW 2026-10-15 (2)` |
+| player names; renaming in the app (the cog's Name field, `writeName`, `createNameFile`, `restartsForRename`, `Settings.renames`/`withCurrentNames`, `PlayerState.name`: all GONE); the engine's `-n` + `-N`, `name_from_lms`, the empty answer to LMS's name query; `PlayerModel.lmsName` | **DECIDED by Simon 2026-10-15** ("remove renaming as an option in the app and leave it to LMS to do this and it syncs. Only time our app creates a name is when a device is added"): LMS owns the name; supersedes `THE NAME FILE HAS TWO WRITERS` (§A2) | `LMS OWNS THE PLAYER NAME` |
+| removing a device's player: Remove This Player… in its cog (`PlayerModel.removePlayer`, `confirmRemove`, `removeNote`), `Settings.removing`, `Paths.files(of:)`, `LMSClient.forget`/`ForgetResult`/`listing`, LMS `client forget` | **BUILT 2026-10-15 at Simon's request** ("we also need a way to remove devices … so we can add them fresh again … This should remove it from LMS as well"), not built/installed (§A2) | `REMOVE A PLAYER` |
+| a player's name bouncing between two values ~150 times a second (LMS and squeezelite confirming each other's `setd`); an LMS rename not reaching a playing player | **MEASURED 2026-10-15** (rig engine log + LMS 9.1 source, §A3) | `TWO NAMES IN FLIGHT LOOP` |
+| /code-review 2026-10-15 (2) of the 2026-10-15 fixes (tree): the defaults' name over a name file when settings.json is missing (`loadSettings`, `settingsRead`); the app's Save over an unreadable file; names past squeezelite's 63 bytes or blank (`fitName`); the engine's `<lms>` -1 comment; `applyName`'s `saved:`; the duplicated settings adopt in `run`/`tick`; `chooseVolume`'s inline MAC parse (`PlayerIdentity.mac(at:)`) | **ALL 7 VERIFIED + FIXED 2026-10-15** (Simon: "review this area thorouhgly … Verify and fix all"); 1, 5, 6 by removing the agent's name writing (`THE NAME FILE HAS TWO WRITERS`); 6 mutants killed; suite PASS; **INSTALLED as 0.4.6** 2026-10-15 00:09Z (commit 73735a1, dev, unpushed); a rename saved while off VERIFIED LIVE (§B) | `CODE-REVIEW 2026-10-15 (2)` |
 
 ### HOW TO LOG A VERDICT so the next round finds it
 Every new decision goes in §A2 (declined or by design), §A3 (a belief a measurement killed), §B
@@ -551,6 +553,13 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
       --install`, suite PASS inside it; install.sh "the player is unchanged: it keeps running", "version 0.4.5
       (was 0.4.4)"; menu app restarted 22:33:55Z; prodmac46 still paused and connected after. The captions NOT
       yet seen live.
+    - **0.4.6 / 0.4.7 / 0.4.8** (2026-10-15): 0.4.6 = CODE-REVIEW 2026-10-15 (2) (commit 73735a1); 0.4.7 = LMS
+      renames shown in Settings (uncommitted; its install's reconnect set off `TWO NAMES IN FLIGHT LOOP` on
+      the DragonFly, ended when Simon switched the player Off at 00:29:20Z); **0.4.8** (Simon: "build and
+      install") = `LMS OWNS THE PLAYER NAME` (engine + app) and `REMOVE A PLAYER`. INSTALLED ~00:50Z: suite
+      PASS inside build.sh, install.sh "version 0.4.8 (was 0.4.7)", the new menu app running. The player was
+      OFF before (no launch agent plist) and stays off until Simon switches it on: no agent or engine of
+      0.4.8 has run yet.
 - **APPLE SILICON ONLY — Simon, 2026-10-09.** arm64 only, macOS 14+. No universal builds.
 - **NO VIRTUAL AUDIO DRIVERS — Simon, 2026-10-09.**
   - Simon: "we dont need blackhole it messes up things last time i installed it and was hard to
@@ -951,26 +960,110 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
   over by the agent. A change of format that cannot be read that way needs version 3 and a migration
   from 2, never a reset. The set-aside cut-off is `firstPlayersVersion` (2), never `currentVersion`;
   `save` always writes `currentVersion` (CODE-REVIEW 2026-10-15). A missing or unreadable file never
-  renames a player: the agent writes no name over a name file (`THE NAME FILE HAS TWO WRITERS`). The
+  renames a player: LyrionPlay writes no name file at all (`LMS OWNS THE PLAYER NAME`). The
   Settings window shows the defaults for an unreadable file and says so; its Save keeps the file as
   settings-unreadable.json first (`Settings.save`). Settings from before 0.4: not migrated (`ONE PLAYER PER DAC`); never report
   their set-aside as a defect.
-- **THE NAME FILE HAS TWO WRITERS — DECIDED 2026-10-15** (my design, on Simon's instruction: "The
+- **LMS OWNS THE PLAYER NAME — DECIDED by Simon 2026-10-15, BUILT the same day, INSTALLED as 0.4.8 (uncommitted), not live-tested**
+  (Simon, after 0.4.7's name loop: "I think remove renaming as an option in the app and leave it to LMS
+  to do this and it syncs. Only time our app creates a name is when a device is added as we do already.
+  Being able to save it in both locations is adding more probelems to code round"). Supersedes `THE NAME
+  FILE HAS TWO WRITERS` below.
+  - **The app renames nothing.** The cog shows *Name* read-only ("Rename this player in LMS, in its
+    player settings."), the player row and Follow's subtitle show it: `PlayerModel.lmsName`, the name
+    file, else settings.json's. Never put into the draft: saved, it would change `-n` and restart the
+    engine. settings.json's `name` is only the name a NEW player offers (the defaults, `fitName`d).
+  - **Nothing in LyrionPlay writes the name file;** only the engine does, with every name LMS sends
+    (upstream `process_setd`). The agent passes `-n <settings name> -N <file>` (`EngineArguments`; both
+    together only in this fork, main.c). The menu and agent.log read the file (`writeStatus`, `makeSlot`).
+  - **The engine leaves the name to LMS** (`slimproto.c`, `name_from_lms`): once the `-N` file held a
+    name at start, or LMS set one, it answers LMS's name query (at every connect) with an EMPTY name,
+    and LMS sends its own (`playerSettingsFrame`: an empty value -> `setPlayerSetting(pref)`). A new
+    player (no file, or an empty one) answers with `-n` once; LMS takes it and sends it back, which
+    writes the file. So an LMS rename made while the player was disconnected, or queued while it played,
+    reaches the player at the next connect instead of being overwritten by the player's old name, and
+    two names can no longer chase each other (`TWO NAMES IN FLIGHT LOOP`, §A3).
+  - Never re-add a Name field, a rename path in the app, or an agent that writes names.
+
+- **REMOVE A PLAYER — BUILT 2026-10-15 at Simon's request, INSTALLED as 0.4.8 (uncommitted), not live-tested** (Simon:
+  "we also need a way to remove devices from the app/agent so we can add them fresh again if need be.
+  Currently if I no longer owned one of the devices its stuck forever. This should remove it from LMS as
+  well of possible"). *Remove This Player…* at the foot of a device player's cog (never *Follow the macOS
+  output*), with a confirmation; it acts at once, not at Save, and keeps the window's other edits
+  (`PlayerModel.removePlayer`). In order, because a running engine reconnects:
+  1. its entry out of settings.json on disk and out of `settings`/`draft` (`Settings.removing`); an
+     unreadable settings.json refuses the remove;
+  2. wait (up to 10 s, status every 0.5 s) until the agent no longer lists the player (its tick saw it
+     off and stopped the engine); still listed: nothing more is removed, and the window says so;
+  3. its files: `players/<slug>/` (MAC, name file, engine.pid) and `engine-<slug>.log` + `.1`
+     (`Paths.files(of:)`);
+  4. LMS, at the server status.json last named (also while the player is off): `LMSClient.forget` waits
+     up to 5 s for LMS to show it disconnected, sends `<mac> client forget`, and checks `players`.
+  The Settings window says the outcome (`removeNote`): removed from LyrionPlay and LMS; LMS not known,
+  not answering, or still showing it: forget the player in LMS. LMS facts (9.1 source,
+  `clientForgetCommand`): forget is IGNORED, silently, while the player is connected; it removes the
+  player from LMS's list as LMS's own Forget does; LMS keeps its prefs under the MAC, never used again
+  (a device back after a remove gets a new MAC, so a new LMS player with the default name). A device
+  still connected is listed again at once, off, with the defaults. Tests: suite `RemovingAPlayer`
+  (LMS stubbed through `URLProtocol`: forget only once disconnected, never while connected, a refused
+  forget said, nothing sent when not listed or no answer; the settings, Follow kept, the files). MUTANTS,
+  5 of 5 killed (no wait for the disconnect, forget not checked, not-listed forgotten, Follow removable,
+  the older log kept). Live check owed: remove a disconnected DAC (gone from the list and from LMS), and
+  a connected one (back as new, off; switched on, a new LMS player).
+  - **LIVE on 0.4.8, 2026-10-15** (Simon: "replugging back in has not seen it"): the DragonFly removed
+    (settings entry and `players/AppleUSBAudioEngine-AudioQuest-AudioQuest-Dragon-ea39/` gone, so the
+    remove's steps 1 and 3 worked), then replugged: `squeezelite -l` listed it, the Settings list did not.
+    NOT the remove: with the player OFF (no agent since 00:29:20Z) the app took devices only from its
+    probe when the Settings window OPENED, and `refresh` read status.json's devices whenever the player
+    was switched on, even from an agent that had stopped. Older than 0.4.8. FIXED in tree, not built:
+    `PlayerModel` runs `AudioDeviceWatcher` and probes 1 s after a device change while no agent is alive
+    (`devicesChanged`); `refresh` takes status.json's devices only from a live agent (`agentAlive`). Not
+    covered by a suite (app UI). Simon then switched the player on (00:49:34Z, "my mistake": it was off):
+    agent.log "agent started: LyrionPlay 0.4.8", the engine with `-n simonsMac -N …/follow/name`;
+    engine-follow.log "retrieved name simonsMac", then ONE "set name: simonsMac" 5 s later (LMS sending
+    its own name after the empty answer: `LMS OWNS THE PLAYER NAME` at a connect, as designed); LMS lists
+    simonsMac only, the DragonFly's old player 82:6a:8f:3d:06:01 gone (forgotten by the remove, or
+    dropped as disconnected: not told apart); status.json lists the DragonFly, so the Settings list shows it.
+  - **VERIFIED LIVE on 0.4.8, 2026-10-15** (Simon: "changed name in LMS it synced to agent"): the removed
+    DragonFly switched on came back as a NEW player: new MAC 62:7e:9f:0a:57:38, offering its `-n` default,
+    engine log 01:51:00 local "set name: prodmac46 AudioQuest DragonFly Black v1.5" (LMS took it and sent it
+    back). Renamed in LMS while connected: 01:51:46 "set name: AudioQuest DragonFly", ONE line; its name
+    file, the menu (status.json) and LMS all "AudioQuest DragonFly". So a remove gives a fresh player, and
+    an LMS rename reaches LyrionPlay (`LMS OWNS THE PLAYER NAME`). Still owed: an LMS rename while PLAYING,
+    then a restart before it stops (the loop's case).
+  - **BUG found live the same minute** (Simon: "but not in the app"): the Settings window kept the old
+    name. `PlayerModel.lmsName` read the name file in the view, which SwiftUI cannot observe, so no redraw
+    followed an LMS rename until the window reopened. FIXED in tree, not built: `PlayerModel.lmsNames`,
+    read at every 1.5 s `refresh` for Follow, every saved player and every listed device, assigned only
+    when it changed; `lmsName` reads it; a remove drops its entry. Not covered by a suite (app UI).
+    **INSTALLED as 0.4.9** (with the device re-probe while off; Simon: "build and install"): suite PASS
+    inside build.sh, install.sh "the player is unchanged: it keeps running", "version 0.4.9 (was 0.4.8)";
+    menu app only (agent and engine of 0.4.8 kept running). **VERIFIED LIVE 2026-10-15** (Simon: "okay
+    works"); committed to dev with 0.4.7-0.4.9, unpushed.
+
+- **THE NAME FILE HAS TWO WRITERS — SUPERSEDED 2026-10-15 by `LMS OWNS THE PLAYER NAME`** (kept for the
+  record; INSTALLED as 0.4.6/0.4.7). DECIDED 2026-10-15 (my design, on Simon's instruction: "The
   saving settings issuesis becoming boring … Saving settins should not be so complicated"). `players/<slug>/name` (squeezelite
   `-N`) is the player's name. Two things write it, and nothing else may: the Settings window's Save,
   for a Name typed there (`PlayerIdentity.writeName`, before settings.json, for the names
   `Settings.renames(since:devices:)` gives against what the window opened on), and squeezelite, for a
   rename made in LMS. The agent only makes a missing one (`createNameFile`), and restarts a running
-  engine at a settings change only when the renamed player's file already holds the new name
-  (`renameReached`). Why: from 0.4.0 the AGENT applied settings.json's names to the file and had to
+  engine at a settings change only when the renamed player's file already holds the new name and
+  LMS (connected) does not have it already (`restartsForRename`, LMS's name from the 5 s `players`
+  check, `PlayerState.name`). Both ways of renaming are supported (Simon, 2026-10-15: "players can
+  be renamed via LMS Player settings or via the app"): the Settings window shows each player's name
+  from its name file (`Settings.withCurrentNames`, in `PlayerModel.reload`), so an LMS rename shows
+  there and a Save of anything else writes it into settings.json without a restart; the menu shows
+  the name file's name too (`writeStatus`). An empty name file counts as none. Why: from 0.4.0 the AGENT applied settings.json's names to the file and had to
   guess which ones were typed: 0.4.5 compared old and new settings (lost a rename saved while off),
   the 2026-10-14 tree kept a `settings-name` record, the 2026-10-15 tree added a `saved` flag, and each
   guess missed a case (CODE-REVIEW 2026-10-14 #2, 2026-10-15 #1, 2026-10-15 (2) #1 and #2). Only the
   window knows what was typed. Never move name writing back into the agent, and never write a name
   from a default. Names are `PlayerSettings.fitName`d (one line, 63 bytes of whole characters, what
-  squeezelite's `fgets` keeps); a blank one is refused at Save. Known and accepted: the Settings
-  window shows settings.json's name, not a rename made in LMS since (as 0.4.5 did); a rename in LMS
-  in the ~2 s between Save and the engine's restart is overwritten by Save's name.
+  squeezelite's `fgets` keeps); a blank one is refused at Save. Known and accepted: a rename in LMS
+  in the ~2 s between Save and the engine's restart is overwritten by Save's name; a Save within ~5 s
+  of an LMS rename, before the agent's next `players` check, restarts the engine once on the name
+  it already has.
 
 ### A3. DISPROVEN — beliefs the code suggests that measurement killed
 
@@ -1025,6 +1118,7 @@ evidence it cites.
 | DOP WORKS WITHOUT EXCLUSIVE MODE: DoP cannot reach a DAC in shared mode (*Follow the macOS output* with Exclusive off), since the engine sets an integer physical format only when it holds the device (`_configure`: `if (ca.hogged) set_physical_format`) and macOS's mixer would alter the DoP markers | **WRONG** (Simon, tested on the FiiO 2026-10-14) | My claim from the code, never tried on a DAC. Simon first saw no DoP through Follow; Follow's DoP switch was off ("My mistake it does work, i had. not enabled DoP on the MacOS player"). With it on, Exclusive off: engine-follow.log 22:55:03Z "exclusive: no", then "opened FiiO M11 Plus at 176400 Hz" and "at 352800 Hz" (DSD64, DSD128 as DoP), no "exclusive"; Simon: it works. Never tie DoP to Exclusive or take it off Follow on this belief. Confirmed again on 0.4.4 ("DoP works on follow without Exclusive mode"). Not tried: a device whose macOS volume is applied in software below full |
 | THE MAC'S NAME LOOKUP STALLS: `Host.current().localizedName` (NSHost) can block, so `PlayerSettings.macName`, read in every `Settings()` decode and for each unsaved device row at every Settings redraw, can stall the window or the agent | **WRONG** (measured 2026-10-14 on prodmac46, /code-review 2026-10-14 finding 5) | A scratch Swift binary timed it five times in one process: 3.1 ms the first call, then 0.05-0.12 ms each; `SCDynamicStoreCopyComputerName` 0.06 ms; both gave "prodmac46". Not measured: a Mac with no network or a slow DNS. Re-raise only with a measured stall. |
 | A STATUS CHECK HOLDS UP A PUSH: `LMSClient.playerStates` asks `status` for each player in turn, so with several players a Mac volume push waits behind the check | **WRONG** (source, 2026-10-14, /code-review 2026-10-14 finding 7) | The check runs on its own detached task (`refreshLMS`), and each push is its own `URLSession.shared` request from that player's `LatestValueSender` (`PlayerSlot.volumeSender`); nothing orders the two (no lock or queue in `LMSClient.call`; URLSession opens several connections per host). The calls in turn only delay what the menu shows, by about one LMS answer per extra player (38-49 ms, §B MAC SLIDER LAG), in a check every 5 s. Re-raise only with a push measured waiting on a check. |
+| TWO NAMES IN FLIGHT LOOP: a player's name syncs between LMS and squeezelite by itself: an LMS rename reaches the player, and the player's `-N` name reaches LMS, without conflict | **WRONG** (LMS 9.1 source + the rig's engine log, 2026-10-15) | LMS 9.1 `Squeezebox2.pm`: a `playername` pref change (`setChange`) calls `setPlayerSetting`, which sends `setd` ONLY if the player is stopped and no answer is awaited, else marks it pending and sends the pref at the next stop (~line 410). At every (re)connect `reconnect` sends the name QUERY (`getPlayerSetting`); squeezelite answers with its name (`process_setd`, len 5); `playerSettingsFrame` sets the pref to that answer (an empty answer instead makes LMS send its own pref). Every `setd` set is confirmed by squeezelite echoing the name. So a rename in LMS while the DragonFly was not stopped (between 01:12 and 01:20 local: no `set name` in its engine log) waited; the 0.4.7 install's reconnect at 01:20:39 put the query answer "AudioQuest DragonFly" and the pending "AudioQuest" in flight together; each confirm set the pref to the other value, whose change sent it again: 124,242 `set name` lines in 8 min 40 s (~240/s), the engine log 29 MB, until the engine stopped at 01:29:20. Fixed by `LMS OWNS THE PLAYER NAME` (the empty answer). Not reproduced on purpose. |
 
 ### B. KNOWN-OPEN AND ACCEPTED — do not re-report as new
 
@@ -1389,8 +1483,13 @@ evidence it cites.
   `players/follow/name` and settings.json both "simonsMac"; LMS `players` shows "simonsMac"
   (checked over HTTP). So an engine started on a new name file gives LMS that name. On 0.4.5 the
   AGENT wrote the file; in the tree (`THE NAME FILE HAS TWO WRITERS`) the app's Save writes it and
-  the same restart follows, so only the writer changed. Still UNVERIFIED: a rename saved while the
-  player is off on the TREE, and an LMS rename kept across a later Save.
+  the same restart follows, so only the writer changed. A rename saved while OFF: VERIFIED LIVE on
+  0.4.6, below. Still UNVERIFIED: an LMS rename kept across a later Save.
+- **A rename saved while OFF reaches LMS: VERIFIED LIVE on 0.4.6, 2026-10-15** (Simon: "confirmed it
+  works"). DragonFly switched off (agent.log 00:10:37Z "stopping the engine … switched off"), renamed
+  "AudioQuest DragonFly" and saved: its name file written 00:10:57Z by the app's Save while no engine
+  ran; switched on, agent.log 00:12:07Z "starting the engine of AudioQuest DragonFly"; settings.json,
+  the name file and LMS (82:6a:8f:3d:06:01, over HTTP) all "AudioQuest DragonFly".
 - **A rename saved while OFF does not reach LMS on 0.4.5: CONFIRMED LIVE 2026-10-15** (Simon: "I just
   edited Dragnfly whilst off then turned it on name in LMS has not changed but it has in the app"),
   as CODE-REVIEW 2026-10-14 #2 said. settings.json "AudioQuest DragonFly Black v1.5" (saved 01:06:22
@@ -1399,7 +1498,8 @@ evidence it cites.
   (82:6a:8f:3d:06:01) shows the old name. The tree's fix (Save writes the file) is not built. GAP in
   the tree: a mismatch left by 0.4.x is not repaired by the new build (Save writes only a Name typed
   after the window opened, and the window shows settings.json's name), so this DAC needs its name
-  typed again, or the window must show the name file's name (proposed to Simon, not decided).
+  typed again, or the window must show the name file's name. Simon typed it again (VERIFIED LIVE,
+  below), then said yes to the window showing it (§C `LMS RENAMES SHOW IN SETTINGS`, INSTALLED as 0.4.7).
 - **Review after 0.2.2 fixes (findings 1, 3 and 4): INSTALLED as 0.2.3** (Simon: "install and test on
   my dacs", version up yes, 2026-10-10 10:28Z; agent.log "LyrionPlay 0.2.3 (202610101128)", connected).
   1 and 4 VERIFIED LIVE on 0.2.5, below.
@@ -1578,8 +1678,45 @@ evidence it cites.
 Each entry records that a defect, as described, was fixed. It does not cover the code written to
 fix it (see HOW TO LOG).
 
+- **LMS OWNS THE PLAYER NAME — BUILT 2026-10-15, not built/installed** (Simon: "the name saved in the app
+  changed the player name in LMS on restart it did not go the other way", then "LMS name before restart
+  was just AudioQuest and on previous build that did not sync to the app so you had two different
+  names", then the decision, §A2). Found live on 0.4.7: `TWO NAMES IN FLIGHT LOOP` (§A3) ran on the
+  DragonFly for 8 min 40 s after the install's reconnect; LMS and its file ended at "AudioQuest".
+  - **Built:** engine `slimproto.c` (`name_from_lms`, the empty answer, an empty `-N` file falls back to
+    `-n`), `main.c` (`-n` with `-N`), UPSTREAM.md; `EngineArguments` passes `-n`; removed:
+    `Settings.renames`, `withCurrentNames`, `PlayerIdentity.createNameFile`/`writeName`/
+    `restartsForRename`, `PlayerState.name`, the agent's rename restart, the app's Name field, its
+    rename save and blank-name check; added `PlayerModel.lmsName`; the agent's `slot.name` and the
+    menu read the name file. INSTALL.md says to rename in LMS.
+  - **Carriers:** the name file: read by the engine (`-N` at start), `PlayerIdentity.name` (app rows,
+    cog, menu, agent log); written by the engine only (and `adoptOldPlayer`'s copy of 0.3.x's, missing
+    only). `-n`: settings.json's name, which nothing changes once saved (no Name field), so engine
+    arguments stay stable. `fitName` still fits the defaults (the only names given).
+  - **Tests:** `lmsOwnsThePlayerName` (name file read rules; `-n`/`-N` in the arguments; an LMS rename
+    leaves the arguments unchanged), `eachPlayerHasItsOwnIdentity` with `-n`; the rename tests removed
+    with their API. `scripts/test.sh` PASS; the full engine builds with no warning. The engine's name
+    logic is NOT covered by a suite (slimproto.c is not linked into it): live check owed after a build,
+    with Simon: rename a player in LMS while it plays, restart LyrionPlay before it stops; one `set
+    name` line, LMS's name kept, the menu and the cog show it.
+
+- **LMS RENAMES SHOW IN SETTINGS — SUPERSEDED the same day by `LMS OWNS THE PLAYER NAME`; BUILT 2026-10-15, INSTALLED as 0.4.7 00:20Z (uncommitted), not
+  live-tested** (agent.log "agent started: LyrionPlay 0.4.7 (202610150119)"; both players connected,
+  menu names = LMS names) (Simon: "build and install"; earlier,
+  to "the Name field could show the name the player actually has in LMS … Want me to do that?": "yes
+  players can be renamed via LMS Player settings or via the app"). Found on the rig the same day:
+  0.4.5's lost rename left the DragonFly's settings.json and name file apart, and 0.4.6 showed
+  settings.json's name, so the mismatch could not be seen or repaired by a Save. Now
+  `PlayerModel.reload` shows `Settings.withCurrentNames()` (the name files); Save compares typed
+  names with those; the agent skips the restart when connected LMS already has the new name
+  (`restartsForRename(_:at:lmsName:)`, `PlayerState.name` from the `players` loop); the menu reads the
+  name file. Rule in §A2 `THE NAME FILE HAS TWO WRITERS`. Test `aRenameInLMSShowsInSettingsAndStays`;
+  MUTANTS: LMS's name ignored, the file not checked, `withCurrentNames` a no-op, an empty file read
+  as a name (killed after an empty-file case was added): all 4 fail. `scripts/test.sh` PASS (swift
+  104 in 21 suites); `swift build` the one known warning. Not live-tested.
+
 - **CODE-REVIEW 2026-10-15 (2) — /code-review of the CODE-REVIEW 2026-10-15 fixes (uncommitted tree),
-  ALL 7 VERIFIED + FIXED, not built** (Simon: "lets do another /code-review of lyrionPLay", then "The
+  ALL 7 VERIFIED + FIXED, INSTALLED as 0.4.6 2026-10-15 00:09Z** (Simon: "commit and build and install and we can check"; commit 73735a1 on dev; agent.log "agent started: LyrionPlay 0.4.6 (202610150108)", both players connected) (Simon: "lets do another /code-review of lyrionPLay", then "The
   saving settings issuesis becoming boring review this area thorouhgly as it feels like same mistakes
   keep happening. Saving settins should not be so complicated. Verify and fix all"). The cause of the
   repeats: the agent applied settings.json's names to the name file and guessed which were typed;
@@ -1612,7 +1749,7 @@ fix it (see HOW TO LOG).
      `loadOrCreateMAC` uses too.
   - Carrier audit: name file: written by `writeName` (app Save), `createNameFile` (agent, missing
     only), `adoptOldPlayer` (copy, missing only), squeezelite (LMS rename); read by squeezelite and
-    `renameReached`. settings.json: written by the app's Save, the agent's missing-file save and
+    `renameReached` (now `restartsForRename`). settings.json: written by the app's Save, the agent's missing-file save and
     `setAsideOlder` (all through `save`); read by `Settings.read` only (`load` is the tests'). No
     `settings-name` exists on any install (the record was never built).
   - Tests: `aRenameInSettingsReachesTheNameFile` and `theDefaultsNeverRenameAPlayer` replaced by
