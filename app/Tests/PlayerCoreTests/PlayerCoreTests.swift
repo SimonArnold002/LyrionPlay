@@ -884,6 +884,45 @@ func value(_ option: String, in a: [String]) -> String? {
 		let status = try #require(AgentStatus.load(from: old))
 		#expect(status.players.isEmpty)
 	}
+
+	/// a player that is on with no identity (makeSlot could not make its files) is written with no MAC
+	/// at all, not "", LMS's request for no player (/code-review 2026-10-15 (8) finding 5)
+	@Test func aPlayerWithNoIdentityIsWrittenWithNoMAC() throws {
+		let url = FileManager.default.temporaryDirectory.appendingPathComponent("status-\(UUID()).json")
+		defer { try? FileManager.default.removeItem(at: url) }
+		var status = AgentStatus(agentPID: 1)
+		var none = PlayerStatus(key: dragonfly.uid, name: "DragonFly", mac: nil)
+		none.problem = "Could not create this player's files: disk full"
+		status.players = [PlayerStatus(key: PlayerKey.follow, name: "Mac", mac: "02:00:00:00:00:01"), none]
+		status.updated = Date(timeIntervalSince1970: 1_800_000_000)
+		try status.save(to: url)
+		let json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+		let players = try #require(json["players"] as? [[String: Any]])
+		let written = try #require(players.first { $0["key"] as? String == dragonfly.uid })
+		#expect(!written.keys.contains("mac"))
+		let follow = try #require(players.first { $0["key"] as? String == PlayerKey.follow })
+		#expect(follow["mac"] as? String == "02:00:00:00:00:01") // control: a MAC is written as before
+		let loaded = try #require(AgentStatus.load(from: url))
+		#expect(loaded == status)
+		#expect(loaded.player(dragonfly.uid)?.mac == nil)
+		#expect(loaded.player(dragonfly.uid)?.problem == "Could not create this player's files: disk full")
+	}
+
+	/// the menu's server line: as before for a player with an identity (control), none for one without,
+	/// which never connects (/code-review 2026-10-15 (8) finding 3)
+	@Test func aPlayerWithNoIdentityHasNoServerLine() {
+		var player = PlayerStatus(key: dragonfly.uid, name: "DragonFly", mac: "02:00:00:00:00:02")
+		#expect(player.serverLine(serverName: "Simons Music") == "Connecting to Simons Music…")
+		#expect(player.serverLine(serverName: nil) == "Looking for the server…")
+		player.connected = true
+		#expect(player.serverLine(serverName: "Simons Music") == "Connected to Simons Music")
+		#expect(player.serverLine(serverName: nil) == "Connected to LMS")
+		var none = PlayerStatus(key: dragonfly.uid, name: "DragonFly", mac: nil)
+		#expect(none.serverLine(serverName: "Simons Music") == nil)
+		#expect(none.serverLine(serverName: nil) == nil)
+		none.connected = true // never set for one; still no line
+		#expect(none.serverLine(serverName: "Simons Music") == nil)
+	}
 }
 
 /// counts the questions the push asks LMS

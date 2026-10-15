@@ -996,6 +996,7 @@ int main(int argc, char **argv) {
 		fflush(stdout);
 		make_dir();
 		pid_t pid = fork();
+		int fork_errno = errno;
 		if (pid == 0) {
 			alarm(10);
 			setup();
@@ -1003,13 +1004,19 @@ int main(int argc, char **argv) {
 			fflush(stdout);
 			_exit(failures ? 1 : 0);
 		}
+		// a test whose fork failed never ran: it fails. waitpid(-1) found no child and left status 0,
+		// which passed it (/code-review 2026-10-15 (8) finding 4; matrix() in the output suite since
+		// CODE-REVIEW 2026-10-11 (5))
 		int status = 0;
-		waitpid(pid, &status, 0);
+		bool waited = pid > 0 && waitpid(pid, &status, 0) == pid;
 		remove_dir();
-		bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+		bool ok = waited && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 		if (ok) passed++;
-		printf("%s %s%s\n", ok ? "✔" : "✘", tests[i].name,
-			   WIFSIGNALED(status) ? " (crashed or timed out)" : "");
+		char reason[160] = "";
+		if (pid < 0) snprintf(reason, sizeof(reason), " (not run: fork: %s)", strerror(fork_errno));
+		else if (!waited) snprintf(reason, sizeof(reason), " (its process was not waited for)");
+		else if (WIFSIGNALED(status)) snprintf(reason, sizeof(reason), " (crashed or timed out)");
+		printf("%s %s%s\n", ok ? "✔" : "✘", tests[i].name, reason);
 	}
 	printf("%d tests, %d passed\n", run, passed);
 	printf("result: %s\n", passed == run && run > 0 ? "PASS" : "FAIL");

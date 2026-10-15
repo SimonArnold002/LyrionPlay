@@ -60,6 +60,10 @@ final class PlayerSlot {
 	var args: [String]?
 	/// the device the running engine plays to
 	var device: DeviceCaps?
+	/// the device the last reconcile's plan puts it on, nil while it has none (not connected). The
+	/// menu shows it while the engine is down (waiting to restart, or failing to start), as 0.3.x showed
+	/// the device it was set to (/code-review 2026-10-15 (8) finding 2)
+	var plannedDevice: DeviceCaps?
 	/// what the running engine last said it plays (PCM, or DoP at a rate); nil until it says, and
 	/// again once it lets go of the device (`lyrionplay:format idle`, FormatLine)
 	var format: FormatReport?
@@ -122,6 +126,12 @@ final class Supervisor {
 	/// why a player that is on has no identity (makeSlot could not make its files), by player: the
 	/// menu shows it, and agent.log says it when it changes, not at every reconcile
 	private var identityProblems: [String: String] = [:]
+	/// while identityProblems has a player, a reconcile tries again after 1 s, doubling to 30 s, as an
+	/// engine's restart does (scheduleIdentityRetry). Before 0.4.0 the agent exited on this and launchd
+	/// started it again; with no retry, a full disk freed or a folder made writable went unseen until a
+	/// setting or a device changed (/code-review 2026-10-15 (8) finding 1)
+	private var identityRetry: DispatchWorkItem?
+	private var identityBackoff: TimeInterval = 1
 	private let engineURL = Paths.executable("squeezelite")
 	private var shuttingDown = false
 	private var nextMenuOpen = Date.distantPast
@@ -249,6 +259,7 @@ final class Supervisor {
 			slots[key] = slot
 		}
 		identityProblems = identityProblems.filter { on.contains($0.key) }
+		scheduleIdentityRetry()
 		let plan = EnginePlan.make(settings: settings, devices: devices, followDevice: followDevice) { key, device in
 			guard let slot = slots[key] else { return [] }
 			return EngineArguments.build(settings: settings, key: key, device: device, mac: slot.mac,
@@ -282,6 +293,7 @@ final class Supervisor {
 			startEngine(slot, spec)
 		}
 		for (key, slot) in slots {
+			slot.plannedDevice = plan[key]?.device
 			guard let spec = plan[key] else {
 				slot.setupProblem = key == PlayerKey.follow ? "No output device" : "Not connected"
 				continue
@@ -311,6 +323,7 @@ final class Supervisor {
 			let name = playerName(key)
 			if let adopted { log("\(name) carries on as the earlier version's player \(adopted)") }
 			let mac = try PlayerIdentity.loadOrCreateMAC(at: Paths.mac(key))
+			if identityProblems[key] != nil { log("created the identity of \(name)") }
 			identityProblems[key] = nil
 			return PlayerSlot(key: key, mac: mac, name: name)
 		} catch {
@@ -466,6 +479,29 @@ final class Supervisor {
 		slot.backoff = min(slot.backoff * 2, 30)
 	}
 
+	/// one reconcile waiting while a player that is on has no identity; none, and the backoff back to
+	/// 1 s, once each has one or is off. Its reconcile is any reconcile: it probes the devices, restarts
+	/// no running engine whose arguments are unchanged, and starts at once an engine waiting out its
+	/// restart backoff, as a device or settings change does. So another player's engine that keeps
+	/// exiting is also tried at the retries' first steps (measured in a sandbox: 4 more starts in
+	/// ~15 s), then both run in step, once per 30 s.
+	private func scheduleIdentityRetry() {
+		guard !identityProblems.isEmpty else {
+			identityRetry?.cancel()
+			identityRetry = nil
+			identityBackoff = 1
+			return
+		}
+		guard identityRetry == nil else { return }
+		let work = DispatchWorkItem { [weak self] in
+			self?.identityRetry = nil
+			self?.reconcile("retry")
+		}
+		identityRetry = work
+		DispatchQueue.main.asyncAfter(deadline: .now() + identityBackoff, execute: work)
+		identityBackoff = min(identityBackoff * 2, 30)
+	}
+
 	private func tick() {
 		let date = modificationDate(Paths.settings)
 		if date != settingsDate {
@@ -607,10 +643,11 @@ final class Supervisor {
 		for key in playersOn {
 			guard let slot = slots[key] else {
 				// on, but with no identity: shown with why, not left out, so the menu never says no
-				// player is on (/code-review 2026-10-15 (7) finding 3). Any other player on with no slot
-				// is one switched on since the last reconcile, which makes it.
+				// player is on (/code-review 2026-10-15 (7) finding 3); no MAC, and so no server line
+				// (/code-review 2026-10-15 (8) findings 3 and 5). Any other player on with no slot is one
+				// switched on since the last reconcile, which makes it.
 				if let problem = identityProblems[key] {
-					var player = PlayerStatus(key: key, name: playerName(key), mac: "")
+					var player = PlayerStatus(key: key, name: playerName(key), mac: nil)
 					player.problem = problem
 					status.players.append(player)
 				}
@@ -624,8 +661,9 @@ final class Supervisor {
 			player.engineRunning = slot.engine?.isRunning ?? false
 			player.enginePID = slot.engine?.processIdentifier
 			// the device actually played to, which for *Follow the macOS output* can differ from the
-			// macOS output (follow.deferred)
-			if let device = slot.device {
+			// macOS output (follow.deferred); while the engine is down, the one it is to play to. With no
+			// engine, `exclusive` stays false and there is no DoP rate (slot.format is nil)
+			if let device = slot.device ?? slot.plannedDevice {
 				player.deviceUID = device.uid
 				player.deviceName = device.name
 				if let id = CoreAudioQuery.device(uid: device.uid) {

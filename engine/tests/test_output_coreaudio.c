@@ -3353,18 +3353,24 @@ int main(int argc, char **argv) {
 		if (argc > 1 && !strstr(tests[i].name, argv[1])) continue;
 		fflush(stdout);
 		pid_t child = fork();
+		int fork_errno = errno;
 		if (child == 0) {
 			alarm(strcmp(tests[i].name, "matrix") ? 20 : 600); // a hang fails the test instead of the suite
 			tests[i].fn();
 			fflush(stderr);
 			_exit(failed);
 		}
+		// a test whose fork failed never ran: it fails. waitpid(-1) found no child and left status 0,
+		// which passed it (/code-review 2026-10-15 (8) finding 4; matrix() since CODE-REVIEW 2026-10-11 (5))
 		int status = 0;
-		waitpid(child, &status, 0);
-		bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+		bool waited = child > 0 && waitpid(child, &status, 0) == child;
+		bool ok = waited && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 		if (ok) passed++;
-		fprintf(stdout, "%s %s%s\n", ok ? "ok    " : "FAILED", tests[i].name,
-				WIFSIGNALED(status) ? (WTERMSIG(status) == SIGALRM ? " (hung)" : " (crashed)") : "");
+		char reason[160] = "";
+		if (child < 0) snprintf(reason, sizeof(reason), " (not run: fork: %s)", strerror(fork_errno));
+		else if (!waited) snprintf(reason, sizeof(reason), " (its process was not waited for)");
+		else if (WIFSIGNALED(status)) snprintf(reason, sizeof(reason), WTERMSIG(status) == SIGALRM ? " (hung)" : " (crashed)");
+		fprintf(stdout, "%s %s%s\n", ok ? "ok    " : "FAILED", tests[i].name, reason);
 	}
 	unsigned ran = 0;
 	for (unsigned i = 0; i < n; i++) ran += argc <= 1 || strstr(tests[i].name, argv[1]) != NULL;

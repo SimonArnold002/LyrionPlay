@@ -245,9 +245,12 @@ disproven belief or a cleared finding that is not written here will be re-report
 | /code-review 2026-10-15 (6) of 481dfa4 (0.4.11): a long LMS name stored cut inside a UTF-8 character (`strncpy` 64, `fgets` 63; now `fit_name`); "power cut" claimed with a plain `fsync` (now `flush_to_disk`, `F_FULLFSYNC`); a server stamped after an offer that was never written (`send_packet`/`sendSETDName` now return bool, `name_offered`); a new player's `-n` offer never stamped when LMS already had it (`name_offered` for every offer); `put_lms_level` reading `now` before `lv.lock` (a report stamped between wrapped `now - at`: LMS's answer put on mid-drag); the failed-write test's FAILED lines lost under `RLIMIT_FSIZE` (`limit_file_size`); the name file and stamp rewritten unchanged at every connect (`file_holds`); `refresh()` assigning unchanged values; `writeStatus` keeping a stale `slot.name` | **1-7 and 9 VERIFIED + FIXED 2026-10-15** (Simon: "yes look to fix these"; on 5: "if you can make it work first go with none then go for it"): 10 new engine name tests (9 FAIL on 481dfa4, 1 control) + 1 output test (FAILS on 481dfa4: the drag pulled back to -30.10 dB); 9 mutants killed; suite PASS; **8 DISPROVEN** (§A3 `AN EQUAL ASSIGNMENT NOTIFIES NO ONE`); committed bb5a583 (dev, unpushed); **INSTALLED as 0.4.12** 2026-10-15 20:47Z; every live check VERIFIED (an unchanged connect writes nothing, an LMS rename stores once, a new player names itself at the offer) (§C) | `CODE-REVIEW 2026-10-15 (6)` |
 | two LMS on ONE host on different slimproto ports judged as one server: `ask_server_uuid(slimproto_ip, PORT)` asking UDP 3483 whatever port the player connected to; `struct name_server` / `is_connected_server` / `name_servers` holding no port | **DECLINED by Simon 2026-10-15, NOT A FINDING** (/code-review 2026-10-15 (7) finding 1: "not supporting that use case at all its also highly unlikely on the same machine, not even sure its possible"); never re-raise, and do not offer the one-argument fix (§A2) | `TWO LMS ON ONE HOST` |
 | *Follow the macOS output*'s fallback when the macOS output is a DAC whose own player is on: `devices.first(where: \.isBuiltIn)` (Settings.swift) taking the first built-in output in `squeezelite -l` order, so speakers over plugged-in headphones | **DECLINED by Simon 2026-10-15, NOT A FINDING** (/code-review 2026-10-15 (7) finding 2: "headphones become primary output when they are plugged in") (§A2) | `FOLLOW'S BUILT-IN FALLBACK` |
-| /code-review 2026-10-15 (7) of 8371589 (0.4.12; `origin/dev` 7faf2f8..HEAD, tree clean): two LMS on one host (`ask_server_uuid(slimproto_ip, PORT)`); Follow's built-in fallback; a player that is on with no identity left out of status.json (`makeSlot`, `writeStatus`, now `identityProblems`); INSTALL.md's "keeps its row"; `Paths.slug`'s "never share" (4 hex of FNV-1a); UPSTREAM.md's new-files list without `tests/test_slimproto_name.c`; `chooseVolume` comparing the caption (now `HeldNote`, `.reading(UUID)`); the name suite's scratch folder left by a killed test (`setup`/`teardown`, now `make_dir`/`remove_dir` in the parent) | **1, 2 DECLINED by Simon** (`TWO LMS ON ONE HOST`, `FOLLOW'S BUILT-IN FALLBACK`); **3-8 VERIFIED + FIXED 2026-10-15** (Simon: "verify the rest", "fix the 7 issues"); 5's proposed fix (`%08x`) REFUSED: it renames every device player's folder (`THE SLUG IS NEVER WIDENED`); suite PASS; **INSTALLED as 0.4.13** 2026-10-15 22:15Z, committed to dev (unpushed); 3 and 7 not live-tested (§C) | `CODE-REVIEW 2026-10-15 (7)` |
+| /code-review 2026-10-15 (7) of 8371589 (0.4.12; `origin/dev` 7faf2f8..HEAD, tree clean): two LMS on one host (`ask_server_uuid(slimproto_ip, PORT)`); Follow's built-in fallback; a player that is on with no identity left out of status.json (`makeSlot`, `writeStatus`, now `identityProblems`); INSTALL.md's "keeps its row"; `Paths.slug`'s "never share" (4 hex of FNV-1a); UPSTREAM.md's new-files list without `tests/test_slimproto_name.c`; `chooseVolume` comparing the caption (now `HeldNote`, `.reading(UUID)`); the name suite's scratch folder left by a killed test (`setup`/`teardown`, now `make_dir`/`remove_dir` in the parent) | **1, 2 DECLINED by Simon** (`TWO LMS ON ONE HOST`, `FOLLOW'S BUILT-IN FALLBACK`); **3-8 VERIFIED + FIXED 2026-10-15** (Simon: "verify the rest", "fix the 7 issues"); 5's proposed fix (`%08x`) REFUSED: it renames every device player's folder (`THE SLUG IS NEVER WIDENED`); suite PASS; **INSTALLED as 0.4.13** 2026-10-15 22:15Z, committed to dev (unpushed); 7 VERIFIED LIVE 2026-10-15 (the read lands: "holds LMS volume 13 (-54.7 dB)"); 3 CLOSED untested live by Simon (cannot be made on the rig; re-open only on a user's report); round CLOSED (§C) | `CODE-REVIEW 2026-10-15 (7)` |
 | "`@Observable` notifies observers on every assignment, so `PlayerModel.refresh()` (`isOn`, `status`, `devices`, every 1.5 s) redraws the menu and Settings for unchanged values" | **WRONG** (§A3, measured 2026-10-15, Swift 6.4) | `AN EQUAL ASSIGNMENT NOTIFIES NO ONE` |
 | a name offer written but lost with the connection before LMS read it, so the server is stamped (or a new player named) without LMS having the name, and the next connect takes LMS's own (a new LMS's default); `name_offered`, `sendSETDName`/`send_packet`'s result, the stamp at an offer, any "confirmation" for it | **ACCEPTED by Simon 2026-10-15, NOT A FINDING** ("i am fine to accept that compromise make sure it isnt raised again"): it replaces the rename loop; re-raise only with the drop seen live (§A2) | `AN OFFER LOST IN FLIGHT` |
+| /code-review 2026-10-15 (8) of a893561 (0.4.13; `origin/dev` 7faf2f8..HEAD + the tree): no retry for a player whose files cannot be made (`makeSlot`, `identityProblems`, now `scheduleIdentityRetry`/`identityRetry`/`identityBackoff`); the menu's device line lost while an engine is down (`slot.device`, now `PlayerSlot.plannedDevice`); "Connecting to …" for a player with no identity (`StatusRows.serverLine`, now `PlayerStatus.serverLine`); a failed `fork()` counted as passed by the name and output runners (`waitpid`, now `waited`); the empty-string MAC (`PlayerStatus.mac`, now `String?`) | **ALL 5 VERIFIED + FIXED 2026-10-16** (Simon: "verify and fix all, test them all and please no more regressions"): each anti-run on a893561's own binary, the agent ones in a sandbox (`CFFIXED_USER_HOME SANDBOXES THE AGENT`), the runners under `ulimit -S -u 1`; 2 new suite tests, 2 mutants killed; a side effect MEASURED and ACCEPTED by Simon 2026-10-16 (a retry starts another player's waiting engine early: 4 more starts in ~15 s, then in step; `A RETRY STARTS A WAITING ENGINE`); suite PASS; **INSTALLED as 0.4.14** 2026-10-15 23:21Z (both players back on their MACs, connected); not committed (§C) | `CODE-REVIEW 2026-10-15 (8)` |
+| "`HOME=<dir>` runs the agent against a sandbox" / "the agent's `main.swift` can be tested only on the installed player" (`Paths.home`, `homeDirectoryForCurrentUser`) | **WRONG, both** (§A3, measured 2026-10-16): HOME is ignored, `CFFIXED_USER_HOME` moves it; never run the MENU APP that way (its Quit boots out the real agent) | `CFFIXED_USER_HOME SANDBOXES THE AGENT` |
+| an identity retry (`scheduleIdentityRetry`, `reconcile("retry")`) starting another player's engine that waits out its restart backoff (`restartWork`), so a crash-looping engine is started early while a player's files cannot be made | **ACCEPTED by Simon 2026-10-16, NOT A FINDING** ("side affect accepted will look it if it ever comes up in real world use"; measured: 4 more starts in ~15 s, then in step); re-raise only from a user's real log (§A2) | `A RETRY STARTS A WAITING ENGINE` |
 
 ### HOW TO LOG A VERDICT so the next round finds it
 Every new decision goes in §A2 (declined or by design), §A3 (a belief a measurement killed), §B
@@ -1086,6 +1089,20 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
   drop seen live: an engine log with an offer, the connection lost within a second, then LMS's default
   name at the next connect.
 
+- **A RETRY STARTS A WAITING ENGINE — ACCEPTED by Simon 2026-10-16, NOT A FINDING** ("side affect
+  accepted will look it if it ever comes up in real world use"). Symbols: `scheduleIdentityRetry`,
+  `identityRetry`/`identityBackoff`, `reconcile("retry")`, `scheduleRestart`/`restartWork`/`backoff`,
+  `EnginePlan.changes`. The behaviour (CODE-REVIEW 2026-10-15 (8) finding 1, MEASURED in the sandbox):
+  a retry for a player whose files cannot be made is a whole reconcile, so, as a device or settings
+  change does, it starts at once another player's engine that is waiting out its restart backoff. Only
+  while the two failures overlap: begun together the backoffs run in step (no extra start); begun
+  while the other engine waits 30 s, 4 more starts in ~15 s, then in step once per 30 s. That engine
+  exits at once either way; nothing is heard. Do NOT report it in any form (the retry "restarting
+  other players", "defeating the backoff", "doubling the restart rate"), and do not propose a case
+  in `reconcile` to skip a slot with `restartWork` pending. Re-raise only from real use: a user's
+  agent.log with an engine started at the retries while another player's files could not be made,
+  and a harm beyond the log lines.
+
 - **REMOVE A PLAYER — BUILT 2026-10-15 at Simon's request, INSTALLED as 0.4.8, committed bb4b0d0; a connected device's remove VERIFIED LIVE (below)** (Simon:
   "we also need a way to remove devices from the app/agent so we can add them fresh again if need be.
   Currently if I no longer owned one of the devices its stuck forever. This should remove it from LMS as
@@ -1249,6 +1266,7 @@ evidence it cites.
 | THE SETTINGS WINDOW'S PROBE FREEZES IT: `PlayerModel.loadDevices`, called in the Settings window's `onAppear`, runs `DeviceCaps.probe` (starts `squeezelite -l` and waits for it) on the main thread, so the window and the menu hang as it opens; round (3) moved only `devicesChanged`'s probe off the main thread | **WRONG** (measured 2026-10-15, /code-review 2026-10-15 (4) finding 3) | The installed engine's `squeezelite -l` timed three times on prodmac46 with 4 output devices: 0.07, 0.06, 0.06 s, once per opening of the window. Round (3)'s freeze was a different case: the device watcher probing at EVERY output change for the app's life with the window closed. Moving this one off the main thread would open the window with no devices and fill them in a moment later. Re-raise only with a device that makes `-l` slow, timed. |
 | A STOP CANNOT CUT THE NAME WRITE: the agent stopping an engine (Off, a device change, a settings restart) can land between `process_setd`'s truncate of the `-N` file and its write, leaving it empty, so the next start offers the `-n` default over LMS's name | **WRONG** (engine source, /code-review 2026-10-15 (5) finding 3) | The agent stops an engine with SIGTERM (`stopEngines`), and `main.c`'s `sighandler` only calls `slimproto_stop()`, which sets a flag the slimproto loop reads; `process_setd` runs to its end on that thread first. The SIGKILL after 3 s hits only an engine that did not exit, i.e. one not running `process_setd`. Writers of an empty file that remain: a full disk (truncate works, the data does not: reproduced with `RLIMIT_FSIZE` in `engine/tests/test_slimproto_name.c`) and a power cut or panic before the data reaches the disk; for those the file is now written to `.tmp` and renamed (§C `CODE-REVIEW 2026-10-15 (5)`), and since CODE-REVIEW 2026-10-15 (6) flushed to the disk itself first (`F_FULLFSYNC`: a plain `fsync` on a Mac left it in the drive's cache, so the power cut was not covered until then). Re-raise only with a stop that is not SIGTERM's flag. |
 | AN EQUAL ASSIGNMENT NOTIFIES NO ONE: an `@Observable` property notifies its observers at every assignment, so `PlayerModel.refresh()` assigning `isOn`, `status` and `devices` every 1.5 s re-evaluates the menu panel, the Settings window and the cog for unchanged data; guard each assignment with an equality check, as `lmsNames` is | **WRONG** (measured 2026-10-15 with the Command Line Tools' Swift 6.4, /code-review 2026-10-15 (6) finding 8) | A scratch `@Observable` class under `withObservationTracking`: a Bool, an optional Equatable struct and an array, each set to an EQUAL value, notified no one; set to a new value, notified; a non-Equatable struct set equal still notified. `-Xfrontend -dump-macro-expansions`: the macro's setter opens with `guard shouldNotifyObservers(_x, newValue) else { return }`, whose Equatable overload compares the values. `isOn` (Bool), `status` (`AgentStatus?`) and `devices` (`[DeviceCaps]`) are all Equatable, so the guard the review proposed is already there; `lmsNames`'s own guard is redundant, harmless. What does redraw is real: `status.updated` is the agent's heartbeat, rewritten every 2 s. Re-raise only with a property that is not Equatable, or a toolchain whose macro lacks `shouldNotifyObservers`. |
+| CFFIXED_USER_HOME SANDBOXES THE AGENT: `Paths.home` is `FileManager.default.homeDirectoryForCurrentUser`, so `HOME=<dir>` runs the agent against a sandbox; or else the agent's `main.swift` (reconcile, restarts, status.json) can be tested only on the installed player, which is why rounds up to (7) logged its fixes "compiled, not covered by a suite" | **WRONG, both** (measured 2026-10-16 on prodmac46, /code-review 2026-10-15 (8)) | A scratch Swift script printing `homeDirectoryForCurrentUser`: with `HOME=<dir>` it printed /Users/simona; with `CFFIXED_USER_HOME=<dir>`, the dir. The debug `Agent` from `swift build --package-path app --product Agent` (not in a .app, so `ensureMenu` opens nothing), run with `CFFIXED_USER_HOME=<sandbox>`, `LYRIONPLAY_ENGINE=<a fake engine script>` (prints `DeviceCaps` JSON lines for `-l`; otherwise logs its `-o` and `exec sleep`, or exits 1 on demand) and a settings.json with server `127.0.0.1:1` (discovery then asks only localhost; the JSON-RPC check is refused at once), ran the real reconcile, restart backoff, identity and status code: settings.json, status.json, `players/`, agent.log all in the sandbox; `CoreAudioQuery` finds no fake UID, so no device is read or held; SIGTERM to the PID launched stopped it and its fake engines. `chmod 555 <sandbox>/…/players` makes `makeSlot` fail for a player with no folder; a pre-made `players/<slug>/mac` keeps another player's identity. The slug of a fake UID is FNV-1a as `Paths.slug` (`FAKE-DAC-UID` -> `FAKE-DAC-UID-299a`). **Never run the menu app so**: `LaunchAgent.isLoaded`/`stop` act on the real agent's launchd label, and its Quit `launchctl bootout`s it. Re-raise only with a Foundation whose home ignores `CFFIXED_USER_HOME`. |
 
 ### B. KNOWN-OPEN AND ACCEPTED — do not re-report as new
 
@@ -1808,6 +1826,76 @@ evidence it cites.
 Each entry records that a defect, as described, was fixed. It does not cover the code written to
 fix it (see HOW TO LOG).
 
+- **CODE-REVIEW 2026-10-15 (8) — /code-review of a893561 (0.4.13; `origin/dev` 7faf2f8..HEAD plus the
+  tree, which changed only this file), ALL 5 VERIFIED + FIXED 2026-10-16, INSTALLED as 0.4.14
+  2026-10-15 23:21Z, not committed** (Simon: "lets do another /code-review lyrionplay", then "verify and fix all, test
+  them all and please no more regressions, review the code base properly before making changes").
+  Gates: none of the five in the index, §A2, §A3 or §C. Round (7)'s finding 3 CLOSED only its live
+  test; the retry this round adds was never there (0.4.0 dropped it), so finding 1 is new. Numbered
+  as shown to Simon (the review's own order was 1, 3, 4, 2, 5). Baseline suite PASS before any
+  change (engine output 70, name 43, swift 108, install.sh 3).
+  **Method:** the agent findings were run on the real agent binary in a sandbox (§A3 `CFFIXED_USER_HOME
+  SANDBOXES THE AGENT`): a fake engine (two fake USB DACs for `-l`, logs every probe and start, exits 1
+  on demand, else sleeps), server 127.0.0.1:1. Nothing reached the installed player, a device or
+  LMS. Every scenario ran on a893561's own binary (kept before any edit) and on the new one.
+  1. **A player whose files cannot be made was never tried again** — VERIFIED (old binary:
+     `players/` chmod 555, the player listed with "Could not create this player's files"; chmod 755:
+     still not started 40 s later, 1 probe in 24 s). 0.3.14 `exit(1)`ed on it ("cannot create the
+     player identity") and launchd's KeepAlive restarted the agent. FIXED: `scheduleIdentityRetry`
+     (`identityRetry`, `identityBackoff`): one `reconcile("retry")` waiting while `identityProblems`
+     has a player, 1 s doubling to 30 s as `scheduleRestart`; cancelled and back to 1 s when none.
+     agent.log "created the identity of <name>" when it works; the failure still logged once. New
+     binary: retries at 1, 3, 7, 15, 31 s (probes 3 -> 5 over 20 s); started 7 s after the folder
+     became writable (the next retry), "retry: starting the engine of …". Controls, same on both
+     builds: switched off while failing, no retry in 35 s (probes 4 -> 4); a healthy engine of
+     another player NOT restarted by 5 retries (1 start); a plain start unchanged.
+     **Side effect, MEASURED, ACCEPTED by Simon 2026-10-16** (§A2 `A RETRY STARTS A WAITING ENGINE`: "side
+     affect accepted will look it if it ever comes up in real world use"): a retry is a whole reconcile, so like
+     a device or settings change it starts at once another player's engine waiting out its restart
+     backoff. With both failures beginning together the two backoffs ran in step (DAC 2 started at
+     0 1 3 7 15 32 s on both builds). With the identity problem beginning while DAC 2 waited 30 s:
+     old 0 1 3 7 16 32 36 67, new 0 1 3 7 16 32 36 37 39 43 51 68: 4 more starts in ~15 s, then in
+     step once per 30 s. Only while two failures overlap; the engine exits at once either way.
+     Avoiding it needs a case in `reconcile` for the retry; the comment on `scheduleIdentityRetry`
+     says it (my first comment claimed "up to twice per 30 s", WRONG, corrected from the measurement).
+  2. **The menu lost a player's device while its engine was down** — VERIFIED (old: `deviceName` null
+     for each second of a restart backoff). 0.3.14 showed `engineDevice ?? settings.resolveDevice(in:)`.
+     FIXED: `PlayerSlot.plannedDevice` (each reconcile's `plan[key]?.device`), shown by `writeStatus`
+     while `slot.device` is nil; `exclusive` stays false (no engine PID) and there is no DoP rate
+     (`slot.format` nil). New: "Fake DAC" throughout the backoff. Carriers: `heldDevice` and
+     `syncFixedVolume` keep `slot.device`; the app's `heldFollowDevice` needs `exclusive`, false with no
+     engine; Remove's wait reads only whether the player is listed. Control, same on both builds:
+     unplugged -> no device line and "Not connected"; plugged back -> running.
+  3. **"Connecting to <server>…" for a player with no identity** — VERIFIED from the code (`StatusRows`
+     read only `connected`, false). FIXED: `PlayerStatus.serverLine(serverName:)`, moved from the app's
+     `StatusRows` with its three strings unchanged, is nil when `mac` is nil; the view then shows no
+     server line, and the problem line says why. Suite: `aPlayerWithNoIdentityHasNoServerLine` pins
+     the three strings (control) and the nil; mutant (the guard removed) failed it, 3 issues. Not seen
+     on screen: the menu app is not run in a sandbox (§A3, it boots out the real agent).
+  4. **A failed `fork()` counted as a passed test, in the name and output runners** — VERIFIED by an
+     anti-run: under `ulimit -S -u 1` the OLD name suite printed "43 tests, 43 passed / result: PASS",
+     the output suite "70 tests, 70 passed", both exit 0, nothing run. FIXED: `waited = pid > 0 &&
+     waitpid(pid, …) == pid`, so a test not waited for fails, with "(not run: fork: <strerror>)"; the
+     old messages unchanged for the old cases. Same run: "0 passed / result: FAIL", exit 1, no scratch
+     folder left; normal runs 43/43 and 70/70. Mutant (`pid > 0` dropped): "43 passed / PASS" again,
+     because `waitpid(-1)` returns -1, the failed pid, so the guard is the part doing the work.
+  5. **"No identity" was an empty-string MAC** — VERIFIED (`LMSClient.call` sends `[player, command]`,
+     and "" is LMS's server-level form; old status.json `"mac": ""`). FIXED: `PlayerStatus.mac` is
+     `String?`, nil there and not written; suite `aPlayerWithNoIdentityIsWrittenWithNoMAC` (no "mac"
+     key, a MAC still written, round trip). Readers: none use a status's `mac` (as round 7 found).
+     Transient: a 0.4.13 menu reading a new agent's status.json with such a player fails to decode it
+     ("Starting…") until the install replaces both.
+  Suite PASS after (engine output 70, name 43, swift 110, install.sh 3); the rebuilt test binaries are
+  tracked, as before. **INSTALLED as 0.4.14** (Simon: "build and install"; "Yes, 0.4.14" to version
+  up, `bump-version.sh patch`, INSTALL.html and README.html regenerated): `build.sh --install`, suite
+  PASS inside it; install.sh "installed: /Applications/LyrionPlay.app, version 0.4.14 (was 0.4.13)";
+  nothing was playing on either LyrionPlay player (LMS `players`, read before). agent.log "agent
+  started: LyrionPlay 0.4.14 (202610160020)", the DragonFly's and Follow's engines on their old MACs
+  (b6:4e:cb:e9:16:34, 96:57:54:14:bd:87), "LMS: using Simons Music (plex:9000)"; status.json lists
+  both with their MAC and device, connected, no problem. Owed live: nothing audible; 2 can be seen
+  only in a restart backoff, 1 and 3 need a player whose files cannot be written (round 7: not made
+  on the rig).
+
 - **CODE-REVIEW 2026-10-15 (7) — /code-review of 8371589 (0.4.12; `origin/dev` 7faf2f8..HEAD, tree
   clean), 1 and 2 DECLINED, 3-8 VERIFIED + FIXED 2026-10-15, INSTALLED as 0.4.13 2026-10-15 22:15Z,
   committed to dev (unpushed, Simon: "build install and commit")** (Simon: "lets do
@@ -1863,8 +1951,15 @@ fix it (see HOW TO LOG).
   before. INSTALLED as 0.4.13 (build.sh --install, suite PASS inside): agent.log "agent started:
   LyrionPlay 0.4.13 (202610152314)", the DragonFly's and Follow's engines on their old MACs
   (b6:4e:cb:e9:16:34, 96:57:54:14:bd:87: the slug, so each folder, unchanged), "LMS: using Simons
-  Music". Owed live: 3 (needs a player whose files cannot be written) and 7 (Fixed, another mode,
-  Fixed again on the DragonFly in the cog); neither makes sound.
+  Music". **7 VERIFIED LIVE 2026-10-15** (Simon, on 0.4.13: the DragonFly's cog, Fixed, another
+  mode, Fixed again, not saved): the caption read "holds LMS volume 13 (-54.7 dB)", LMS's own `mixer
+  volume ?` for b6:4e:cb:e9:16:34 = 13 (player stopped), so the read still lands under `HeldNote` (the
+  failure the finding warned of was a guard that never matches, leaving Fixed unsaveable). Not
+  observable live: that the first read's answer was dropped (both reads return 13 within ms); that
+  rests on the code. **3 CLOSED without a live test, Simon 2026-10-15** ("we cant test for what we
+  cant create so that is closed until it comes up as a problem from a user"): its writer (a full disk,
+  an unwritable `players/`) is not made on the rig; not an owed check, re-open only on a user's report.
+  ROUND CLOSED.
 
 - **CODE-REVIEW 2026-10-15 (6) — /code-review of 481dfa4 (0.4.11; `origin/dev` 7faf2f8..HEAD, tree
   clean), 1-7 and 9 VERIFIED + FIXED 2026-10-15, 8 DISPROVEN, committed bb5a583 to dev (unpushed, Simon: "commit"), INSTALLED as 0.4.12 2026-10-15 20:47Z** (Simon: "lets

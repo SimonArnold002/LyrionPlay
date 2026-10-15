@@ -493,7 +493,9 @@ struct StatusRows: View {
 
 	var body: some View {
 		VStack(alignment: .leading, spacing: 6) {
-			Label(serverLine, systemImage: player.connected ? "checkmark.circle.fill" : "circle.dashed")
+			if let line = player.serverLine(serverName: serverName) {
+				Label(line, systemImage: player.connected ? "checkmark.circle.fill" : "circle.dashed")
+			}
 			if let device = player.deviceName {
 				Label(outputLine(device), systemImage: player.exclusive ? "lock.fill" : "speaker.wave.2")
 			}
@@ -506,12 +508,6 @@ struct StatusRows: View {
 			}
 		}
 		.font(.callout)
-	}
-
-	private var serverLine: String {
-		if player.connected { return "Connected to \(serverName ?? "LMS")" }
-		if let name = serverName { return "Connecting to \(name)…" }
-		return "Looking for the server…"
 	}
 
 	private func outputLine(_ device: String) -> String {

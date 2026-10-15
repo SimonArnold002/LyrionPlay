@@ -55,9 +55,10 @@ public struct AgentStatus: Codable, Equatable, Sendable {
 public struct PlayerStatus: Codable, Equatable, Sendable {
 	public var key: String
 	public var name: String
-	/// its LMS player ID; empty for a player that is on but whose identity could not be made (its
-	/// problem says why)
-	public var mac: String
+	/// its LMS player ID; nil for a player that is on but whose identity could not be made (its
+	/// problem says why). Never "": that is LMS's request for no player (LMSClient.call), so a reader
+	/// passing it on would ask the server, not fail (/code-review 2026-10-15 (8) finding 5)
+	public var mac: String?
 	public var engineRunning: Bool
 	public var enginePID: Int32?
 	public var deviceUID: String?
@@ -74,12 +75,22 @@ public struct PlayerStatus: Codable, Equatable, Sendable {
 	/// the latest problem, in plain words
 	public var problem: String?
 
-	public init(key: String, name: String, mac: String) {
+	public init(key: String, name: String, mac: String?) {
 		self.key = key
 		self.name = name
 		self.mac = mac
 		engineRunning = false
 		exclusive = false
 		connected = false
+	}
+
+	/// The menu's first line for the player, its connection to LMS. None for a player with no
+	/// identity: it has no engine and never connects, so "Connecting…" was false (/code-review
+	/// 2026-10-15 (8) finding 3); its problem line says why.
+	public func serverLine(serverName: String?) -> String? {
+		guard mac != nil else { return nil }
+		if connected { return "Connected to \(serverName ?? "LMS")" }
+		if let serverName { return "Connecting to \(serverName)…" }
+		return "Looking for the server…"
 	}
 }
