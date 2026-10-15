@@ -242,7 +242,7 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "the Settings window freezes while it probes the devices on the main thread (`loadDevices` in `onAppear`)" | **WRONG** (§A3, measured 2026-10-15) | `THE SETTINGS WINDOW'S PROBE FREEZES IT` |
 | /code-review 2026-10-15 (5) of a0e6c7f + the tree: a server offered the player's name it already has never stamped (`process_setd`'s offer, `add_name_server`), so a rename it holds loops; the stamp unread with an empty name file (`load_player_name`, `load_name_servers`), so the next name cut it to one server; the name file and stamp written in place (`store_name`, `store_name_servers`, `open_replacement`/`replace_file`) and a failed write still restamped; no test of an unstamped server holding the name; two stale ledger lines; `makeSlot` reading `playerName` up to 3 times | **ALL 8 VERIFIED, ALL FIXED 2026-10-15** (Simon: "verify these and look to fix, test fixes and check for regrressions"); 4 new engine tests FAIL on a0e6c7f, 6 mutants killed; suite PASS; finding 3's stated cause (a stop mid-write) WRONG (§A3 `A STOP CANNOT CUT THE NAME WRITE`), its fix kept for a full disk / power cut; **INSTALLED as 0.4.11** 2026-10-15 19:12Z, committed (§C) | `CODE-REVIEW 2026-10-15 (5)` |
 | "the agent stopping the engine (Off, a device change, a restart) can cut `process_setd`'s name write between the truncate and the write" | **WRONG** (§A3, source 2026-10-15) | `A STOP CANNOT CUT THE NAME WRITE` |
-| /code-review 2026-10-15 (6) of 481dfa4 (0.4.11): a long LMS name stored cut inside a UTF-8 character (`strncpy` 64, `fgets` 63; now `fit_name`); "power cut" claimed with a plain `fsync` (now `flush_to_disk`, `F_FULLFSYNC`); a server stamped after an offer that was never written (`send_packet`/`sendSETDName` now return bool, `name_offered`); a new player's `-n` offer never stamped when LMS already had it (`name_offered` for every offer); `put_lms_level` reading `now` before `lv.lock` (a report stamped between wrapped `now - at`: LMS's answer put on mid-drag); the failed-write test's FAILED lines lost under `RLIMIT_FSIZE` (`limit_file_size`); the name file and stamp rewritten unchanged at every connect (`file_holds`); `refresh()` assigning unchanged values; `writeStatus` keeping a stale `slot.name` | **1-7 and 9 VERIFIED + FIXED 2026-10-15** (Simon: "yes look to fix these"; on 5: "if you can make it work first go with none then go for it"): 10 new engine name tests (9 FAIL on 481dfa4, 1 control) + 1 output test (FAILS on 481dfa4: the drag pulled back to -30.10 dB); 9 mutants killed; suite PASS; **8 DISPROVEN** (§A3 `AN EQUAL ASSIGNMENT NOTIFIES NO ONE`); committed to dev (unpushed); NOT built, NOT installed (§C) | `CODE-REVIEW 2026-10-15 (6)` |
+| /code-review 2026-10-15 (6) of 481dfa4 (0.4.11): a long LMS name stored cut inside a UTF-8 character (`strncpy` 64, `fgets` 63; now `fit_name`); "power cut" claimed with a plain `fsync` (now `flush_to_disk`, `F_FULLFSYNC`); a server stamped after an offer that was never written (`send_packet`/`sendSETDName` now return bool, `name_offered`); a new player's `-n` offer never stamped when LMS already had it (`name_offered` for every offer); `put_lms_level` reading `now` before `lv.lock` (a report stamped between wrapped `now - at`: LMS's answer put on mid-drag); the failed-write test's FAILED lines lost under `RLIMIT_FSIZE` (`limit_file_size`); the name file and stamp rewritten unchanged at every connect (`file_holds`); `refresh()` assigning unchanged values; `writeStatus` keeping a stale `slot.name` | **1-7 and 9 VERIFIED + FIXED 2026-10-15** (Simon: "yes look to fix these"; on 5: "if you can make it work first go with none then go for it"): 10 new engine name tests (9 FAIL on 481dfa4, 1 control) + 1 output test (FAILS on 481dfa4: the drag pulled back to -30.10 dB); 9 mutants killed; suite PASS; **8 DISPROVEN** (§A3 `AN EQUAL ASSIGNMENT NOTIFIES NO ONE`); committed bb5a583 (dev, unpushed); **INSTALLED as 0.4.12** 2026-10-15 20:47Z; every live check VERIFIED (an unchanged connect writes nothing, an LMS rename stores once, a new player names itself at the offer) (§C) | `CODE-REVIEW 2026-10-15 (6)` |
 | "`@Observable` notifies observers on every assignment, so `PlayerModel.refresh()` (`isOn`, `status`, `devices`, every 1.5 s) redraws the menu and Settings for unchanged values" | **WRONG** (§A3, measured 2026-10-15, Swift 6.4) | `AN EQUAL ASSIGNMENT NOTIFIES NO ONE` |
 | a name offer written but lost with the connection before LMS read it, so the server is stamped (or a new player named) without LMS having the name, and the next connect takes LMS's own (a new LMS's default); `name_offered`, `sendSETDName`/`send_packet`'s result, the stamp at an offer, any "confirmation" for it | **ACCEPTED by Simon 2026-10-15, NOT A FINDING** ("i am fine to accept that compromise make sure it isnt raised again"): it replaces the rename loop; re-raise only with the drop seen live (§A2) | `AN OFFER LOST IN FLIGHT` |
 
@@ -577,6 +577,8 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
       0.4.8 has run yet.
     - **0.4.11** (Simon: "build install commit", "Yes, 0.4.11", 2026-10-15): `CODE-REVIEW 2026-10-15 (5)`.
       INSTALLED 19:12Z, suite PASS inside build.sh; details in §C.
+    - **0.4.12** (Simon: "build and install", "Yes, 0.4.12", 2026-10-15): `CODE-REVIEW 2026-10-15 (6)`
+      (commit bb5a583). INSTALLED 20:47Z, suite PASS inside build.sh; details in §C.
 - **APPLE SILICON ONLY — Simon, 2026-10-09.** arm64 only, macOS 14+. No universal builds.
 - **NO VIRTUAL AUDIO DRIVERS — Simon, 2026-10-09.**
   - Simon: "we dont need blackhole it messes up things last time i installed it and was hard to
@@ -1783,7 +1785,7 @@ Each entry records that a defect, as described, was fixed. It does not cover the
 fix it (see HOW TO LOG).
 
 - **CODE-REVIEW 2026-10-15 (6) — /code-review of 481dfa4 (0.4.11; `origin/dev` 7faf2f8..HEAD, tree
-  clean), 1-7 and 9 VERIFIED + FIXED 2026-10-15, 8 DISPROVEN, committed to dev (unpushed, Simon: "commit"), NOT built, NOT installed** (Simon: "lets
+  clean), 1-7 and 9 VERIFIED + FIXED 2026-10-15, 8 DISPROVEN, committed bb5a583 to dev (unpushed, Simon: "commit"), INSTALLED as 0.4.12 2026-10-15 20:47Z** (Simon: "lets
   do another /code-review of lyrionplay", then "yes look to fix these although i am reluctant to
   change 5 i have not heard this and the audio side works very well I dont want to head down more work
   fixing more regressions if you can make it work first go with none then go for it"). Gates: nothing
@@ -1866,6 +1868,23 @@ fix it (see HOW TO LOG).
     output_coreaudio.c. Live checks owed after a build Simon asks for: a connect gives ONE "set name" and
     no "storing name in"; an LMS rename stores once; a new device player's first connect writes its name
     file at the offer. Nothing to hear for 5.
+  - **INSTALLED as 0.4.12 2026-10-15 20:47Z** (Simon: "build and install", "Yes, 0.4.12"; simonsMac the
+    only LyrionPlay player connected, stopped, volume 47, 13 tracks). `bump-version.sh patch`; `build.sh
+    --install`, suite PASS inside it; install.sh "version 0.4.12 (was 0.4.11)", "stopped the old player".
+    agent.log "agent started: LyrionPlay 0.4.12 (202610152146)", Follow on the MacBook Pro Speakers,
+    "LMS: using Simons Music (plex:9000)". **Finding 7 VERIFIED LIVE:** engine-follow.log 21:47:27 local
+    "retrieved name simonsMac", connected, plex's UUID, ONE "set name: simonsMac" and NO "storing name in"
+    (0.4.11's connect at 20:13:04 wrote both); `players/follow/name` and `name.server` keep their 20:13
+    times (not rewritten), the same 3 stamp lines, no `.tmp`. LMS after: simonsMac connected, stopped,
+    volume 47, 13 tracks. **Both owed checks VERIFIED LIVE 2026-10-15** (Simon: "both tested"): an LMS
+    rename of Follow to "simonsMac2" at 21:50:33 local gave ONE "set name" and ONE "storing name in",
+    the name file rewritten, `name.server` kept (20:13: unchanged); a NEW DragonFly player (MAC
+    b6:4e:cb:e9:16:34, `-n` "prodmac46 AudioQuest DragonFly Black v1.5") wrote its name file AT THE
+    OFFER (21:52:18.035, `name_offered`), 48 ms before LMS's answer ("set name" 18.083), which wrote
+    nothing more; its stamp "192.168.1.234 2c913d97-…"; LMS lists both connected under those names.
+    Nothing to hear for 5. Seen on the way, NOT this round: "unable to connect to server 0" at each
+    engine start, then connected 5 s later (upstream's retry); 0.4.11's start had it too (20:12:59),
+    645 such lines in engine-follow.log's history.
 
 - **CODE-REVIEW 2026-10-15 (5) — /code-review of a0e6c7f and the tree (`origin/dev` 7faf2f8..HEAD;
   rounds (1)-(4) had covered up to cd56290), ALL 8 VERIFIED + FIXED 2026-10-15, INSTALLED as 0.4.11** (Simon:
