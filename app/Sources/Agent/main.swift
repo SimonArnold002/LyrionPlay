@@ -599,8 +599,10 @@ final class Supervisor {
 		status.problem = problem
 		for key in playersOn {
 			guard let slot = slots[key] else { continue }
-			// LMS's name (the name file): a rename made in LMS shows in the menu within 2 s
-			if let name = PlayerIdentity.name(at: Paths.playerName(key)) { slot.name = name }
+			// LMS's name (the name file): a rename made in LMS shows in the menu within 2 s. playerName,
+			// as the log: a file that reads as none gave settings.json's name there but kept an older
+			// name here (/code-review 2026-10-15 (6) finding 9)
+			slot.name = playerName(key)
 			var player = PlayerStatus(key: key, name: slot.name, mac: slot.mac)
 			player.engineRunning = slot.engine?.isRunning ?? false
 			player.enginePID = slot.engine?.processIdentifier

@@ -242,6 +242,9 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "the Settings window freezes while it probes the devices on the main thread (`loadDevices` in `onAppear`)" | **WRONG** (§A3, measured 2026-10-15) | `THE SETTINGS WINDOW'S PROBE FREEZES IT` |
 | /code-review 2026-10-15 (5) of a0e6c7f + the tree: a server offered the player's name it already has never stamped (`process_setd`'s offer, `add_name_server`), so a rename it holds loops; the stamp unread with an empty name file (`load_player_name`, `load_name_servers`), so the next name cut it to one server; the name file and stamp written in place (`store_name`, `store_name_servers`, `open_replacement`/`replace_file`) and a failed write still restamped; no test of an unstamped server holding the name; two stale ledger lines; `makeSlot` reading `playerName` up to 3 times | **ALL 8 VERIFIED, ALL FIXED 2026-10-15** (Simon: "verify these and look to fix, test fixes and check for regrressions"); 4 new engine tests FAIL on a0e6c7f, 6 mutants killed; suite PASS; finding 3's stated cause (a stop mid-write) WRONG (§A3 `A STOP CANNOT CUT THE NAME WRITE`), its fix kept for a full disk / power cut; **INSTALLED as 0.4.11** 2026-10-15 19:12Z, committed (§C) | `CODE-REVIEW 2026-10-15 (5)` |
 | "the agent stopping the engine (Off, a device change, a restart) can cut `process_setd`'s name write between the truncate and the write" | **WRONG** (§A3, source 2026-10-15) | `A STOP CANNOT CUT THE NAME WRITE` |
+| /code-review 2026-10-15 (6) of 481dfa4 (0.4.11): a long LMS name stored cut inside a UTF-8 character (`strncpy` 64, `fgets` 63; now `fit_name`); "power cut" claimed with a plain `fsync` (now `flush_to_disk`, `F_FULLFSYNC`); a server stamped after an offer that was never written (`send_packet`/`sendSETDName` now return bool, `name_offered`); a new player's `-n` offer never stamped when LMS already had it (`name_offered` for every offer); `put_lms_level` reading `now` before `lv.lock` (a report stamped between wrapped `now - at`: LMS's answer put on mid-drag); the failed-write test's FAILED lines lost under `RLIMIT_FSIZE` (`limit_file_size`); the name file and stamp rewritten unchanged at every connect (`file_holds`); `refresh()` assigning unchanged values; `writeStatus` keeping a stale `slot.name` | **1-7 and 9 VERIFIED + FIXED 2026-10-15** (Simon: "yes look to fix these"; on 5: "if you can make it work first go with none then go for it"): 10 new engine name tests (9 FAIL on 481dfa4, 1 control) + 1 output test (FAILS on 481dfa4: the drag pulled back to -30.10 dB); 9 mutants killed; suite PASS; **8 DISPROVEN** (§A3 `AN EQUAL ASSIGNMENT NOTIFIES NO ONE`); committed to dev (unpushed); NOT built, NOT installed (§C) | `CODE-REVIEW 2026-10-15 (6)` |
+| "`@Observable` notifies observers on every assignment, so `PlayerModel.refresh()` (`isOn`, `status`, `devices`, every 1.5 s) redraws the menu and Settings for unchanged values" | **WRONG** (§A3, measured 2026-10-15, Swift 6.4) | `AN EQUAL ASSIGNMENT NOTIFIES NO ONE` |
+| a name offer written but lost with the connection before LMS read it, so the server is stamped (or a new player named) without LMS having the name, and the next connect takes LMS's own (a new LMS's default); `name_offered`, `sendSETDName`/`send_packet`'s result, the stamp at an offer, any "confirmation" for it | **ACCEPTED by Simon 2026-10-15, NOT A FINDING** ("i am fine to accept that compromise make sure it isnt raised again"): it replaces the rename loop; re-raise only with the drop seen live (§A2) | `AN OFFER LOST IN FLIGHT` |
 
 ### HOW TO LOG A VERDICT so the next round finds it
 Every new decision goes in §A2 (declined or by design), §A3 (a belief a measurement killed), §B
@@ -995,7 +998,12 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
     name at start, or LMS set one, it answers LMS's name query (at every connect) with an EMPTY name,
     and LMS sends its own (`playerSettingsFrame`: an empty value -> `setPlayerSetting(pref)`). A new
     player (no file, or an empty one) answers with `-n` once; LMS takes it and sends it back, which
-    writes the file. So an LMS rename made while the player was disconnected, or queued while it played,
+    writes the file. Since CODE-REVIEW 2026-10-15 (6) the offer itself, once written in full
+    (`sendSETDName` true), names the player: `name_offered` sets `name_from_lms`, writes the file and
+    stamps the server, as LMS's answer does (an offer equal to LMS's name gets none). A name is kept
+    to 63 bytes of whole UTF-8 characters (`fit_name`, as `fitName`), and the file and stamp are
+    written only when their text changes (`file_holds`), flushed with `F_FULLFSYNC`: "storing name
+    in" appears only for a change, so a connect's normal engine log is ONE "set name" line alone. So an LMS rename made while the player was disconnected, or queued while it played,
     reaches the player at the next connect instead of being overwritten by the player's old name, and
     two names can no longer chase each other (`TWO NAMES IN FLIGHT LOOP`, §A3).
   - **Only to the server that named it** (since CODE-REVIEW 2026-10-15 (3), Simon tested it: a new LMS at
@@ -1012,7 +1020,8 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
     takes it (LMS's `playerSettingsFrame`: a value that differs sets the pref). Why that is loop-safe:
     the loop needs a rename LMS HELD for this player, and only a server the player was connected to can
     hold one, and every such server named it or was offered the name (since CODE-REVIEW 2026-10-15
-    (5) an offer stamps the server too: an offer equal to LMS's name gets no answer), so it is in the
+    (5) an offer stamps the server too: an offer equal to LMS's name gets no answer; since (6) only an
+    offer written in full, a new player's `-n` offer included), so it is in the
     stamp. Not only the last one: LMS 9.1
     keeps a disconnected player, its pending `setd` with it, for 300 s (`Slimproto.pm`
     `$forget_disconnected_time`, `slimproto_close` -> `forget_disconnected_client`), so a rename held
@@ -1047,9 +1056,27 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
     it stays on the Tailscale address until it restarts.
     (My first note said "not on the rig, the Server setting is a literal IP": WRONG, the IP seen was
     Simon's .119 test; he uses a hostname.) Each server owns its own name for the player: renamed
-    on one, the other offers or keeps its own. Suite `engine/tests/test_slimproto_name.c` (33 tests
-    since CODE-REVIEW 2026-10-15 (5), with a model of LMS's side that reproduces the loop).
+    on one, the other offers or keeps its own. Suite `engine/tests/test_slimproto_name.c` (43 tests
+    since CODE-REVIEW 2026-10-15 (6), with a model of LMS's side that reproduces the loop).
   - Never re-add a Name field, a rename path in the app, or an agent that writes names.
+
+- **AN OFFER LOST IN FLIGHT — ACCEPTED by Simon 2026-10-15, NOT A FINDING** ("i am fine to accept that
+  compromise make sure it isnt raised again"). Symbols: `name_offered`, `sendSETDName`/`send_packet`'s
+  result, `process_setd`'s offer, the stamp (`add_name_server`, `store_name_servers`) and `name_from_lms`
+  set at an offer, a new player's `-n` offer naming it. The rule (CODE-REVIEW 2026-10-15 (6) findings 3
+  and 4): a name offer the engine wrote in full names the player on that server (stamp, name file,
+  `name_from_lms`), since LMS's pref is that name then and an equal offer gets no answer. The residual:
+  the kernel takes the offer's bytes, then the connection is lost before LMS reads them, which needs a
+  drop within about one round trip of the offer (<1 ms on the LAN, tens of ms over Tailscale). The
+  server is then stamped without having the name, so the next connect's empty answer takes LMS's own
+  name: on a brand-new LMS its default (SqueezeLiteMac, numbered), where before round (6) a new player
+  offered `-n` again. Visible, and a rename in LMS mends it. Accepted because it replaces the rename
+  loop (`TWO NAMES IN FLIGHT LOOP`), the worse outcome, which needed a drop in an equally short window.
+  Do NOT report it, in any form (a stamp "without confirmation", an offer "assumed received", a new
+  player "named before LMS answers"), and do not propose a confirmation for it (a timer after the offer,
+  a second empty answer, waiting for LMS's `setd`, the socket's send queue). Re-raise only with the
+  drop seen live: an engine log with an offer, the connection lost within a second, then LMS's default
+  name at the next connect.
 
 - **REMOVE A PLAYER — BUILT 2026-10-15 at Simon's request, INSTALLED as 0.4.8, committed bb4b0d0; a connected device's remove VERIFIED LIVE (below)** (Simon:
   "we also need a way to remove devices from the app/agent so we can add them fresh again if need be.
@@ -1194,7 +1221,8 @@ evidence it cites.
 | TWO NAMES IN FLIGHT LOOP: a player's name syncs between LMS and squeezelite by itself: an LMS rename reaches the player, and the player's `-N` name reaches LMS, without conflict | **WRONG** (LMS 9.1 source + the rig's engine log, 2026-10-15) | LMS 9.1 `Squeezebox2.pm`: a `playername` pref change (`setChange`) calls `setPlayerSetting`, which sends `setd` ONLY if the player is stopped and no answer is awaited, else marks it pending and sends the pref at the next stop (~line 410). At every (re)connect `reconnect` sends the name QUERY (`getPlayerSetting`); squeezelite answers with its name (`process_setd`, len 5); `playerSettingsFrame` sets the pref to that answer (an empty answer instead makes LMS send its own pref). Every `setd` set is confirmed by squeezelite echoing the name. So a rename in LMS while the DragonFly was not stopped (between 01:12 and 01:20 local: no `set name` in its engine log) waited; the 0.4.7 install's reconnect at 01:20:39 put the query answer "AudioQuest DragonFly" and the pending "AudioQuest" in flight together; each confirm set the pref to the other value, whose change sent it again: 124,242 `set name` lines in 8 min 40 s (~240/s), the engine log 29 MB, until the engine stopped at 01:29:20. Fixed by `LMS OWNS THE PLAYER NAME` (the empty answer). Not reproduced on purpose. |
 | A REMOVE TIMES OUT ONLY ON A WEDGED AGENT: `PlayerModel.removePlayer` gives the agent 10 s (20 polls of status.json) to stop the engine, which a healthy agent can miss, leaving the settings entry gone but the MAC, the name file and the LMS player kept | **WRONG** (agent source, /code-review 2026-10-15 (3) finding 5) | The agent's tick runs every 2 s (`timer.schedule(deadline: .now() + 2, repeating: 2)`) and reads settings.json by its modification date; `reconcile` stops engines with one SIGTERM and one wait of at most 3 s, then SIGKILL (`stopEngines`); `writeStatus` runs at every tick. Worst case for a healthy agent: 2 s to the tick + the probe + 3 s + 2 s to the next status, about 7 s, inside the 10 s. So the timeout means the agent is wedged; then the window says the identity and LMS's player were kept and "try Remove again", and Remove stays in the cog for every device row. Switching the device on instead reuses the old MAC, as the message implies. Re-raise only with a timeout seen while agent.log shows the agent ticking. |
 | THE SETTINGS WINDOW'S PROBE FREEZES IT: `PlayerModel.loadDevices`, called in the Settings window's `onAppear`, runs `DeviceCaps.probe` (starts `squeezelite -l` and waits for it) on the main thread, so the window and the menu hang as it opens; round (3) moved only `devicesChanged`'s probe off the main thread | **WRONG** (measured 2026-10-15, /code-review 2026-10-15 (4) finding 3) | The installed engine's `squeezelite -l` timed three times on prodmac46 with 4 output devices: 0.07, 0.06, 0.06 s, once per opening of the window. Round (3)'s freeze was a different case: the device watcher probing at EVERY output change for the app's life with the window closed. Moving this one off the main thread would open the window with no devices and fill them in a moment later. Re-raise only with a device that makes `-l` slow, timed. |
-| A STOP CANNOT CUT THE NAME WRITE: the agent stopping an engine (Off, a device change, a settings restart) can land between `process_setd`'s truncate of the `-N` file and its write, leaving it empty, so the next start offers the `-n` default over LMS's name | **WRONG** (engine source, /code-review 2026-10-15 (5) finding 3) | The agent stops an engine with SIGTERM (`stopEngines`), and `main.c`'s `sighandler` only calls `slimproto_stop()`, which sets a flag the slimproto loop reads; `process_setd` runs to its end on that thread first. The SIGKILL after 3 s hits only an engine that did not exit, i.e. one not running `process_setd`. Writers of an empty file that remain: a full disk (truncate works, the data does not: reproduced with `RLIMIT_FSIZE` in `engine/tests/test_slimproto_name.c`) and a power cut or panic before the data reaches the disk; for those the file is now written to `.tmp` and renamed (§C `CODE-REVIEW 2026-10-15 (5)`). Re-raise only with a stop that is not SIGTERM's flag. |
+| A STOP CANNOT CUT THE NAME WRITE: the agent stopping an engine (Off, a device change, a settings restart) can land between `process_setd`'s truncate of the `-N` file and its write, leaving it empty, so the next start offers the `-n` default over LMS's name | **WRONG** (engine source, /code-review 2026-10-15 (5) finding 3) | The agent stops an engine with SIGTERM (`stopEngines`), and `main.c`'s `sighandler` only calls `slimproto_stop()`, which sets a flag the slimproto loop reads; `process_setd` runs to its end on that thread first. The SIGKILL after 3 s hits only an engine that did not exit, i.e. one not running `process_setd`. Writers of an empty file that remain: a full disk (truncate works, the data does not: reproduced with `RLIMIT_FSIZE` in `engine/tests/test_slimproto_name.c`) and a power cut or panic before the data reaches the disk; for those the file is now written to `.tmp` and renamed (§C `CODE-REVIEW 2026-10-15 (5)`), and since CODE-REVIEW 2026-10-15 (6) flushed to the disk itself first (`F_FULLFSYNC`: a plain `fsync` on a Mac left it in the drive's cache, so the power cut was not covered until then). Re-raise only with a stop that is not SIGTERM's flag. |
+| AN EQUAL ASSIGNMENT NOTIFIES NO ONE: an `@Observable` property notifies its observers at every assignment, so `PlayerModel.refresh()` assigning `isOn`, `status` and `devices` every 1.5 s re-evaluates the menu panel, the Settings window and the cog for unchanged data; guard each assignment with an equality check, as `lmsNames` is | **WRONG** (measured 2026-10-15 with the Command Line Tools' Swift 6.4, /code-review 2026-10-15 (6) finding 8) | A scratch `@Observable` class under `withObservationTracking`: a Bool, an optional Equatable struct and an array, each set to an EQUAL value, notified no one; set to a new value, notified; a non-Equatable struct set equal still notified. `-Xfrontend -dump-macro-expansions`: the macro's setter opens with `guard shouldNotifyObservers(_x, newValue) else { return }`, whose Equatable overload compares the values. `isOn` (Bool), `status` (`AgentStatus?`) and `devices` (`[DeviceCaps]`) are all Equatable, so the guard the review proposed is already there; `lmsNames`'s own guard is redundant, harmless. What does redraw is real: `status.updated` is the agent's heartbeat, rewritten every 2 s. Re-raise only with a property that is not Equatable, or a toolchain whose macro lacks `shouldNotifyObservers`. |
 
 ### B. KNOWN-OPEN AND ACCEPTED — do not re-report as new
 
@@ -1754,6 +1782,91 @@ evidence it cites.
 Each entry records that a defect, as described, was fixed. It does not cover the code written to
 fix it (see HOW TO LOG).
 
+- **CODE-REVIEW 2026-10-15 (6) — /code-review of 481dfa4 (0.4.11; `origin/dev` 7faf2f8..HEAD, tree
+  clean), 1-7 and 9 VERIFIED + FIXED 2026-10-15, 8 DISPROVEN, committed to dev (unpushed, Simon: "commit"), NOT built, NOT installed** (Simon: "lets
+  do another /code-review of lyrionplay", then "yes look to fix these although i am reluctant to
+  change 5 i have not heard this and the audio side works very well I dont want to head down more work
+  fixing more regressions if you can make it work first go with none then go for it"). Gates: nothing
+  in the index; the ledger hits (rounds (3)/(5), `THE DEVICE STAYS WHERE THE MAC PUT IT`) cover the
+  fixes, not this behaviour; 2, 3 and 6 are about round (5)'s own code. Each finding read in the code
+  and reproduced by a test (or measured) before any change:
+  1. **A long LMS name stored cut inside a character** — VERIFIED: `strncpy(player_name, …, 64)` kept
+     64 bytes, `fgets(…, 64, …)` reads 63 back, and `PlayerIdentity.name(at:)` reads strict UTF-8, so a
+     cut character gave no name (the cog fell back to settings.json's, the menu kept the old one), and
+     the cut was offered to other servers. Writer: a user renaming a player in LMS to a long accented
+     name (LMS is the only renamer; `fitName` caps only the names LyrionPlay makes). FIXED: `fit_name`,
+     63 bytes of whole characters (as `fitName`), on a name LMS sends and on the file read at start; a
+     file 0.4.8-0.4.11 cut is rewritten at LMS's next name (it differs). LMS keeps its full name: the
+     confirmation sends LMS's own `setd` text back, as upstream. The Swift reader is unchanged.
+  2. **"A power cut leaves the old file whole" with a plain `fsync`** — VERIFIED (on a Mac `fsync` does
+     not flush the drive's cache; `fcntl(F_FULLFSYNC)` does). FIXED: `flush_to_disk` (`F_FULLFSYNC`,
+     `fsync` where a file system lacks it) before the rename, so after a power cut the file is the old
+     one or the new one, whole. The rename itself can still be lost (the old name kept, rewritten by
+     LMS's next name); no directory sync, as nothing claims the newest name survives. MEASURED (scratch
+     probe, 20 writes each, internal SSD): a name write 0.54 ms with `fsync`, 3.91 ms (worst 4.61) with
+     `F_FULLFSYNC`; paid only on a change (7).
+  3. **A server stamped after an offer that was never written** — VERIFIED (`send_packet` was `void` and
+     only logged "failed writing to socket"); round (5)'s own code. FIXED: `send_packet`/`sendSETDName`
+     return whether every byte was written (upstream's other callers ignore it, UPSTREAM.md), and
+     `process_setd` stamps only then. RESIDUAL, stated: bytes the kernel took, then the connection lost
+     before LMS read them (within about a round trip: <1 ms on the LAN): stamped without the offer, so
+     the next connect's empty answer takes that LMS's name (a new LMS: its default). Not reachable by
+     the suite; no such drop seen. ACCEPTED by Simon the same day (§A2 `AN OFFER LOST IN FLIGHT`).
+  4. **A new player's `-n` offer never stamped when LMS already had it** — VERIFIED by test (481dfa4:
+     the second connect with a held rename loops, in one run and across a restart). Writers: the first
+     name write failed (full disk), or the connection dropped after LMS took `-n` and before its answer
+     came. FIXED: `name_offered` for every offer written in full: `name_from_lms`, the name file and the
+     stamp, as for LMS's answer. TRADE, stated: 3's residual now reaches a new player's first connect too
+     (an offer lost after the kernel took it, to a new LMS: its default name at the next connect, where
+     before `-n` was offered again); both need the connection lost within a round trip, and the loop it
+     removes is the worse outcome. ACCEPTED by Simon ("i am fine to accept that compromise make sure it
+     isnt raised again"): §A2 `AN OFFER LOST IN FLIGHT`, never a finding.
+  5. **`put_lms_level` read `now` before `lv.lock`** — VERIFIED by a deterministic test: a one-shot hook
+     in the suite's clock (`during_next_clock_read`, the test's thread only) lands the Mac's next move
+     between the read and the lock; on 481dfa4 LMS's answer pulled the drag back to -30.10 dB with 2
+     writes. FIXED: the time is read under the lock. Why nothing else changes: `lv_reported` is the one
+     writer of a report's time and stamps under the lock, `CLOCK_UPTIME_RAW` is monotonic, so no report
+     is newer than `now`; every rule and number is as before, the read ~ns later. Simon had not heard it
+     and was reluctant; done on his condition ("if you can make it work first go"): one line, its test,
+     and the output suite and matrix unchanged (70/70, 25,690 scenarios 0 failed). Not live-tested.
+  6. **The failed-write test's FAILED lines lost** — VERIFIED (a forced failing check, stdout to a file
+     as `scripts/test.sh` does: 481dfa4's test printed only ✘, this one the FAILED line). FIXED:
+     `limit_file_size`, lifted before every check; the stamp's own failing write still exercised (the
+     name stored first, then an offer under the limit; round (5)'s mutant "the stamp written in place"
+     needs it).
+  7. **The name file and stamp rewritten unchanged at every connect** — VERIFIED (inode test). FIXED:
+     `file_holds`; "storing name in" now only for a change.
+  8. **`refresh()` assigning unchanged values every 1.5 s** — DISPROVEN, measured (§A3 `AN EQUAL
+     ASSIGNMENT NOTIFIES NO ONE`). No change.
+  9. **`writeStatus` kept a stale `slot.name`** — VERIFIED (a file that reads as none kept the old name
+     there, settings.json's in `playerName`). FIXED: `writeStatus` uses `playerName`. The app's
+     `lmsName` stays its own (it reads into the observed `lmsNames`, round (3) finding 8): the same rule,
+     file else settings.json. Not covered by a suite (agent main).
+  - **Tests:** engine name 33 -> 43: an offer that was not sent stamps nothing; a new player's offer
+    that was not sent names nothing (control: passes on 481dfa4 too); a new player whose `-n` LMS
+    already has is named by its offer, and across a restart; `fit_name`'s table (2-, 3-, 4-byte
+    characters at the cut); a long name stored to its last whole character; a cut file mended; a whole
+    64-byte file read to its last whole character; a name and stamp held are not written again (inodes);
+    a name written reaches the disk (`F_FULLFSYNC` counted through the suite's `fcntl`). 9 of the 10 FAIL
+    on 481dfa4's slimproto.c (`NAME_SOURCE`), the 33 earlier pass on both. Engine output 69 -> 70:
+    "LMS's answer during a drag is not put on" (FAILS on 481dfa4's output_coreaudio.c, `OCA_SOURCE`).
+    MUTANTS, 9 of 9 killed: the send result ignored, the `-n` offer not named (round (5)'s rule), the
+    name always written, the stamp always written, `fsync` only, no cut at a `setd`, no cut at the load
+    (it SURVIVED until the whole-64-byte-file test was added), the cut at 64, a partial character kept.
+  - **Carriers:** `send_packet`'s other callers (HELO, STAT, RESP, META, IR) ignore the result, as
+    before; the name file's readers (the engine at start, `PlayerIdentity.name` for the app and the
+    agent) see the same format (no newline), now never cut inside a character; the stamp's only reader
+    is slimproto.c; `.tmp` files as before; logs: "set name" as before, "storing name in" only on a
+    change, "unable to store new name in" on a failed write; `set_volume`'s path: only the place of
+    `put_lms_level`'s clock read. The agent's `slot.name` readers (logs, `VolumeChange.player`, the menu's
+    `PlayerStatus.name`) get the same name but where the file reads as none.
+  - **After:** `scripts/test.sh` PASS (engine conversion; engine output 70/70 with the matrix, 25,690
+    scenarios; engine name 43/43; swift 108 in 22 suites; install.sh 3/3); `swift build` of every target,
+    the one known warning (main.swift:544); the engine builds with no warning in slimproto.c or
+    output_coreaudio.c. Live checks owed after a build Simon asks for: a connect gives ONE "set name" and
+    no "storing name in"; an LMS rename stores once; a new device player's first connect writes its name
+    file at the offer. Nothing to hear for 5.
+
 - **CODE-REVIEW 2026-10-15 (5) — /code-review of a0e6c7f and the tree (`origin/dev` 7faf2f8..HEAD;
   rounds (1)-(4) had covered up to cd56290), ALL 8 VERIFIED + FIXED 2026-10-15, INSTALLED as 0.4.11** (Simon:
   "lets do another /code review of lyrionplay", then "verify these and look to fix, test fixes and
@@ -1779,7 +1892,9 @@ fix it (see HOW TO LOG).
      stop mid-write (§A3 `A STOP CANNOT CUT THE NAME WRITE`). FIXED with 4: `store_name` and
      `store_name_servers` write `<file>.tmp`, check `fflush`/`ferror`/`fsync`/`fclose`, then
      `rename()`; any failure removes the `.tmp` and keeps the old file (`open_replacement`,
-     `replace_file`). The stamp is written the same way: an empty stamp reads as none.
+     `replace_file`). The stamp is written the same way: an empty stamp reads as none. [The power cut
+     was NOT covered: a plain `fsync` on a Mac leaves the data in the drive's cache. `F_FULLFSYNC` since
+     CODE-REVIEW 2026-10-15 (6) finding 2.]
   4. **A failed name write still rewrote the stamp** — VERIFIED (same test: the stamp left empty too).
      FIXED: the stamp is written only after `store_name` succeeds.
   5. **No test of an unstamped server already holding the name** — FIXED, the suite 28 -> 33 tests: a
@@ -2242,7 +2357,9 @@ fix it (see HOW TO LOG).
     `apply_volume` (it never reports). `put_held_level` (Fixed's hold) is separate and unchanged. The
     settle window and `apply_volume` are unchanged for every level written; `restore_pair` records and
     settles the same way. Lock order: `apply_lock`, then `lv.lock` alone and released before any HAL
-    call; the listener takes `vrec.lock` briefly, then `lv.lock` alone. The agent, PlayerCore and the
+    call; the listener takes `vrec.lock` briefly, then `lv.lock` alone. [`put_lms_level` read its time
+    BEFORE `lv.lock` until CODE-REVIEW 2026-10-15 (6) finding 5: a report stamped in between made
+    `now - at` wrap and the answer was put on; now read under it.] The agent, PlayerCore and the
     app: unchanged (one Swift test added). The audio path: none (the matrix passes). The Melomania's
     stuck dB property: the pair is its channel scalars (elements 1, 2), and the first-level check reads
     its level through `read_device_db`.

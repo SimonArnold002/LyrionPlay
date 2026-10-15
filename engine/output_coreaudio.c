@@ -648,7 +648,7 @@ static void restore_pair(AudioDeviceID dev, const struct volctl *v, const struct
 static void put_lms_level(AudioDeviceID dev, unsigned left, unsigned right) {
 	enum { PUT, ECHO, SAME, RESTORE, FIRST } what = PUT;
 	unsigned g = left > right ? left : right, i, keep = 0;
-	uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+	uint64_t now;
 	struct lms_pair p;
 	struct volctl v;
 
@@ -657,6 +657,10 @@ static void put_lms_level(AudioDeviceID dev, unsigned left, unsigned right) {
 		return;
 	}
 	pthread_mutex_lock(&lv.lock);
+	// read under the lock, as every report is stamped under it, so none is newer: read before it, a
+	// report stamped meanwhile made now - at wrap, and LMS's answer was put on (/code-review
+	// 2026-10-15 (6) finding 5)
+	now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 	lv_for(dev);
 	for (i = lv.n; g && i-- > 0;) {                     // newest first
 		if (now - lv.r[i].at > ECHO_NS) break;            // this one and all older have expired

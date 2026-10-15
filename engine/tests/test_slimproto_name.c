@@ -32,7 +32,17 @@
 #ifndef NAME_SOURCE
 #define NAME_SOURCE "../slimproto.c"
 #endif
+// slimproto.c's flushes to the disk itself (F_FULLFSYNC), counted: a plain fsync leaves the data in the
+// drive's cache, so that a power cut can leave the name file empty
+#include <fcntl.h>
+static int full_syncs;
+static int counted_fcntl(int fd, int cmd) {
+	if (cmd == F_FULLFSYNC) full_syncs++;
+	return fcntl(fd, cmd);
+}
+#define fcntl(fd, cmd) counted_fcntl(fd, cmd)
 #include NAME_SOURCE
+#undef fcntl
 
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -144,7 +154,7 @@ static void engine_start_uuid(const char *n, const char *server, const char *uui
 
 // the next SETD name the engine sent, or NULL when it sent none
 static const char *engine_sent(void) {
-	static char name[PLAYER_NAME_LEN + 2];
+	static char name[256];
 	struct SETD_header header;
 	size_t i = 0;
 	if (recv(peer, &header, sizeof(header), MSG_DONTWAIT) != (ssize_t)sizeof(header)) return NULL;
@@ -161,7 +171,7 @@ static const char *engine_sent(void) {
 
 // LMS's setd for the name, as slimproto.c's dispatch hands it over: "setd", id 0, then the name
 static void to_engine(const char *name) {
-	u8_t pkt[5 + PLAYER_NAME_LEN + 1];
+	u8_t pkt[5 + 256];                       // LMS keeps a name of any length
 	int len = 5;
 	memcpy(pkt, "setd", 4);
 	pkt[4] = 0;
@@ -557,23 +567,45 @@ static bool exists(const char *path) {
 	return stat(path, &st) == 0;
 }
 
+// the file size limit (a full disk: a file is created, its data is not written), on or back as it was.
+// Lifted before any check: under scripts/test.sh stdout is a file too, so a FAILED line printed under
+// the limit was lost, and the suite said only ✘ (/code-review 2026-10-15 (6) finding 6)
+static struct rlimit file_size_was;
+static void limit_file_size(bool on) {
+	struct rlimit limit;
+	if (on) {
+		signal(SIGXFSZ, SIG_IGN);
+		if (getrlimit(RLIMIT_FSIZE, &file_size_was) != 0) { perror("getrlimit"); exit(2); }
+		limit = file_size_was;
+		limit.rlim_cur = 0;
+	} else {
+		limit = file_size_was;
+	}
+	if (setrlimit(RLIMIT_FSIZE, &limit) != 0) { perror("setrlimit"); exit(2); }
+}
+
 static void test_failed_write_keeps_name(void) {
-	// finding 3 and 4: a write that fails part way (a full disk; here the file size limit, so the
-	// truncate works and the data does not) leaves the name and the stamp as they were
+	// round (5) findings 3 and 4: a write that fails part way (a full disk; here the file size limit, so
+	// the truncate works and the data does not) leaves the name and the stamp as they were
 	char tmp[320];
-	struct rlimit limit = { 0, RLIM_INFINITY };
 	write_file(name_path, "Desk DAC");
 	write_file(stamp_path, SERVER_A "\n");
 	engine_start("x", SERVER_A);
-	signal(SIGXFSZ, SIG_IGN);
-	if (setrlimit(RLIMIT_FSIZE, &limit) != 0) { perror("setrlimit"); exit(2); }
+	limit_file_size(true);
 	to_engine("Study");
 	engine_sent();
+	limit_file_size(false);
 	CHECK(!strcmp(read_file(name_path), "Desk DAC"), "the name file keeps the name it had, got \"%s\"", read_file(name_path));
 	CHECK(!strcmp(read_file(stamp_path), SERVER_A), "the stamp keeps what it had, got \"%s\"", read_file(stamp_path));
-	// the stamp's own write: another server offered the name
+	// the stamp's own write: the name stored (LMS sends it again), then another server offered it
+	to_engine("Study");
+	engine_sent();
+	CHECK(!strcmp(read_file(name_path), "Study"), "control: the name is stored once the disk takes it, got \"%s\"",
+		  read_file(name_path));
 	engine_connect(SERVER_B, "");
+	limit_file_size(true);
 	const char *answer = query();
+	limit_file_size(false);
 	CHECK(answer && !strcmp(answer, "Study"), "B is offered the name, got %s", answer ? answer : "nothing");
 	CHECK(!strcmp(read_file(stamp_path), SERVER_A), "a stamp write that fails keeps the stamp, got \"%s\"", read_file(stamp_path));
 	snprintf(tmp, sizeof(tmp), "%s.tmp", name_path);
@@ -594,6 +626,202 @@ static void test_write_leaves_no_temporary(void) {
 	CHECK(!exists(tmp), "no name.tmp left");
 	snprintf(tmp, sizeof(tmp), "%s.tmp", stamp_path);
 	CHECK(!exists(tmp), "no name.server.tmp left");
+}
+
+// ---- /code-review 2026-10-15 (6) ----
+
+// LMS's end of the connection gone (the player's next send fails), then a new connection
+static void connection_drops(void) {
+	signal(SIGPIPE, SIG_IGN);
+	close(peer);
+}
+
+static void connection_back(void) {
+	int fds[2];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) { perror("socketpair"); exit(2); }
+	sock = fds[0];
+	peer = fds[1];
+}
+
+static void test_unsent_offer_stamps_nothing(void) {
+	// finding 3: the offer to a server that has not named the player is not written (the connection
+	// already gone), so LMS there may still hold its own name: no stamp, or the next connect's empty
+	// answer would take that name (a new LMS's default, SqueezeLiteMac)
+	write_file(name_path, "Desk DAC");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_B);
+	connection_drops();
+	to_engine(NULL);
+	CHECK(!strcmp(read_line(stamp_path, 1), SERVER_A), "the first server stays, got \"%s\"", read_line(stamp_path, 1));
+	CHECK(!read_line(stamp_path, 2)[0], "a server the offer never reached is stamped: \"%s\"", read_line(stamp_path, 2));
+	connection_back();
+	const char *answer = query();
+	CHECK(answer && !strcmp(answer, "Desk DAC"), "the next connect offers the name again, got %s", answer ? answer : "nothing");
+	CHECK(!strcmp(read_line(stamp_path, 2), SERVER_B), "control: that offer, written, stamps it, got \"%s\"", read_line(stamp_path, 2));
+}
+
+static void test_unsent_offer_of_a_new_player(void) {
+	// finding 4's guard: a new player's -n offer names it only when written
+	engine_start("Kitchen DAC", SERVER_A);
+	connection_drops();
+	to_engine(NULL);
+	CHECK(!exists(name_path), "an offer LMS never got named the player \"%s\"", read_file(name_path));
+	CHECK(!exists(stamp_path), "an offer LMS never got stamped \"%s\"", read_file(stamp_path));
+	connection_back();
+	const char *answer = query();
+	CHECK(answer && !strcmp(answer, "Kitchen DAC"), "the next connect offers -n again, got %s", answer ? answer : "nothing");
+}
+
+static void test_new_player_lms_already_has(void) {
+	// finding 4: LMS already has the new player's -n name (its first name write failed, or the
+	// connection dropped before LMS's answer came), so the offer gets no answer; it names the player
+	engine_start("Kitchen DAC", SERVER_A);
+	struct lms a = { "Kitchen DAC", false, 0 };
+	CHECK(lms_connect(&a) == 1, "one engine message (the offer), LMS answers nothing");
+	CHECK(!strcmp(read_file(name_path), "Kitchen DAC"), "the offer names the player, got \"%s\"", read_file(name_path));
+	CHECK(!strcmp(read_file(stamp_path), SERVER_A), "and stamps the server, got \"%s\"", read_file(stamp_path));
+	strcpy(a.pref, "Study");                  // renamed in LMS while it plays: held; a reconnect
+	a.held = true;
+	int messages = lms_connect(&a);
+	CHECK(messages >= 0, "a reconnect: no loop (stopped after %d messages)", LOOP_LIMIT);
+	CHECK(!strcmp(read_file(name_path), "Study"), "the player takes the rename, got \"%s\"", read_file(name_path));
+}
+
+static void test_new_player_lms_already_has_restart(void) {
+	// the same with the engine restarted before the stop (the rig's loop was a restart)
+	engine_start("Kitchen DAC", SERVER_A);
+	struct lms a = { "Kitchen DAC", false, 0 };
+	CHECK(lms_connect(&a) == 1, "first connect: the offer only");
+	strcpy(a.pref, "Study");
+	a.held = true;
+	name_server_count = 0;
+	name_from_lms = false;
+	engine_start("Kitchen DAC", SERVER_A);
+	int messages = lms_connect(&a);
+	CHECK(messages >= 0, "after a restart: no loop (stopped after %d messages)", LOOP_LIMIT);
+	CHECK(!strcmp(a.pref, "Study"), "LMS keeps its rename, got \"%s\"", a.pref);
+	CHECK(!strcmp(read_file(name_path), "Study"), "the player takes it, got \"%s\"", read_file(name_path));
+}
+
+static void test_fit_name(void) {
+	// finding 1: a name is cut to what fgets reads back (63 bytes), at a whole UTF-8 character
+	static const struct { int pad; const char *tail; int want; } rows[] = {
+		{ 0, "", 0 },
+		{ 63, "", 63 },                         // 63 bytes: as it is
+		{ 64, "", 63 },                         // one over: cut
+		{ 62, "\xc3\xa9", 62 },                 // é in bytes 62-63: the cut at 63 splits it, so it goes
+		{ 61, "\xc3\xa9", 63 },                 // é in bytes 61-62: whole
+		{ 61, "\xe2\x82\xac", 61 },             // € in bytes 61-63: split, goes
+		{ 60, "\xe2\x82\xac", 63 },             // € in 60-62: whole
+		{ 60, "\xf0\x9f\x8e\xb5", 60 },         // a 4-byte character in 60-63: split, goes
+		{ 59, "\xf0\x9f\x8e\xb5", 63 },         // in 59-62: whole
+		{ 3, "\xc3", 3 },                       // a short name ending inside a character (fgets)
+		{ 3, "\xf0\x9f\x8e", 3 },
+		{ 3, "K\xc3\xbc" "che", 9 },            // whole characters, short: as it is
+	};
+	for (unsigned i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+		char name[128];
+		memset(name, 'a', rows[i].pad);
+		strcpy(name + rows[i].pad, rows[i].tail);
+		fit_name(name);
+		CHECK((int)strlen(name) == rows[i].want, "row %u: %zu bytes, not %d", i, strlen(name), rows[i].want);
+	}
+}
+
+static void test_long_name_is_stored_whole(void) {
+	// finding 1: a name LMS sends past 64 bytes, with a character across the cut, is stored to its last
+	// whole character (the app reads the file as UTF-8, and a cut character read as no name), and read
+	// back and offered so
+	char name[128], want[64];
+	memset(name, 'a', 63);
+	strcpy(name + 63, "\xc3\xbc" "ber K\xc3\xbc" "che");   // "über Küche", its ü in bytes 63-64
+	memset(want, 'a', 63);
+	want[63] = '\0';
+	write_file(name_path, "Desk DAC");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_A);
+	to_engine(name);
+	const char *answer = engine_sent();
+	CHECK(answer && !strcmp(answer, name), "control: LMS's whole name is confirmed back, got %s", answer ? answer : "nothing");
+	CHECK(!strcmp(read_file(name_path), want), "stored \"%s\", not cut before the ü", read_file(name_path));
+	name_server_count = 0;
+	engine_start("x", SERVER_B);
+	answer = query();
+	CHECK(answer && !strcmp(answer, want), "read back and offered as \"%s\"", answer ? answer : "nothing");
+}
+
+static void test_cut_name_file_is_mended(void) {
+	// finding 1: a file 0.4.8-0.4.11 wrote inside a character (63 bytes and the first of ü's two) is read
+	// to the last whole character, and the next name LMS sends writes it again
+	char file[80], name[128], want[64];
+	memset(file, 'a', 63);
+	strcpy(file + 63, "\xc3");
+	memset(name, 'a', 63);
+	strcpy(name + 63, "\xc3\xbc" "ber");
+	memset(want, 'a', 63);
+	want[63] = '\0';
+	write_file(name_path, file);
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_A);
+	CHECK(!strcmp(player_name, want), "read as \"%s\"", player_name);
+	const char *answer = query();
+	CHECK(answer && !answer[0], "control: the server that named it gets the empty answer, got %s", answer ? answer : "nothing");
+	to_engine(name);                         // LMS's whole name, as it sends it at that answer
+	engine_sent();
+	CHECK(!strcmp(read_file(name_path), want), "the file is mended to \"%s\"", read_file(name_path));
+}
+
+static void test_name_file_read_to_a_whole_character(void) {
+	// finding 1: a 64-byte file of whole characters (0.4.8-0.4.11 stored 64 bytes) whose last one fgets
+	// splits (it reads 63) is read to the character before, so another server is offered no cut one
+	char file[80], want[64];
+	memset(file, 'a', 62);
+	strcpy(file + 62, "\xc3\xbc");           // ü in bytes 62-63
+	memset(want, 'a', 62);
+	want[62] = '\0';
+	write_file(name_path, file);
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_B);
+	const char *answer = query();
+	CHECK(answer && !strcmp(answer, want), "offered \"%s\", not cut before the ü", answer ? answer : "nothing");
+}
+
+static ino_t inode(const char *path) {
+	struct stat st;
+	return stat(path, &st) == 0 ? st.st_ino : 0;
+}
+
+static void test_unchanged_name_is_not_written(void) {
+	// finding 7: LMS sends its name at every connect; a name file and a stamp that already hold it are
+	// not written again (each write a flush to the disk on the slimproto thread)
+	write_file(name_path, "Desk DAC");
+	write_file(stamp_path, SERVER_A "\n");
+	ino_t name_was = inode(name_path), stamp_was = inode(stamp_path);
+	engine_start("x", SERVER_A);
+	struct lms lms = { "Desk DAC", false, 0 };
+	CHECK(lms_connect(&lms) == 2, "control: the empty answer and the confirmation");
+	CHECK(inode(name_path) == name_was, "the name file was written again for the name it holds");
+	CHECK(inode(stamp_path) == stamp_was, "the stamp was written again as it was");
+	CHECK(full_syncs == 0, "%d flush(es) to the disk for nothing", full_syncs);
+	to_engine("Study");                      // control: a name that changed is written
+	engine_sent();
+	CHECK(inode(name_path) != name_was && !strcmp(read_file(name_path), "Study"), "control: a new name was not written, got \"%s\"",
+		  read_file(name_path));
+}
+
+static void test_name_reaches_the_disk(void) {
+	// finding 2: each file written is flushed to the disk itself (F_FULLFSYNC), not left in its cache,
+	// which a power cut can lose after the rename (an empty name file reads as a new player)
+	write_file(name_path, "Desk DAC");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_A);
+	to_engine("Study");                      // the name file; the stamp is as it was
+	engine_sent();
+	CHECK(full_syncs == 1, "%d F_FULLFSYNC for the name file", full_syncs);
+	engine_connect(SERVER_B, "");
+	query();                                 // offered: the stamp only
+	CHECK(full_syncs == 2, "%d F_FULLFSYNC after the stamp", full_syncs);
+	CHECK(!strcmp(read_line(stamp_path, 2), SERVER_B), "control: the stamp was written, got \"%s\"", read_line(stamp_path, 2));
 }
 
 static void test_stamp_is_bounded(void) {
@@ -736,6 +964,16 @@ static const struct test tests[] = {
 	{ "an empty name file keeps every server in the stamp", test_empty_name_file_keeps_stamp },
 	{ "a write that fails keeps the name and the stamp", test_failed_write_keeps_name },
 	{ "a name stored leaves no temporary file", test_write_leaves_no_temporary },
+	{ "an offer that was not sent stamps nothing", test_unsent_offer_stamps_nothing },
+	{ "a new player's offer that was not sent names nothing", test_unsent_offer_of_a_new_player },
+	{ "a new player whose -n name LMS already has is named by its offer", test_new_player_lms_already_has },
+	{ "the same across an engine restart", test_new_player_lms_already_has_restart },
+	{ "a name is cut at a whole character", test_fit_name },
+	{ "a long name LMS sends is stored to its last whole character", test_long_name_is_stored_whole },
+	{ "a name file cut inside a character is mended", test_cut_name_file_is_mended },
+	{ "a name file is read to its last whole character", test_name_file_read_to_a_whole_character },
+	{ "a name and stamp already held are not written again", test_unchanged_name_is_not_written },
+	{ "a name written reaches the disk itself", test_name_reaches_the_disk },
 	{ "the stamp keeps the last NAME_SERVERS servers", test_stamp_is_bounded },
 	{ "LMS's discovery reply gives the UUID", test_parse_reply },
 	{ "the UUID is asked of the server's own address", test_ask_uuid },

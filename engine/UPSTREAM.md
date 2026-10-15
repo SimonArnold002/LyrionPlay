@@ -22,8 +22,9 @@ New files (ours): `output_coreaudio.c`, `output_coreaudio_conv.h`, `Makefile.cor
 `tests/test_conversion.c`, `tests/test_output_coreaudio.c` (built with upstream's `output.c`,
 `buffer.c`, `output_pack.c` and `dop.c`, which it links as they are).
 
-Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines and the
-`load_player_name` split in `slimproto.c`:
+Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines, the
+`load_player_name` split in `slimproto.c`, and `send_packet`/`sendSETDName` returning whether they
+wrote everything:
 
 - `squeezelite.h`
   - On `__APPLE__`, `PORTAUDIO` is defined only `#if !defined(COREAUDIO)`.
@@ -43,14 +44,20 @@ Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines 
   - `process_audg` sets `output.volume_fixed = !audg->adjust` before `set_volume()`.
   - In the main loop, after `UNLOCK_O`, `ca_report_format()` (DoP or PCM, and the idle release, for
     the agent's menu).
-  - `name_from_lms`: set when the `-N` file held a name at start or LMS set one. `process_setd`
-    answers LMS's name query with an empty name while it is set, so LMS sends its own: LMS owns the
-    name, and a queued LMS rename and the player's name can no longer chase each other. An empty
-    `-N` file falls back to `-n`.
+  - `send_packet` and `sendSETDName` return whether every byte was written (upstream: `void`; the
+    other callers still ignore it).
+  - `name_from_lms`: set when the `-N` file held a name at start, LMS set one, or the player's name
+    offer (its `-n` name, or its name to a server that has not named it) was written in full
+    (`name_offered`: LMS's pref is that name then, answered or not). `process_setd` answers LMS's
+    name query with an empty name while it is set, so LMS sends its own: LMS owns the name, and a
+    queued LMS rename and the player's name can no longer chase each other. An empty `-N` file falls
+    back to `-n`.
+  - A name LMS sends, and the `-N` file read at start, are cut to 63 bytes at a whole UTF-8 character
+    (`fit_name`; upstream keeps 64 bytes and reads back 63, either cut inside a character).
   - The servers that have named the player, kept beside the `-N` file as `<file>.server` (one line
     each, oldest first: its IPv4 address, then a space and its LMS `server_uuid` when it answered;
     at most 8; `add_name_server` at each name LMS sends and at each offer of the player's name
-    (an offer equal to LMS's name gets no answer), which keeps a line's UUID when this connect got
+    written in full (an offer equal to LMS's name gets no answer), which keeps a line's UUID when this connect got
     none; written after the name file: `store_name_servers`, read at start whatever the name file
     holds: `load_name_servers`).
     Only those servers get the empty answer (`named_by_this_server`, `is_connected_server`: the UUIDs
@@ -59,10 +66,11 @@ Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines 
     only the last: LMS holds a rename for a disconnected player for 300 s, so a player that left a
     server and came back would otherwise offer its name across that rename. No stamp (a file from
     before it) keeps the empty answer.
-  - The `-N` file (`store_name`) and its stamp are written as `<file>.tmp`, checked, synced and
-    renamed over the file, where upstream writes the `-N` file in place: a write cut short (a full
-    disk, a power cut) would leave it empty, which reads as a new player and offers `-n` over LMS's
-    name.
+  - The `-N` file (`store_name`) and its stamp are written as `<file>.tmp`, checked, flushed to the
+    disk itself (`F_FULLFSYNC`, else `fsync`) and renamed over the file, where upstream writes the
+    `-N` file in place: a write cut short (a full disk, a power cut) would leave it empty, which reads
+    as a new player and offers `-n` over LMS's name. A file that already holds the text is not
+    written (`file_holds`): LMS sends its name at every connect.
   - `ask_server_uuid`: in the main loop, after `connected` and before the HELO, LMS's discovery
     request (`eUUID`) sent by UDP to the server's own address, port 3483; two tries of 250 ms;
     `parse_server_uuid` reads the `E` TLV answer.

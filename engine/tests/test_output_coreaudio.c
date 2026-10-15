@@ -653,7 +653,18 @@ static void user_set_mute(fdev *d, UInt32 m) {
 // --- clock, sleeps, stdout, threads
 
 static _Atomic uint64_t clock_offset;
-static uint64_t fake_clock_ns(clockid_t c) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + atomic_load(&clock_offset); }
+// a test's hook, run once by the next clock read on the thread that armed it, after the time is
+// read: what lands between the engine reading the time and its next step
+typedef void (*clock_hook_fn)(void);
+static _Atomic(clock_hook_fn) during_next_clock_read;
+static pthread_t clock_hook_thread;
+static uint64_t fake_clock_ns(clockid_t c) {
+	uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + atomic_load(&clock_offset);
+	clock_hook_fn hook = atomic_load(&during_next_clock_read);
+	if (hook && pthread_equal(pthread_self(), clock_hook_thread) &&
+		atomic_compare_exchange_strong(&during_next_clock_read, &hook, NULL)) hook();
+	return now;
+}
 static void advance_ms(unsigned ms) { atomic_fetch_add(&clock_offset, (uint64_t)ms * 1000000); }
 
 // the engine's sleeps are recorded, and taken 500 times faster
@@ -1680,6 +1691,45 @@ static void lms_answer_to_a_reported_level_is_not_put_on(void) {
 	user_set_db(d, -20);                      // straight after: reported, not swallowed
 	CHECK(nreports == 4 && !strcmp(reports[3], "lyrionplay:volume -20.00 0 1 1"), "the move after the answers: %u report(s), '%s'",
 		  nreports, last_report());
+	stop();
+}
+
+// pins /code-review 2026-10-15 (6) finding 5: during a drag, the Mac's next move reported while LMS's
+// answer to the one before waits for the reports. The listener stamps a report under lv.lock, so the
+// move lands in the gap between put_lms_level reading the time and taking the lock only while the time
+// is read before it; then the move's report was newer than that time, now - at wrapped, every report
+// read as expired, and the answer was put on, pulling the drag back. Read under the lock, the move
+// waits for it (here: is made once the answer is done), the one order left.
+static fdev *race_dev;
+static bool race_waited;
+static void the_mac_moves_while_the_answer_waits(void) {
+	if (pthread_mutex_trylock(&lv.lock) != 0) {   // held: the time was read under it
+		race_waited = true;
+		return;
+	}
+	pthread_mutex_unlock(&lv.lock);
+	advance_ms(1);                                 // stamped after the time the answer read
+	user_set_db(race_dev, -28.61f);
+}
+
+static void lms_answer_during_a_drag_is_not_put_on(void) {
+	fdev *d = race_dev = add_speakers();
+	start(d->uid, "0:0", 0, true, false);
+	user_set_db(d, -29.40f);                  // a drag's first move: reported, LMS answers 40
+	unsigned writes = d->vol_writes;
+	clock_hook_thread = pthread_self();
+	atomic_store(&during_next_clock_read, the_mac_moves_while_the_answer_waits);
+	lms_sends(LMS_VOL40);                     // the answer, the next move landing as it reads the time
+	if (race_waited) user_set_db(d, -28.61f); // the move, once the lock is let go
+	CHECK(!atomic_load(&during_next_clock_read), "control: the answer read no time");
+	CHECK(nreports == 2, "%u report(s), not the drag's two", nreports);
+	CHECK(fabsf(d->db - -28.61f) < 0.01f, "LMS's answer pulled the drag back to %.2f dB", d->db);
+	CHECK(d->vol_writes == writes, "%u write(s) for LMS's answer", d->vol_writes - writes);
+	lms_sends(LMS_VOL40);                     // its second audg
+	lms_sends(LMS_VOL42);                     // then the answer to the move
+	lms_sends(LMS_VOL42);
+	CHECK(fabsf(d->db - -28.61f) < 0.01f && d->vol_writes == writes, "the drag ended at %.2f dB, %u write(s)",
+		  d->db, d->vol_writes - writes);
 	stop();
 }
 
@@ -3250,6 +3300,7 @@ static const struct { const char *name; void (*fn)(void); } tests[] = {
 	{ "a DAC with no volume control is never read or reported", a_dac_with_no_volume_control_is_never_read_or_reported },
 	{ "the engine knows LMS's answer to each report", the_engine_knows_lms_answer_to_each_report },
 	{ "LMS's answer to a reported level is not put on", lms_answer_to_a_reported_level_is_not_put_on },
+	{ "LMS's answer during a drag is not put on", lms_answer_during_a_drag_is_not_put_on },
 	{ "a track or album change puts nothing on", a_track_or_album_change_puts_nothing_on },
 	{ "a track change leaves a move LMS never got", a_track_change_leaves_a_move_lms_never_got },
 	{ "a resume ends where the Mac left the device", a_resume_ends_where_the_mac_left_the_device },
