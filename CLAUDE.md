@@ -226,6 +226,8 @@ disproven belief or a cleared finding that is not written here will be re-report
 | "a status check holds up a volume push" (`LMSClient.playerStates`, `status` per player in turn) | **WRONG** (§A3, source 2026-10-14) | `A STATUS CHECK HOLDS UP A PUSH` |
 | /code-review 2026-10-14 of 0.2.10-0.4.5 (7faf2f8..682cab2): a settings file that did not decode set aside (`Settings.read`); a rename saved while off (`PlayerIdentity.applyName`, `settings-name`, was `ensureNameFile`); Follow switched off while deferred (`OutputFollow.resolve`); Fixed's held level off LMS's gain (`HeldVolume.dB`, `LMSVolume.gain`); engines stopped one at a time (`stopEngines`); the tap procedure's `engine.pid`; `macName`; serial `playerStates` | **1-4, 6, 8 VERIFIED + FIXED 2026-10-14** (Simon: "Verify the rest and look to fix"; 1 for 0.4.0 on only), 5 mutants killed, suite PASS; **5, 7 CLEARED** (§A3); not built (§C) | `CODE-REVIEW 2026-10-14` |
 | /code-review 2026-10-15 of the CODE-REVIEW 2026-10-14 fixes (tree): an unreadable settings.json at agent start renaming Follow (`applyName`, `loadSettings`); a version above 2 saved back unchanged (`Settings.read`, `save`); `applyName`'s two writes; the 0.3.x comment in `Settings.read`; `stopping` appended twice in `reconcile` | **1, 2, 4 VERIFIED + FIXED 2026-10-15** (Simon: "verify them all and look to fix check for all carriees and callers"), plus the 0.3.x cut-off off `currentVersion` (`firstPlayersVersion`, found in the carrier audit); 7 mutants killed; suite PASS; **3, 5 CLEARED** (3 measured: the next call repairs it, no writer; 5: a no-op repeat, comment added); not built | `CODE-REVIEW 2026-10-15` |
+| the player name file's writers; the agent writing settings.json's names to it (`applyName`, `settings-name`, `saved:`, `settingsRead` are GONE); `PlayerIdentity.createNameFile`/`writeName`/`renameReached`, `Settings.renames(since:devices:)` | **DECIDED 2026-10-15** (my design, on Simon's "Saving settins should not be so complicated"): two writers only, Settings' Save for a Name typed there and squeezelite for an LMS rename; the agent only makes a missing file (§A2) | `THE NAME FILE HAS TWO WRITERS` |
+| /code-review 2026-10-15 (2) of the 2026-10-15 fixes (tree): the defaults' name over a name file when settings.json is missing (`loadSettings`, `settingsRead`); the app's Save over an unreadable file; names past squeezelite's 63 bytes or blank (`fitName`); the engine's `<lms>` -1 comment; `applyName`'s `saved:`; the duplicated settings adopt in `run`/`tick`; `chooseVolume`'s inline MAC parse (`PlayerIdentity.mac(at:)`) | **ALL 7 VERIFIED + FIXED 2026-10-15** (Simon: "review this area thorouhgly … Verify and fix all"); 1, 5, 6 by removing the agent's name writing (`THE NAME FILE HAS TWO WRITERS`); 6 mutants killed; suite PASS; not built | `CODE-REVIEW 2026-10-15 (2)` |
 
 ### HOW TO LOG A VERDICT so the next round finds it
 Every new decision goes in §A2 (declined or by design), §A3 (a belief a measurement killed), §B
@@ -948,9 +950,27 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
   is set aside; a file that does not decode is `Settings.Stored.unreadable`, never moved or written
   over by the agent. A change of format that cannot be read that way needs version 3 and a migration
   from 2, never a reset. The set-aside cut-off is `firstPlayersVersion` (2), never `currentVersion`;
-  `save` always writes `currentVersion` (CODE-REVIEW 2026-10-15). While a file cannot be read at the
-  agent's start, the defaults' names never write over a name file (`applyName`'s `saved`). Settings from before 0.4: not migrated (`ONE PLAYER PER DAC`); never report
+  `save` always writes `currentVersion` (CODE-REVIEW 2026-10-15). A missing or unreadable file never
+  renames a player: the agent writes no name over a name file (`THE NAME FILE HAS TWO WRITERS`). The
+  Settings window shows the defaults for an unreadable file and says so; its Save keeps the file as
+  settings-unreadable.json first (`Settings.save`). Settings from before 0.4: not migrated (`ONE PLAYER PER DAC`); never report
   their set-aside as a defect.
+- **THE NAME FILE HAS TWO WRITERS — DECIDED 2026-10-15** (my design, on Simon's instruction: "The
+  saving settings issuesis becoming boring … Saving settins should not be so complicated"). `players/<slug>/name` (squeezelite
+  `-N`) is the player's name. Two things write it, and nothing else may: the Settings window's Save,
+  for a Name typed there (`PlayerIdentity.writeName`, before settings.json, for the names
+  `Settings.renames(since:devices:)` gives against what the window opened on), and squeezelite, for a
+  rename made in LMS. The agent only makes a missing one (`createNameFile`), and restarts a running
+  engine at a settings change only when the renamed player's file already holds the new name
+  (`renameReached`). Why: from 0.4.0 the AGENT applied settings.json's names to the file and had to
+  guess which ones were typed: 0.4.5 compared old and new settings (lost a rename saved while off),
+  the 2026-10-14 tree kept a `settings-name` record, the 2026-10-15 tree added a `saved` flag, and each
+  guess missed a case (CODE-REVIEW 2026-10-14 #2, 2026-10-15 #1, 2026-10-15 (2) #1 and #2). Only the
+  window knows what was typed. Never move name writing back into the agent, and never write a name
+  from a default. Names are `PlayerSettings.fitName`d (one line, 63 bytes of whole characters, what
+  squeezelite's `fgets` keeps); a blank one is refused at Save. Known and accepted: the Settings
+  window shows settings.json's name, not a rename made in LMS since (as 0.4.5 did); a rename in LMS
+  in the ~2 s between Save and the engine's restart is overwritten by Save's name.
 
 ### A3. DISPROVEN — beliefs the code suggests that measurement killed
 
@@ -1361,9 +1381,25 @@ evidence it cites.
 - **Built but UNVERIFIED:** the App Translocation guard in `setOn` (refuses On from an
   `/AppTranslocation/` path).
 - **Not yet measured:** a plain logout/login (a restart is VERIFIED, `THE MENU AND THE PLAYER ARE
-  TIED`); `pmset -g assertions` during playback; whether a
-  rename made in the app's Settings reaches LMS (the name file is rewritten and the engine
-  restarted).
+  TIED`); `pmset -g assertions` during playback.
+- **A rename in Settings reaches LMS: VERIFIED LIVE on 0.4.5, 2026-10-15** (Simon: "it saves back to
+  the server player is now called simonsMac I saved that in the app"). Follow (MAC
+  96:57:54:14:bd:87, 0.3.x's player carried on) renamed prodmac46 -> simonsMac in Settings while ON:
+  agent.log 00:03:52Z "settings changed: restarting the engine of simonsMac on FiiO M11 Plus";
+  `players/follow/name` and settings.json both "simonsMac"; LMS `players` shows "simonsMac"
+  (checked over HTTP). So an engine started on a new name file gives LMS that name. On 0.4.5 the
+  AGENT wrote the file; in the tree (`THE NAME FILE HAS TWO WRITERS`) the app's Save writes it and
+  the same restart follows, so only the writer changed. Still UNVERIFIED: a rename saved while the
+  player is off on the TREE, and an LMS rename kept across a later Save.
+- **A rename saved while OFF does not reach LMS on 0.4.5: CONFIRMED LIVE 2026-10-15** (Simon: "I just
+  edited Dragnfly whilst off then turned it on name in LMS has not changed but it has in the app"),
+  as CODE-REVIEW 2026-10-14 #2 said. settings.json "AudioQuest DragonFly Black v1.5" (saved 01:06:22
+  local), `players/AppleUSBAudioEngine-AudioQuest-AudioQuest-Dragon-ea39/name` still "prodmac46
+  AudioQuest DragonFly Black v1.5" (Oct 12), agent.log 00:06:23Z started its engine with that file, LMS
+  (82:6a:8f:3d:06:01) shows the old name. The tree's fix (Save writes the file) is not built. GAP in
+  the tree: a mismatch left by 0.4.x is not repaired by the new build (Save writes only a Name typed
+  after the window opened, and the window shows settings.json's name), so this DAC needs its name
+  typed again, or the window must show the name file's name (proposed to Simon, not decided).
 - **Review after 0.2.2 fixes (findings 1, 3 and 4): INSTALLED as 0.2.3** (Simon: "install and test on
   my dacs", version up yes, 2026-10-10 10:28Z; agent.log "LyrionPlay 0.2.3 (202610101128)", connected).
   1 and 4 VERIFIED LIVE on 0.2.5, below.
@@ -1541,6 +1577,55 @@ evidence it cites.
 
 Each entry records that a defect, as described, was fixed. It does not cover the code written to
 fix it (see HOW TO LOG).
+
+- **CODE-REVIEW 2026-10-15 (2) — /code-review of the CODE-REVIEW 2026-10-15 fixes (uncommitted tree),
+  ALL 7 VERIFIED + FIXED, not built** (Simon: "lets do another /code-review of lyrionPLay", then "The
+  saving settings issuesis becoming boring review this area thorouhgly as it feels like same mistakes
+  keep happening. Saving settins should not be so complicated. Verify and fix all"). The cause of the
+  repeats: the agent applied settings.json's names to the name file and guessed which were typed;
+  replaced by `THE NAME FILE HAS TWO WRITERS` (§A2).
+  1. **A missing settings.json renamed players over LMS's renames** — VERIFIED in the code:
+     `loadSettings` gave `Settings()` for `.missing`/`.older` and both callers set `settingsRead`, so
+     `applyName(saved: true)` wrote the defaults' name over a file whose record differed. Writer: a
+     player renamed in Settings on this tree (only these have a record), then settings.json deleted
+     by hand while `players/` stays. FIXED by the rule: the agent writes no name over a file, so
+     `applyName`, `settings-name`, `saved:`, `settingsRead` and `loadSettings` are gone.
+  2. **The app's Save over an unreadable file wrote the defaults, and the agent then renamed
+     Follow** — VERIFIED: `Settings.load()` gave the defaults, Save wrote them, the agent read them
+     with `settingsRead` true. The overwrite was the "not covered" line of CODE-REVIEW 2026-10-14 #1;
+     the rename it led to was new. FIXED: the rename by the rule (the window's names are compared
+     with what it opened on, so untouched defaults are no rename); the file: `Settings.save` keeps a
+     file that does not decode as settings-unreadable.json before writing; the window says so
+     (`PlayerModel.settingsUnreadable`, `reload`). Test `anUnreadableFileIsKeptWhenSavedOver`.
+  3. **Names past squeezelite's limit, or blank** — VERIFIED in `slimproto.c`: `fgets(player_name,
+     PLAYER_NAME_LEN, fp)` with `PLAYER_NAME_LEN` 64 keeps 63 bytes, cut mid-character if need be;
+     the defaults' "<Mac> <device>" can pass it; a blank Name wrote an empty file. FIXED:
+     `PlayerSettings.fitName` (`nameBytes` 63, whole characters, one line, trimmed) in both defaults
+     and at Save; a blank typed Name refuses the Save ("… needs a name."). Test `aNameFitsTheEngine`.
+  4. **The engine's `<lms>` -1 comment** said LMS sends an audg only at a track start — VERIFIED
+     against §A3 `LMS SENDS VOLUME ON CONNECT`. FIXED, prose only.
+  5. **`applyName`'s `saved:` carried the agent's provenance** — VERIFIED; gone with 1.
+  6. **The settings adopt written twice (`run`, `tick`), three decodes at start** — VERIFIED (they had
+     drifted: `run` fell back to `Settings()`, `tick` kept the old). FIXED: one `readSettings()`;
+     `init` no longer decodes.
+  7. **`chooseVolume` parsed the MAC file inline** — VERIFIED. FIXED: `PlayerIdentity.mac(at:)`, which
+     `loadOrCreateMAC` uses too.
+  - Carrier audit: name file: written by `writeName` (app Save), `createNameFile` (agent, missing
+    only), `adoptOldPlayer` (copy, missing only), squeezelite (LMS rename); read by squeezelite and
+    `renameReached`. settings.json: written by the app's Save, the agent's missing-file save and
+    `setAsideOlder` (all through `save`); read by `Settings.read` only (`load` is the tests'). No
+    `settings-name` exists on any install (the record was never built).
+  - Tests: `aRenameInSettingsReachesTheNameFile` and `theDefaultsNeverRenameAPlayer` replaced by
+    `onlyANameTypedInSettingsWritesTheNameFile` (a rename while off, an LMS rename kept, a missing
+    settings.json, a device switched on under its default name); `aNameFitsTheEngine`;
+    `anUnreadableFileIsKeptWhenSavedOver`. MUTANTS (scratchpad, one copy each): `renameReached`
+    always true, `createNameFile` writing over, `renames` without the device, `fitName` cutting past
+    63 (survived the first test, killed after a straddling case was added), defaults not fitted,
+    `save` keeping nothing: all 6 fail. After: `scripts/test.sh` PASS (engine conversion; engine
+    output 69/69; swift 103 in 21 suites; install.sh 3/3); `swift build` of every target, the one
+    known warning. Not covered by a suite: the app's Save (UI). Not built, not installed, not
+    live-tested. The last step (an engine started on a new name file renames the player in LMS)
+    VERIFIED LIVE on 0.4.5 the same day (§B); the tree's own writer (the app's Save) is not.
 
 - **CODE-REVIEW 2026-10-15 — /code-review of the CODE-REVIEW 2026-10-14 fixes (uncommitted tree), FIXED,
   not built** (Simon: "lets do another /code-review lyrionPlay", then "verify them all and look to fix

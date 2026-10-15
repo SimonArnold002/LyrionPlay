@@ -101,10 +101,8 @@ final class PlayerSlot {
 }
 
 final class Supervisor {
-	private var settings: Settings
-	/// `settings` came from settings.json; false while the agent runs on the defaults because the file
-	/// it started with cannot be read (PlayerIdentity.applyName's `saved`)
-	private var settingsRead = false
+	/// the defaults until `run` reads settings.json (readSettings)
+	private var settings = Settings()
 	private var settingsDate: Date?
 	private var devices: [DeviceCaps] = []
 	/// one per player that is on
@@ -131,8 +129,6 @@ final class Supervisor {
 	private var lastNoServerLog = Date.distantPast
 
 	init() {
-		let settings = Settings.load()
-		self.settings = settings
 		lms = ServerChoice(setting: settings.server)
 	}
 
@@ -158,12 +154,7 @@ final class Supervisor {
 		} catch {
 			log("cannot set the older settings aside: \(error)")
 		}
-		if let read = loadSettings() {
-			settings = read
-			settingsRead = true
-		} else {
-			settings = Settings()
-		}
+		readSettings()
 		lms = ServerChoice(setting: settings.server)
 		if !FileManager.default.fileExists(atPath: Paths.settings.path) {
 			try? settings.save()
@@ -214,14 +205,13 @@ final class Supervisor {
 		}
 	}
 
-	/// the settings file; nil when it does not decode, which is said and left as it is (Settings.Stored)
-	private func loadSettings() -> Settings? {
+	/// settings.json, at the start and at each change: no file gives the defaults; a file that does not
+	/// decode is said and left as it is, and the players keep the settings they have (Settings.Stored)
+	private func readSettings() {
 		switch Settings.read() {
-		case .current(let settings): return settings
-		case .older, .missing: return Settings()
-		case .unreadable(let why):
-			log("settings.json cannot be read, left as it is: \(why)")
-			return nil
+		case .current(let read): settings = read
+		case .older, .missing: settings = Settings()
+		case .unreadable(let why): log("settings.json cannot be read, left as it is: \(why)")
 		}
 	}
 
@@ -312,9 +302,8 @@ final class Supervisor {
 				log("\(name) carries on as the earlier version's player \(mac)")
 			}
 			let mac = try PlayerIdentity.loadOrCreateMAC(at: Paths.mac(key))
-			if try PlayerIdentity.applyName(name, at: Paths.playerName(key), applied: Paths.settingsName(key), saved: settingsRead) {
-				log("\(name): renamed in Settings since it last ran")
-			}
+			// a rename typed in Settings is already in the file (its Save wrote it), and LMS's are too
+			try PlayerIdentity.createNameFile(name, at: Paths.playerName(key))
 			return PlayerSlot(key: key, mac: mac, name: name)
 		} catch {
 			log("cannot create the identity of \(name): \(error)")
@@ -472,23 +461,20 @@ final class Supervisor {
 		let date = modificationDate(Paths.settings)
 		if date != settingsDate {
 			settingsDate = date
-			// a file that does not decode leaves the players as they are
-			if let read = loadSettings() {
-				settings = read
-				settingsRead = true
-			}
+			let earlier = settings
+			readSettings()
 			if lms.update(setting: settings.server) { // check the new one now, and say what it finds
 				lastLMSCheck = .distantPast
 				checkLog.settingChanged()
 			}
-			// a player that is not on takes a rename when it starts (makeSlot)
+			// Save wrote a rename to the name file before settings.json; a running engine reads it at its
+			// next start, so it restarts. A player that is not on reads it when it starts
+			let renamed = settings.renames(since: earlier, devices: devices)
 			for (key, slot) in slots {
-				let name = settings.player(key, device: slot.device).name
-				slot.name = name
-				// a rename in the app replaces the name file; the engine reads it at start
-				guard (try? PlayerIdentity.applyName(name, at: Paths.playerName(key), applied: Paths.settingsName(key),
-													 saved: settingsRead)) == true else { continue }
-				slot.restartWanted = true
+				slot.name = settings.player(key, device: slot.device).name
+				if let name = renamed[key], PlayerIdentity.renameReached(name, at: Paths.playerName(key)) {
+					slot.restartWanted = true
+				}
 			}
 			reconcile("settings changed")
 			// a player's "LMS volume" may have changed: check LMS at once (FixedVolumeSync). A change to

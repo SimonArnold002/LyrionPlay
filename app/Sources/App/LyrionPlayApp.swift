@@ -115,9 +115,12 @@ final class PlayerModel {
 
 	var isOn = LaunchAgent.isOn
 	var status: AgentStatus?
-	var settings = PlayerCore.Settings.load()
+	/// what settings.json holds, as the Settings window opened on it (reload)
+	var settings = PlayerCore.Settings()
 	/// the settings window edits this copy; Save writes it
-	var draft = PlayerCore.Settings.load()
+	var draft = PlayerCore.Settings()
+	/// settings.json is there but does not decode: the window shows the defaults and says so
+	var settingsUnreadable = false
 	var devices: [DeviceCaps] = []
 	var lastError: String?
 	/// a failed save, shown in the Settings window itself (Simon, 2026-10-12); lastError still carries
@@ -131,6 +134,7 @@ final class PlayerModel {
 	@ObservationIgnored private var timer: Timer?
 
 	init() {
+		reload()
 		refresh()
 		timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
 			MainActor.assumeIsolated { self?.refresh() }
@@ -182,6 +186,17 @@ final class PlayerModel {
 		refresh()
 	}
 
+	/// what is saved now, for the window to edit (the volume warning compares with it; Revert goes back
+	/// to it; Save writes the names changed from it). A file that does not decode shows the defaults,
+	/// and Save keeps it as settings-unreadable.json (Settings.save)
+	func reload() {
+		let stored = PlayerCore.Settings.read()
+		if case .current(let read) = stored { settings = read } else { settings = PlayerCore.Settings() }
+		if case .unreadable = stored { settingsUnreadable = true } else { settingsUnreadable = false }
+		draft = settings
+		heldNote = [:]
+	}
+
 	func loadDevices() {
 		let probed = DeviceCaps.probe(engine: Paths.executable("squeezelite"))
 		if !probed.isEmpty { devices = probed }
@@ -201,8 +216,7 @@ final class PlayerModel {
 			heldNote[row.key] = "LyrionPlay is not connected to LMS, so the volume to hold is not known: Fixed is not saved."
 			return
 		}
-		guard let mac = (try? String(contentsOf: Paths.mac(row.key), encoding: .utf8))?
-				.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), PlayerIdentity.isValid(mac) else {
+		guard let mac = PlayerIdentity.mac(at: Paths.mac(row.key)) else {
 			heldNote[row.key] = "LMS does not know this player yet: switch it on, let it connect, set its volume in LMS, then choose Fixed."
 			return
 		}
@@ -227,7 +241,8 @@ final class PlayerModel {
 		return LMSServer(host: host, webPort: port, name: status.serverName)
 	}
 
-	/// false when the file could not be written, or Fixed has no level to hold (lastError says why)
+	/// false when a file could not be written, a Name is blank, or Fixed has no level to hold
+	/// (lastError says why)
 	@discardableResult
 	func save(_ draft: PlayerCore.Settings) -> Bool {
 		// a saved volume choice a device does not offer is read as one it does (Settings.player);
@@ -235,6 +250,16 @@ final class PlayerModel {
 		var draft = draft
 		for row in rows where draft.players[row.key] != nil {
 			draft.players[row.key] = draft.forSaving(row.key, device: row.device)
+		}
+		// a Name typed here, as squeezelite keeps it (PlayerSettings.fitName); never blank
+		for (key, name) in draft.renames(since: settings, devices: devices) {
+			let fitted = PlayerSettings.fitName(name)
+			guard !fitted.isEmpty else {
+				lastError = "\(key == PlayerKey.follow ? "Follow the macOS output" : devices.first { $0.uid == key }?.name ?? "A player") needs a name."
+				saveError = lastError
+				return false
+			}
+			draft.players[key]?.name = fitted
 		}
 		for row in rows {
 			guard let device = row.device, device.volume != nil, draft.players[row.key] != nil else { continue }
@@ -246,8 +271,15 @@ final class PlayerModel {
 		}
 		do {
 			try Paths.createDirectories()
+			// the names typed here go to the name files first, so the agent finds them there when it
+			// sees settings.json change (PlayerIdentity.renameReached); nothing else here touches them
+			for (key, name) in draft.renames(since: settings, devices: devices) {
+				try PlayerIdentity.writeName(name, at: Paths.playerName(key))
+			}
 			try draft.save()
 			settings = draft
+			self.draft = draft
+			settingsUnreadable = false
 			// only a failed save's message: a switch-on error stays, as at Revert (/code-review
 			// 2026-10-12 (6), finding 1)
 			clearSaveError()
@@ -407,6 +439,10 @@ struct SettingsView: View {
 					Text("Debug").tag("debug")
 				}
 			}
+			if model.settingsUnreadable {
+				Text("settings.json could not be read, so these are the defaults. Save replaces it; the old file is kept as settings-unreadable.json.")
+					.font(.caption).foregroundStyle(.orange)
+			}
 			if let error = model.saveError {
 				Text(error).font(.caption).foregroundStyle(.red)
 			}
@@ -430,10 +466,7 @@ struct SettingsView: View {
 		.onAppear {
 			model.clearSaveError() // from an earlier opening
 			model.loadDevices()
-			// what is saved now (the volume warning compares with it; Revert goes back to it)
-			model.settings = PlayerCore.Settings.load()
-			model.draft = model.settings
-			model.heldNote = [:]
+			model.reload()
 		}
 	}
 }

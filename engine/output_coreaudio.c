@@ -302,8 +302,9 @@ static void find_volume(AudioDeviceID dev, struct volctl *v) {
 // unmute to the volume it kept (UNMUTE IS NOT A LEVEL: LMS's mute left the device at its minimum),
 // and a level moved sets LMS to that level, which unmutes it (Simon, 2026-10-14). <lms> is
 // LMS's last audg as this engine got it: 1 a level (so LMS is not muted), 0 silence (muted, or
-// volume 0), -1 none yet (LMS sends one only when a track starts, so whether its volume is fixed
-// is not known either). The agent asks LMS only when it is not 1. LMS's answer to a report is
+// volume 0), -1 none yet (LMS sends its saved level ~5 ms after every connect and reconnect, and
+// again at each track start, so -1 covers only an engine's first moments; LMS SENDS VOLUME ON
+// CONNECT). The agent asks LMS only when it is not 1. LMS's answer to a report is
 // recognised and not put on (put_lms_level). dB mode only; -X (linear) is not reported.
 
 #define VOLUME_MOVED_DB 0.6f         // LMS's dBToFixed rounding and read-back jitter stay below this

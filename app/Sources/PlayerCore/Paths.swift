@@ -29,10 +29,9 @@ public enum Paths {
 	public static func player(_ key: String) -> URL { players.appendingPathComponent(slug(key)) }
 	/// the player's MAC address, generated once
 	public static func mac(_ key: String) -> URL { player(key).appendingPathComponent("mac") }
-	/// squeezelite -N: holds the player name, and LMS's renames are written back to it
+	/// squeezelite -N: the player name. The agent makes a missing one; after that only Settings' Save and
+	/// LMS's renames write it (PlayerIdentity.name)
 	public static func playerName(_ key: String) -> URL { player(key).appendingPathComponent("name") }
-	/// the name Settings last put in the name file (PlayerIdentity.applyName)
-	public static func settingsName(_ key: String) -> URL { player(key).appendingPathComponent("settings-name") }
 	/// the player's running engine's PID, so a restarted agent can stop an engine its crashed
 	/// predecessor left
 	public static func enginePID(_ key: String) -> URL { player(key).appendingPathComponent("engine.pid") }

@@ -105,14 +105,30 @@ public struct PlayerSettings: Codable, Equatable, Sendable {
 	/// *Follow the macOS output*: on, named after the Mac, shared (macOS's outputs), its own volume
 	/// where the output has one
 	public static var followDefaults: PlayerSettings {
-		PlayerSettings(enabled: true, name: macName, exclusive: false, dop: false, volume: .device)
+		PlayerSettings(enabled: true, name: fitName(macName), exclusive: false, dop: false, volume: .device)
 	}
 
 	/// a device's own player: off until switched on, named after the Mac then the device (Simon,
 	/// 2026-10-12), exclusive on external DACs, its own volume where it has one; DoP off
 	public static func defaults(for device: DeviceCaps) -> PlayerSettings {
-		PlayerSettings(enabled: false, name: "\(macName) \(device.name)", exclusive: device.isExternal, dop: false,
+		PlayerSettings(enabled: false, name: fitName("\(macName) \(device.name)"), exclusive: device.isExternal, dop: false,
 					   volume: device.volume != nil ? .device : .software)
+	}
+
+	/// The most of a name squeezelite's -N keeps: one line, 63 bytes (slimproto.c reads the name file
+	/// with `fgets` into 64), so it is cut at a whole character here, never mid-character there. A
+	/// Mac and a DAC with long names passed it in the defaults (/code-review 2026-10-15 (2), finding 3).
+	public static let nameBytes = 63
+
+	/// one line, trimmed, at most `nameBytes` bytes of whole characters; "" for a blank name
+	public static func fitName(_ name: String) -> String {
+		let line = name.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+		var fitted = ""
+		for character in line {
+			guard fitted.utf8.count + String(character).utf8.count <= nameBytes else { break }
+			fitted.append(character)
+		}
+		return fitted.trimmingCharacters(in: .whitespaces)
 	}
 }
 
@@ -184,6 +200,21 @@ public struct Settings: Codable, Equatable, Sendable {
 		return player
 	}
 
+	/// The players whose name is not the one `earlier` gives them, with the new name. The Settings
+	/// window compares with what it opened on, so these are the names typed there; the agent compares
+	/// with the settings it ran on, so a file that went missing gives the defaults' names here too
+	/// (PlayerIdentity.renameReached guards against those). `devices`: for the defaults of a device
+	/// player with no saved settings.
+	public func renames(since earlier: Settings, devices: [DeviceCaps]) -> [String: String] {
+		var renamed: [String: String] = [:]
+		for key in players.keys {
+			let device = devices.first { $0.uid == key }
+			let name = player(key, device: device).name
+			if name != earlier.player(key, device: device).name { renamed[key] = name }
+		}
+		return renamed
+	}
+
 	public func isOn(_ key: String) -> Bool {
 		players[key]?.enabled ?? (key == PlayerKey.follow)
 	}
@@ -245,10 +276,22 @@ public struct Settings: Codable, Equatable, Sendable {
 		return aside
 	}
 
+	/// where `save` keeps a file that did not decode before writing over it
+	public static func unreadableCopy(of url: URL = Paths.settings) -> URL {
+		url.deletingLastPathComponent().appendingPathComponent("settings-unreadable.json")
+	}
+
 	/// Always as this build's version: a later build's file read here keeps its number in `version`,
 	/// and saved back under it with only this build's keys, that build would skip its migration from
-	/// this one (/code-review 2026-10-15, finding 2).
+	/// this one (/code-review 2026-10-15, finding 2). A file that does not decode is kept as
+	/// settings-unreadable.json first: the Settings window shows the defaults for it, and a Save there
+	/// replaced it with nothing kept (/code-review 2026-10-15 (2), finding 2).
 	public func save(to url: URL = Paths.settings) throws {
+		if case .unreadable = Settings.read(from: url) {
+			let copy = Settings.unreadableCopy(of: url)
+			try? FileManager.default.removeItem(at: copy)
+			try FileManager.default.moveItem(at: url, to: copy)
+		}
 		var stamped = self
 		stamped.version = Settings.currentVersion
 		let encoder = JSONEncoder()

@@ -343,6 +343,26 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(try String(contentsOf: aside, encoding: .utf8) == "0.3")
 	}
 
+	/// /code-review 2026-10-15 (2), finding 2: the Settings window shows the defaults for a file that
+	/// does not decode, and its Save wrote over that file with nothing kept
+	@Test func anUnreadableFileIsKeptWhenSavedOver() throws {
+		let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lyrionplay-\(UUID())")
+		try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+		defer { try? FileManager.default.removeItem(at: dir) }
+		let url = dir.appendingPathComponent("settings.json"), copy = Settings.unreadableCopy(of: url)
+		let bad = #"{"version":2,"players":{"follow":{"enabled":"yes","name":"Study"}}}"#
+		try Data(bad.utf8).write(to: url)
+		try Settings().save(to: url)
+		#expect(try String(contentsOf: copy, encoding: .utf8) == bad)
+		#expect(Settings.read(from: url) == .current(Settings()))
+		// control: a file that reads is replaced, and the copy is left as it was
+		var next = Settings()
+		next.server = "plex"
+		try next.save(to: url)
+		#expect(Settings.load(from: url).server == "plex")
+		#expect(try String(contentsOf: copy, encoding: .utf8) == bad)
+	}
+
 	/// /code-review 2026-10-15, finding 2: a later build's file read here (a rollback) was saved back
 	/// under the later version, with only this build's keys, so that build would skip its migration
 	@Test func aLaterVersionIsSavedAsThisOne() throws {
@@ -437,73 +457,76 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(try String(contentsOf: name, encoding: .utf8) == "Study 2")
 	}
 
-	/// /code-review 2026-10-14, finding 2: a rename saved in Settings while the player (or LyrionPlay)
-	/// was off never reached LMS; a rename made in LMS (squeezelite writes it to the file) must stay
-	@Test func aRenameInSettingsReachesTheNameFile() throws {
+	/// The name file has two writers: Settings' Save, for a Name typed there, and squeezelite, for a
+	/// rename in LMS. /code-review 2026-10-14, finding 2: a rename saved while the player (or LyrionPlay)
+	/// was off never reached LMS. /code-review 2026-10-15 (2), finding 1: a settings.json gone missing
+	/// gave the defaults' name, which the agent wrote over LMS's rename
+	@Test func onlyANameTypedInSettingsWritesTheNameFile() throws {
 		let fm = FileManager.default
 		let dir = fm.temporaryDirectory.appendingPathComponent("lyrionplay-name-\(UUID())")
 		defer { try? fm.removeItem(at: dir) }
-		let name = dir.appendingPathComponent("players/x/name"), applied = dir.appendingPathComponent("players/x/settings-name")
-		func file() throws -> String { try String(contentsOf: name, encoding: .utf8) }
+		let name = dir.appendingPathComponent("players/follow/name")
+		func file() -> String? { PlayerIdentity.name(at: name) }
 
-		#expect(try PlayerIdentity.applyName("Mac DAC", at: name, applied: applied, saved: true) == false) // new: written
-		#expect(try file() == "Mac DAC")
-		#expect(try PlayerIdentity.applyName("Mac DAC", at: name, applied: applied, saved: true) == false) // control: no change
-		// renamed in Settings, however long ago, whatever ran meanwhile
-		#expect(try PlayerIdentity.applyName("Study DAC", at: name, applied: applied, saved: true) == true)
-		#expect(try file() == "Study DAC")
-		// renamed in LMS: squeezelite writes the file; the same Settings name leaves it
+		// the agent's first start: made from the settings
+		try PlayerIdentity.createNameFile("Mac", at: name)
+		#expect(file() == "Mac")
+		// renamed in Settings, the player off or on: Save writes it, and a running engine restarts
+		var saved = Settings()
+		saved.players[PlayerKey.follow]?.name = "Mac"
+		var typed = saved
+		typed.players[PlayerKey.follow]?.name = "Study"
+		let renamed = typed.renames(since: saved, devices: devices)
+		#expect(renamed == [PlayerKey.follow: "Study"])
+		for (_, new) in renamed { try PlayerIdentity.writeName(new, at: name) }
+		#expect(file() == "Study")
+		#expect(PlayerIdentity.renameReached("Study", at: name))
+		// control: nothing typed, nothing renamed
+		#expect(typed.renames(since: typed, devices: devices).isEmpty)
+
+		// renamed in LMS: squeezelite writes the file; the agent's start makes no change to it
 		try "Lounge".write(to: name, atomically: true, encoding: .utf8)
-		#expect(try PlayerIdentity.applyName("Study DAC", at: name, applied: applied, saved: true) == false)
-		#expect(try file() == "Lounge")
-		// a player from before the record keeps its file, and a later rename in Settings lands
-		try fm.removeItem(at: applied)
-		#expect(try PlayerIdentity.applyName("Other", at: name, applied: applied, saved: true) == false)
-		#expect(try file() == "Lounge")
-		#expect(try PlayerIdentity.applyName("Desk", at: name, applied: applied, saved: true) == true)
-		#expect(try file() == "Desk")
+		try PlayerIdentity.createNameFile("Study", at: name)
+		#expect(file() == "Lounge")
+		// settings.json gone: the agent runs the defaults, whose name differs from Study, but the file
+		// holds LMS's, so no restart, and nothing writes it
+		let missing = Settings()
+		#expect(missing.renames(since: typed, devices: devices)[PlayerKey.follow] == PlayerSettings.followDefaults.name)
+		#expect(!PlayerIdentity.renameReached(PlayerSettings.followDefaults.name, at: name))
+		try PlayerIdentity.createNameFile(PlayerSettings.followDefaults.name, at: name)
+		#expect(file() == "Lounge")
+
+		// a device player switched on in Settings keeps the defaults' name: not a rename, so an
+		// existing file (LMS's rename, from before settings.json went missing) stays
+		var on = missing
+		var dac = on.forSaving(fiio.uid, device: fiio)
+		dac.enabled = true
+		on.players[fiio.uid] = dac
+		#expect(on.renames(since: missing, devices: devices).isEmpty)
 	}
 
-	/// /code-review 2026-10-15, finding 1: with settings.json unreadable at its start, the agent runs the
-	/// defaults, whose name (the Mac's) wrote over the name file and the record: a rename made in LMS
-	/// was lost for good, and LMS showed the Mac's name
-	@Test func theDefaultsNeverRenameAPlayer() throws {
-		let fm = FileManager.default
-		let dir = fm.temporaryDirectory.appendingPathComponent("lyrionplay-name-\(UUID())")
-		defer { try? fm.removeItem(at: dir) }
-		let name = dir.appendingPathComponent("players/follow/name"), applied = dir.appendingPathComponent("players/follow/settings-name")
-		func file() throws -> String { try String(contentsOf: name, encoding: .utf8) }
-		func record() -> String? { try? String(contentsOf: applied, encoding: .utf8) }
-
-		// named Study in Settings, then Lounge in LMS
-		try PlayerIdentity.applyName("Study", at: name, applied: applied, saved: true)
-		try "Lounge".write(to: name, atomically: true, encoding: .utf8)
-		// the file unreadable at the agent's start: the defaults' name touches nothing
-		#expect(try PlayerIdentity.applyName("Mac", at: name, applied: applied, saved: false) == false)
-		#expect(try file() == "Lounge")
-		#expect(record() == "Study")
-		// the file read again: Settings' name is the one it put there, so LMS's rename stays
-		#expect(try PlayerIdentity.applyName("Study", at: name, applied: applied, saved: true) == false)
-		#expect(try file() == "Lounge")
-		// control: the same name from settings.json is a rename in Settings, and lands
-		#expect(try PlayerIdentity.applyName("Mac", at: name, applied: applied, saved: true) == true)
-		#expect(try file() == "Mac")
-
-		// a player from before the record: the defaults write no record, so a later read keeps the file
-		try fm.removeItem(at: applied)
-		try "Lounge".write(to: name, atomically: true, encoding: .utf8)
-		#expect(try PlayerIdentity.applyName("Mac", at: name, applied: applied, saved: false) == false)
-		#expect(record() == nil)
-		#expect(try PlayerIdentity.applyName("Study", at: name, applied: applied, saved: true) == false)
-		#expect(try file() == "Lounge")
-
-		// no name file at all: the defaults make one, recorded as theirs, so Settings' name replaces it
-		try fm.removeItem(at: name)
-		try fm.removeItem(at: applied)
-		#expect(try PlayerIdentity.applyName("Mac", at: name, applied: applied, saved: false) == false)
-		#expect(try file() == "Mac")
-		#expect(try PlayerIdentity.applyName("Study", at: name, applied: applied, saved: true) == true)
-		#expect(try file() == "Study")
+	/// squeezelite keeps 63 bytes of the name file's first line (fgets into 64): a longer name was cut
+	/// there, mid-character if need be, and a blank one started the engine with no name
+	/// (/code-review 2026-10-15 (2), finding 3)
+	@Test func aNameFitsTheEngine() {
+		#expect(PlayerSettings.fitName("  Study  ") == "Study")
+		#expect(PlayerSettings.fitName("Study\nDesk") == "Study Desk")
+		#expect(PlayerSettings.fitName("   ") == "")
+		// 3-byte characters across the limit: whole characters only
+		let long = String(repeating: "’", count: 30)
+		let fitted = PlayerSettings.fitName(long)
+		#expect(fitted.utf8.count <= PlayerSettings.nameBytes)
+		#expect(fitted == String(repeating: "’", count: 21))
+		// one that would straddle byte 63 is left out, not cut: 1 + 20 × 3 = 61 bytes
+		#expect(PlayerSettings.fitName("a" + long) == "a" + String(repeating: "’", count: 20))
+		// control: a name that fits is kept as it is
+		let exact = String(repeating: "a", count: PlayerSettings.nameBytes)
+		#expect(PlayerSettings.fitName(exact) == exact)
+		#expect(PlayerSettings.fitName(exact + "b") == exact)
+		// the defaults of a DAC with a long name fit too
+		var longDAC = fiio
+		longDAC.name = "Topping D90SE USB Audio 2.0 Class Device With A Very Long Name Indeed"
+		#expect(PlayerSettings.defaults(for: longDAC).name.utf8.count <= PlayerSettings.nameBytes)
 	}
 
 	/// with no usable 0.3.x MAC, the follow player is new, and takes no old name either

@@ -5,16 +5,20 @@ import Foundation
 /// per player (Paths.player), so each output is its own LMS player (ONE PLAYER PER DAC).
 public enum PlayerIdentity {
 	public static func loadOrCreateMAC(at url: URL) throws -> String {
-		if let text = try? String(contentsOf: url, encoding: .utf8) {
-			let mac = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-			if isValid(mac) { return mac }
-		}
+		if let mac = mac(at: url) { return mac }
 		try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
 		var bytes = (0..<6).map { _ in UInt8.random(in: 0...255) }
 		bytes[0] = (bytes[0] & 0xFC) | 0x02 // locally administered, unicast
 		let mac = bytes.map { String(format: "%02x", $0) }.joined(separator: ":")
 		try mac.write(to: url, atomically: true, encoding: .utf8)
 		return mac
+	}
+
+	/// the player's MAC address, or nil before the agent has made one (the Settings window reads it)
+	public static func mac(at url: URL) -> String? {
+		guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+		let mac = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+		return isValid(mac) ? mac : nil
 	}
 
 	public static func isValid(_ mac: String) -> Bool {
@@ -41,30 +45,35 @@ public enum PlayerIdentity {
 		return mac
 	}
 
-	/// The name file squeezelite's -N reads at its start, and writes LMS's renames to. A rename in
-	/// Settings reaches it whether the player, or LyrionPlay, was on or off when it was saved; a rename
-	/// in LMS stays. `applied` keeps the name Settings last put in the file: the file is written when
-	/// there is none, or when Settings' name is no longer that one. A player from 0.4.0-0.4.5, with no
-	/// record, keeps its file as it is. Before, the agent wrote a rename only for a player already
-	/// running (/code-review 2026-10-14, finding 2). True when an existing file was written over: a
-	/// running engine needs a restart to take it.
-	/// `saved`: the name is from settings.json. False while the agent runs on the defaults because
-	/// the file cannot be read: the defaults' name then only makes a missing file, never writes over
-	/// one, or a rename made in LMS would be lost for good (/code-review 2026-10-15, finding 1).
-	/// The file is written before the record, so a record that fails to write leaves the record
-	/// older than the file, and the next call writes both again.
-	@discardableResult
-	public static func applyName(_ name: String, at url: URL, applied: URL, saved: Bool) throws -> Bool {
-		let fm = FileManager.default
-		let last = try? String(contentsOf: applied, encoding: .utf8)
-		let exists = fm.fileExists(atPath: url.path)
-		if exists, !saved || last == nil || last == name {
-			if saved, last == nil { try name.write(to: applied, atomically: true, encoding: .utf8) }
-			return false
-		}
-		try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+	/// The name file squeezelite's -N reads at its start: the player's name. Two things write it, and
+	/// nothing else may: the Settings window's Save, for a Name typed there (`writeName`), and
+	/// squeezelite, for a rename made in LMS. The agent only makes a missing one (`createNameFile`), so
+	/// no default or stale name in settings.json ever writes over a rename. Before, the agent applied
+	/// settings.json's names itself and had to guess which were typed (a `settings-name` record, then
+	/// a `saved` flag), and a missing or unreadable settings.json still wrote the defaults' name over
+	/// LMS's (/code-review 2026-10-15 (2), finding 1).
+	public static func name(at url: URL) -> String? {
+		(try? String(contentsOf: url, encoding: .utf8))?.trimmingCharacters(in: .newlines)
+	}
+
+	/// a player's first name file, from its settings; one that exists is left as it is
+	public static func createNameFile(_ name: String, at url: URL) throws {
+		guard !FileManager.default.fileExists(atPath: url.path) else { return }
+		try writeName(name, at: url)
+	}
+
+	/// a Name typed in Settings, written by its Save before settings.json: whether the player, or
+	/// LyrionPlay, is on or off, it is the name the engine reads at its next start
+	public static func writeName(_ name: String, at url: URL) throws {
+		try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
 		try name.write(to: url, atomically: true, encoding: .utf8)
-		try name.write(to: applied, atomically: true, encoding: .utf8)
-		return exists
+	}
+
+	/// The agent, at a settings change: a running engine restarts to take a rename (Settings.renames)
+	/// only when its name file holds the new name, which Save wrote there. A file holding another is
+	/// LMS's rename, or the defaults' name from a settings.json gone missing, and the engine has the
+	/// file's name already.
+	public static func renameReached(_ name: String, at url: URL) -> Bool {
+		self.name(at: url) == name
 	}
 }
