@@ -248,7 +248,8 @@ static void test_other_server(void) {
 	CHECK(answer && !strcmp(answer, "Desk DAC"), "another server is offered the name, got %s", answer ? answer : "nothing");
 	to_engine("Desk DAC");
 	engine_sent();
-	CHECK(!strcmp(read_file(stamp_path), SERVER_B), "the new server's name stamps it, got \"%s\"", read_file(stamp_path));
+	CHECK(!strcmp(read_line(stamp_path, 2), SERVER_B), "the new server's name stamps it, last, got \"%s\"", read_line(stamp_path, 2));
+	CHECK(!strcmp(read_line(stamp_path, 1), SERVER_A), "the first server stays, got \"%s\"", read_line(stamp_path, 1));
 	answer = query();
 	CHECK(answer && !answer[0], "then that server gets the empty answer, got %s", answer ? answer : "nothing");
 }
@@ -336,7 +337,7 @@ static void test_new_server_keeps_name(void) {
 	CHECK(messages >= 0, "no loop (stopped after %d messages)", LOOP_LIMIT);
 	CHECK(!strcmp(lms.pref, "Desk DAC"), "the new server takes the player's name, got \"%s\"", lms.pref);
 	CHECK(!strcmp(read_file(name_path), "Desk DAC"), "the name file keeps it, got \"%s\"", read_file(name_path));
-	CHECK(!strcmp(read_file(stamp_path), SERVER_B), "the new server stamps it, got \"%s\"", read_file(stamp_path));
+	CHECK(!strcmp(read_line(stamp_path, 2), SERVER_B), "the new server stamps it, got \"%s\"", read_line(stamp_path, 2));
 }
 
 static void test_model_sees_the_loop(void) {
@@ -364,7 +365,7 @@ static void test_unchanged_name_is_quiet(void) {
 static void test_one_server_two_addresses(void) {
 	// Simon's hostname: plex at home on the LAN, away over Tailscale
 	write_file(name_path, "simonsMac");
-	write_file(stamp_path, SERVER_A "\n" UUID_PLEX "\n");
+	write_file(stamp_path, SERVER_A " " UUID_PLEX "\n");
 	engine_start_uuid("x", TAILSCALE, UUID_PLEX);
 	const char *answer = query();
 	CHECK(answer && !answer[0], "the same LMS at another address gets the empty answer, got %s", answer ? answer : "nothing");
@@ -372,7 +373,7 @@ static void test_one_server_two_addresses(void) {
 
 static void test_new_lms_old_address(void) {
 	write_file(name_path, "simonsMac");
-	write_file(stamp_path, SERVER_A "\n" UUID_PLEX "\n");
+	write_file(stamp_path, SERVER_A " " UUID_PLEX "\n");
 	engine_start_uuid("x", SERVER_A, UUID_OTHER);
 	const char *answer = query();
 	CHECK(answer && !strcmp(answer, "simonsMac"), "another LMS at the old address is offered the name, got %s", answer ? answer : "nothing");
@@ -380,7 +381,7 @@ static void test_new_lms_old_address(void) {
 
 static void test_no_uuid_answer(void) {
 	write_file(name_path, "simonsMac");
-	write_file(stamp_path, SERVER_A "\n" UUID_PLEX "\n");
+	write_file(stamp_path, SERVER_A " " UUID_PLEX "\n");
 	engine_start("x", SERVER_A);
 	const char *answer = query();
 	CHECK(answer && !answer[0], "no UUID answer, the stamp's address: empty, got %s", answer ? answer : "nothing");
@@ -394,10 +395,10 @@ static void test_stamp_holds_uuid(void) {
 	query();
 	to_engine("Kitchen DAC");
 	engine_sent();
-	CHECK(!strcmp(read_line(stamp_path, 1), SERVER_A), "the stamp's first line is the address, got \"%s\"", read_line(stamp_path, 1));
-	CHECK(!strcmp(read_line(stamp_path, 2), UUID_PLEX), "its second the UUID, got \"%s\"", read_line(stamp_path, 2));
+	CHECK(!strcmp(read_line(stamp_path, 1), SERVER_A " " UUID_PLEX), "the stamp's line is the address and the UUID, got \"%s\"", read_line(stamp_path, 1));
+	CHECK(!read_line(stamp_path, 2)[0], "one line for one server, got \"%s\"", read_line(stamp_path, 2));
 	// read back at the next start, at another address
-	name_server_ip = 0; name_server_uuid[0] = '\0';
+	name_server_count = 0;
 	engine_start_uuid("Kitchen DAC", TAILSCALE, UUID_PLEX);
 	const char *answer = query();
 	CHECK(answer && !answer[0], "read back, the same UUID at another address: empty, got %s", answer ? answer : "nothing");
@@ -406,7 +407,7 @@ static void test_stamp_holds_uuid(void) {
 static void test_held_rename_two_addresses(void) {
 	// named over the LAN, renamed in LMS while playing, reconnected over Tailscale before it stopped
 	write_file(name_path, "simonsMac");
-	write_file(stamp_path, SERVER_A "\n" UUID_PLEX "\n");
+	write_file(stamp_path, SERVER_A " " UUID_PLEX "\n");
 	engine_start_uuid("x", TAILSCALE, UUID_PLEX);
 	struct lms lms = { "Study", true, 0 };
 	int messages = lms_connect(&lms);
@@ -417,10 +418,108 @@ static void test_held_rename_two_addresses(void) {
 static void test_held_rename_two_addresses_no_uuid(void) {
 	// control: the same without a UUID answer is the loop the UUID prevents
 	write_file(name_path, "simonsMac");
-	write_file(stamp_path, SERVER_A "\n" UUID_PLEX "\n");
+	write_file(stamp_path, SERVER_A " " UUID_PLEX "\n");
 	engine_start("x", TAILSCALE);
 	struct lms lms = { "Study", true, 0 };
 	CHECK(lms_connect(&lms) == -1, "without the UUID, the address change crosses the held rename");
+}
+
+static void test_held_rename_after_another_server(void) {
+	// /code-review 2026-10-15 (4) finding 1: named by A, renamed in A while playing, moved to B (B
+	// names it), back to A within LMS's 300 s while A still holds the rename
+	write_file(name_path, "Desk DAC");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_A);
+	struct lms a = { "Desk DAC", false, 0 };
+	CHECK(lms_connect(&a) >= 0, "A: no loop");
+	strcpy(a.pref, "Study");  // renamed in A while it plays: held
+	a.held = true;
+	engine_connect(SERVER_B, "");
+	struct lms b = { "SqueezeLiteMac", false, 0 };
+	CHECK(lms_connect(&b) >= 0, "B: no loop");
+	engine_connect(SERVER_A, "");
+	int messages = lms_connect(&a);
+	CHECK(messages >= 0, "back on A: no loop (stopped after %d messages)", LOOP_LIMIT);
+	CHECK(!strcmp(a.pref, "Study"), "A keeps its rename, got \"%s\"", a.pref);
+	CHECK(!strcmp(read_file(name_path), "Study"), "the player takes it, got \"%s\"", read_file(name_path));
+}
+
+static void test_held_rename_after_another_server_restarted(void) {
+	// the same with the engine restarted on B (the Server setting changed): the stamp read back
+	write_file(name_path, "Desk DAC");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_B);
+	struct lms b = { "SqueezeLiteMac", false, 0 };
+	CHECK(lms_connect(&b) >= 0, "B: no loop");
+	name_server_count = 0;
+	engine_start("x", SERVER_A);
+	struct lms a = { "Study", true, 0 };
+	CHECK(lms_connect(&a) >= 0, "back on A after a restart: no loop (stopped after %d messages)", LOOP_LIMIT);
+	CHECK(!strcmp(read_file(name_path), "Study"), "the player takes A's rename, got \"%s\"", read_file(name_path));
+}
+
+static void test_lost_uuid_answer_keeps_uuid(void) {
+	// finding 2: at home the UUID reply is lost and LMS names the player; away, over Tailscale,
+	// the UUID still makes it the same server
+	write_file(name_path, "simonsMac");
+	write_file(stamp_path, SERVER_A " " UUID_PLEX "\n");
+	engine_start("x", SERVER_A);
+	struct lms home = { "simonsMac", false, 0 };
+	CHECK(lms_connect(&home) >= 0, "home: no loop");
+	CHECK(!strcmp(read_line(stamp_path, 1), SERVER_A " " UUID_PLEX), "a connect without a UUID keeps the stamp's, got \"%s\"", read_line(stamp_path, 1));
+	engine_connect(TAILSCALE, UUID_PLEX);
+	struct lms away = { "Study", true, 0 };
+	CHECK(lms_connect(&away) >= 0, "away with a held rename: no loop (stopped after %d messages)", LOOP_LIMIT);
+	CHECK(!strcmp(read_file(name_path), "Study"), "the player takes the rename, got \"%s\"", read_file(name_path));
+}
+
+static void test_uuid_fills_address_line(void) {
+	// a server first stamped without a UUID gets it at the next connect that has one, on its line
+	write_file(name_path, "simonsMac");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start_uuid("x", SERVER_A, UUID_PLEX);
+	struct lms lms = { "simonsMac", false, 0 };
+	CHECK(lms_connect(&lms) >= 0, "no loop");
+	CHECK(!strcmp(read_line(stamp_path, 1), SERVER_A " " UUID_PLEX), "the UUID joins the address's line, got \"%s\"", read_line(stamp_path, 1));
+	CHECK(!read_line(stamp_path, 2)[0], "no second line, got \"%s\"", read_line(stamp_path, 2));
+}
+
+static void test_new_lms_old_address_keeps_both(void) {
+	// another LMS at the old address names the player: both servers stay stamped
+	write_file(name_path, "simonsMac");
+	write_file(stamp_path, SERVER_A " " UUID_PLEX "\n");
+	engine_start_uuid("x", SERVER_A, UUID_OTHER);
+	struct lms other = { "SqueezeLiteMac", false, 0 };
+	CHECK(lms_connect(&other) >= 0, "no loop");
+	CHECK(!strcmp(read_line(stamp_path, 2), SERVER_A " " UUID_OTHER), "the new LMS is added, got \"%s\"", read_line(stamp_path, 2));
+	engine_connect(TAILSCALE, UUID_PLEX);
+	const char *answer = query();
+	CHECK(answer && !answer[0], "plex, at another address, still gets the empty answer, got %s", answer ? answer : "nothing");
+}
+
+static void test_stamp_is_bounded(void) {
+	// past NAME_SERVERS the oldest is dropped; a server naming it again moves last
+	char server[32];
+	write_file(name_path, "Desk DAC");
+	write_file(stamp_path, "10.0.1.1\n");
+	engine_start("x", "10.0.1.1");
+	for (int i = 2; i <= NAME_SERVERS + 1; i++) {
+		snprintf(server, sizeof(server), "10.0.1.%d", i);
+		engine_connect(server, "");
+		query();
+		to_engine("Desk DAC");
+		engine_sent();
+	}
+	CHECK(!strcmp(read_line(stamp_path, 1), "10.0.1.2"), "the oldest dropped, got \"%s\"", read_line(stamp_path, 1));
+	CHECK(!read_line(stamp_path, NAME_SERVERS + 1)[0], "%d lines at most", NAME_SERVERS);
+	engine_connect("10.0.1.2", "");
+	to_engine("Desk DAC");
+	engine_sent();
+	CHECK(!strcmp(read_line(stamp_path, NAME_SERVERS), "10.0.1.2"), "named again, it moves last, got \"%s\"", read_line(stamp_path, NAME_SERVERS));
+	CHECK(!strcmp(read_line(stamp_path, 1), "10.0.1.3"), "without a duplicate, got \"%s\"", read_line(stamp_path, 1));
+	engine_connect("10.0.1.1", "");
+	const char *answer = query();
+	CHECK(answer && !strcmp(answer, "Desk DAC"), "the dropped server is offered the name, got %s", answer ? answer : "nothing");
 }
 
 // plex's answer to e + NAME, UUID, VERS, JSON, as measured 2026-10-15
@@ -528,6 +627,12 @@ static const struct test tests[] = {
 	{ "the stamp holds the address and the UUID", test_stamp_holds_uuid },
 	{ "a rename held across an address change does not loop", test_held_rename_two_addresses },
 	{ "the model loops across an address change without the UUID", test_held_rename_two_addresses_no_uuid },
+	{ "a rename held by a server the player left and came back to does not loop", test_held_rename_after_another_server },
+	{ "the same across an engine restart on the other server", test_held_rename_after_another_server_restarted },
+	{ "a connect without a UUID answer keeps the stamp's UUID", test_lost_uuid_answer_keeps_uuid },
+	{ "a UUID joins its address's line", test_uuid_fills_address_line },
+	{ "a new LMS at an old address is added, the old one kept", test_new_lms_old_address_keeps_both },
+	{ "the stamp keeps the last NAME_SERVERS servers", test_stamp_is_bounded },
 	{ "LMS's discovery reply gives the UUID", test_parse_reply },
 	{ "the UUID is asked of the server's own address", test_ask_uuid },
 	{ "a server that does not answer gives no UUID within 500 ms", test_ask_uuid_no_answer },

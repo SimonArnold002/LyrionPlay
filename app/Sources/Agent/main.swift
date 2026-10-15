@@ -58,8 +58,6 @@ final class PlayerSlot {
 	var name: String
 	var engine: Process?
 	var args: [String]?
-	/// a rename: the name file is read at the engine's start, so the next reconcile restarts it
-	var restartWanted = false
 	/// the device the running engine plays to
 	var device: DeviceCaps?
 	/// what the running engine last said it plays (PCM, or DoP at a rate); nil until it says, and
@@ -254,7 +252,7 @@ final class Supervisor {
 		}.filter { slots[$0.key] != nil }
 		let running = slots.compactMapValues { slot -> [String]? in
 			guard slot.engine != nil else { return nil }
-			return slot.restartWanted ? [] : slot.args ?? []
+			return slot.args ?? []
 		}
 		let changes = EnginePlan.changes(running: running, wanted: plan)
 		var stopping: [PlayerSlot] = []
@@ -300,17 +298,17 @@ final class Supervisor {
 
 	/// a player's identity in LMS, made once and kept (PlayerIdentity), and its name (playerName)
 	private func makeSlot(_ key: String) -> PlayerSlot? {
-		let name = playerName(key)
 		do {
+			// before the name is read: the adopted name file is 0.3.x's LMS name
 			if key == PlayerKey.follow,
 			   let mac = try PlayerIdentity.adoptOldPlayer(mac: Paths.oldMAC, name: Paths.oldPlayerName,
 															macAt: Paths.mac(key), nameAt: Paths.playerName(key)) {
-				log("\(name) carries on as the earlier version's player \(mac)")
+				log("\(playerName(key)) carries on as the earlier version's player \(mac)")
 			}
 			let mac = try PlayerIdentity.loadOrCreateMAC(at: Paths.mac(key))
-			return PlayerSlot(key: key, mac: mac, name: name)
+			return PlayerSlot(key: key, mac: mac, name: playerName(key))
 		} catch {
-			log("cannot create the identity of \(name): \(error)")
+			log("cannot create the identity of \(playerName(key)): \(error)")
 			return nil
 		}
 	}
@@ -384,7 +382,6 @@ final class Supervisor {
 		}
 		slot.engine = process
 		slot.args = spec.args
-		slot.restartWanted = false
 		slot.device = spec.device
 		slot.startedAt = Date()
 		slot.problem = nil

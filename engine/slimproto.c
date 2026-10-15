@@ -96,19 +96,24 @@ const char *name_file = NULL;
 // the -N file held a name at start (squeezelite wrote it from LMS), or LMS set one since. Until
 // then the -n name is offered once, for a new player.
 static bool name_from_lms = false;
-// The server that name came from, kept beside the -N file as "<file>.server": its IPv4 address on
-// the first line, its LMS server_uuid on the second when it answered for one. Only that server gets
-// the empty answer: the loop needs a rename LMS holds for this player, and only a server that named
-// it can hold one. Any other server (the Server setting changed, a new LMS, LMS's serv switch) is
-// offered the name, as upstream offers it, so the player keeps its name there instead of taking that
-// server's default (SqueezeLiteMac). Slimproto carries no server identity, so the UUID is asked at
-// each connect by LMS's discovery request sent to the server's own address (ask_server_uuid): one
+// The servers that have named the player, kept beside the -N file as "<file>.server": one line each,
+// the oldest first, its IPv4 address, then a space and its LMS server_uuid when it answered for one.
+// Only those servers get the empty answer: the loop needs a rename LMS holds for this player, and only
+// a server the player was connected to can hold one (LMS keeps a disconnected player, and its held
+// rename, for 300 s: Slimproto.pm $forget_disconnected_time), and every server it was connected to
+// named it. All of them, not only the last: a rename held by A while the player went to B and came
+// back is the loop again. Any other server (the Server setting changed, a new LMS, LMS's serv switch)
+// is offered the name, as upstream offers it, so the player keeps its name there instead of taking
+// that server's default (SqueezeLiteMac). Slimproto carries no server identity, so the UUID is asked
+// at each connect by LMS's discovery request sent to the server's own address (ask_server_uuid): one
 // server reached at two addresses (a hostname giving a LAN address at home, a Tailscale one away) is
 // one server. No stamp (a name file from before it, or 0.3.x's adopted one) keeps the empty answer;
 // the next name LMS sends stamps it.
 #define SERVER_UUID_LEN 63
-static in_addr_t name_server_ip = 0;
-static char name_server_uuid[SERVER_UUID_LEN + 1] = "";
+#define NAME_SERVERS 8
+struct name_server { in_addr_t ip; char uuid[SERVER_UUID_LEN + 1]; };
+static struct name_server name_servers[NAME_SERVERS];
+static int name_server_count = 0;
 static char *name_server_file = NULL;
 // the connected server's UUID, "" when it did not answer
 static char server_uuid[SERVER_UUID_LEN + 1] = "";
@@ -473,45 +478,84 @@ static void process_audg(u8_t *pkt, int len) {
 }
 
 #if COREAUDIO
-// Whether the connected server is the one that named the player. Both UUIDs known: they decide, so a
+// Whether a server that named the player is the connected one. Both UUIDs known: they decide, so a
 // new LMS at an old address is another server and one LMS at two addresses is one. Otherwise the
-// address decides. No stamp counts as the same server (the empty answer, as before the stamp).
+// address decides.
+static bool is_connected_server(const struct name_server *s) {
+	if (s->uuid[0] && server_uuid[0]) return strcmp(s->uuid, server_uuid) == 0;
+	return s->ip == slimproto_ip;
+}
+
+// Whether the connected server has named the player. No stamp counts as yes (the empty answer, as
+// before the stamp).
 static bool named_by_this_server(void) {
-	if (!name_server_ip && !name_server_uuid[0]) return true;
-	if (name_server_uuid[0] && server_uuid[0]) return strcmp(name_server_uuid, server_uuid) == 0;
-	return name_server_ip == slimproto_ip;
-}
-
-// the server that sent the name just stored: after the name file, so a failed write leaves an older
-// stamp, which at worst gives that server the name instead of the empty answer
-static void store_name_server(void) {
-	struct in_addr addr;
-	FILE *fp;
-	if (!name_server_file) return;
-	addr.s_addr = name_server_ip;
-	fp = fopen(name_server_file, "w");
-	if (fp) {
-		fprintf(fp, "%s\n%s\n", inet_ntoa(addr), name_server_uuid);
-		fclose(fp);
-	} else {
-		LOG_WARN("unable to store the name's server in %s", name_server_file);
+	int i;
+	if (!name_server_count) return true;
+	for (i = 0; i < name_server_count; i++) {
+		if (is_connected_server(&name_servers[i])) return true;
 	}
+	return false;
 }
 
-static void load_name_server(void) {
-	char line[SERVER_UUID_LEN + 3];
+// The connected server named the player: its line moves last. Its line is the one at this address
+// whose UUID does not differ (the same server, or one that did not answer then); a connect that got
+// no UUID keeps the one the line has, so one lost reply does not turn the stamp back into an address.
+// A new server is added, and past NAME_SERVERS the oldest is dropped (a held rename lasts 300 s).
+static void add_name_server(void) {
+	struct name_server s;
+	int i;
+	s.ip = slimproto_ip;
+	strcpy(s.uuid, server_uuid);
+	for (i = name_server_count - 1; i >= 0; i--) {
+		if (name_servers[i].ip == s.ip &&
+			(!s.uuid[0] || !name_servers[i].uuid[0] || !strcmp(name_servers[i].uuid, s.uuid))) {
+			if (!s.uuid[0]) strcpy(s.uuid, name_servers[i].uuid);
+			break;
+		}
+	}
+	if (i < 0) {
+		if (name_server_count < NAME_SERVERS) i = name_server_count++;
+		else i = 0;
+	}
+	memmove(&name_servers[i], &name_servers[i + 1], (name_server_count - 1 - i) * sizeof(s));
+	name_servers[name_server_count - 1] = s;
+}
+
+// the servers, after the name file, so a failed write leaves an older stamp, which at worst offers
+// a server the name instead of the empty answer
+static void store_name_servers(void) {
+	FILE *fp;
+	int i;
+	if (!name_server_file) return;
+	fp = fopen(name_server_file, "w");
+	if (!fp) {
+		LOG_WARN("unable to store the name's servers in %s", name_server_file);
+		return;
+	}
+	for (i = 0; i < name_server_count; i++) {
+		struct in_addr addr;
+		addr.s_addr = name_servers[i].ip;
+		fprintf(fp, "%s%s%s\n", inet_ntoa(addr), name_servers[i].uuid[0] ? " " : "", name_servers[i].uuid);
+	}
+	fclose(fp);
+}
+
+// a line that is not an address is skipped; none readable is no stamp
+static void load_name_servers(void) {
+	char line[INET_ADDRSTRLEN + SERVER_UUID_LEN + 3];
 	FILE *fp;
 	if (!name_server_file || !(fp = fopen(name_server_file, "r"))) return;
-	if (fgets(line, sizeof(line), fp)) {
-		in_addr_t addr;
+	while (name_server_count < NAME_SERVERS && fgets(line, sizeof(line), fp)) {
+		struct name_server *s = &name_servers[name_server_count];
+		char *uuid;
 		line[strcspn(line, "\r\n")] = '\0';
-		addr = inet_addr(line);
-		if (addr != INADDR_NONE) name_server_ip = addr;
-		if (name_server_ip && fgets(line, sizeof(line), fp)) {
-			line[strcspn(line, "\r\n")] = '\0';
-			strncpy(name_server_uuid, line, SERVER_UUID_LEN);
-			name_server_uuid[SERVER_UUID_LEN] = '\0';
-		}
+		uuid = strchr(line, ' ');
+		if (uuid) *uuid++ = '\0';
+		s->ip = inet_addr(line);
+		if (s->ip == INADDR_NONE || !s->ip) continue;
+		strncpy(s->uuid, uuid ? uuid : "", SERVER_UUID_LEN);
+		s->uuid[SERVER_UUID_LEN] = '\0';
+		name_server_count++;
 	}
 	fclose(fp);
 }
@@ -595,8 +639,7 @@ static void process_setd(u8_t *pkt, int len) {
 		} else if (len > 5) {
 #if COREAUDIO
 			name_from_lms = true;
-			name_server_ip = slimproto_ip;
-			strcpy(name_server_uuid, server_uuid);
+			add_name_server();
 #endif
 			strncpy(player_name, setd->data, PLAYER_NAME_LEN);
 			player_name[PLAYER_NAME_LEN] = '\0';
@@ -611,7 +654,7 @@ static void process_setd(u8_t *pkt, int len) {
 					fputs(player_name, fp);
 					fclose(fp);
 #if COREAUDIO
-					store_name_server();
+					store_name_servers();
 #endif
 				} else {
 					LOG_WARN("unable to store new name in %s", name_file);
@@ -1015,7 +1058,7 @@ static void load_player_name(const char *name, const char *namefile) {
 					strncpy(player_name, name, PLAYER_NAME_LEN);
 					player_name[PLAYER_NAME_LEN] = '\0';
 				}
-				if (name_from_lms) load_name_server();
+				if (name_from_lms) load_name_servers();
 #endif
 			}
 			fclose(fp);

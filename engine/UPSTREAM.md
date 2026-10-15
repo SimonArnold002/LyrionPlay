@@ -47,12 +47,16 @@ Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines 
     answers LMS's name query with an empty name while it is set, so LMS sends its own: LMS owns the
     name, and a queued LMS rename and the player's name can no longer chase each other. An empty
     `-N` file falls back to `-n`.
-  - The server that name came from, kept beside the `-N` file as `<file>.server` (its IPv4 address,
-    then its LMS `server_uuid`; written after each name LMS sends: `store_name_server`, read at start:
-    `load_name_server`). Only that server gets the empty answer (`named_by_this_server`: the UUIDs
+  - The servers that have named the player, kept beside the `-N` file as `<file>.server` (one line
+    each, oldest first: its IPv4 address, then a space and its LMS `server_uuid` when it answered;
+    at most 8; `add_name_server` at each name LMS sends, which keeps a line's UUID when this connect
+    got none; written after the name file: `store_name_servers`, read at start: `load_name_servers`).
+    Only those servers get the empty answer (`named_by_this_server`, `is_connected_server`: the UUIDs
     decide when both are known, else the address); any other (a changed server, a new LMS, LMS's
-    `serv` switch) is offered the name, as upstream, so the player keeps it there. No stamp (a file
-    from before it) keeps the empty answer.
+    `serv` switch) is offered the name, as upstream, so the player keeps it there. All of them, not
+    only the last: LMS holds a rename for a disconnected player for 300 s, so a player that left a
+    server and came back would otherwise offer its name across that rename. No stamp (a file from
+    before it) keeps the empty answer.
   - `ask_server_uuid`: in the main loop, after `connected` and before the HELO, LMS's discovery
     request (`eUUID`) sent by UDP to the server's own address, port 3483; two tries of 250 ms;
     `parse_server_uuid` reads the `E` TLV answer.
