@@ -29,9 +29,10 @@ alac_wrapper.o: alac_wrapper.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) $(ARCH) -O2 -Wall $(CPPFLAGS) $(OPTS) -Wno-multichar $< -c -o $@
 
 .PHONY: test
-test: tests/test_conversion tests/test_output_coreaudio
+test: tests/test_conversion tests/test_output_coreaudio tests/test_slimproto_name
 	./tests/test_conversion
 	./tests/test_output_coreaudio
+	./tests/test_slimproto_name
 
 tests/test_conversion: tests/test_conversion.c output_coreaudio_conv.h
 	$(CC) $(ARCH) -O2 -Wall -o $@ tests/test_conversion.c
@@ -42,3 +43,8 @@ OCA_TEST_UPSTREAM = output.c buffer.c output_pack.c dop.c
 tests/test_output_coreaudio: tests/test_output_coreaudio.c output_coreaudio.c output_coreaudio_conv.h squeezelite.h $(OCA_TEST_UPSTREAM)
 	$(CC) $(ARCH) -O1 -Wall -std=gnu99 -D_FORTIFY_SOURCE=0 $(OPTS) -I. \
 		-o $@ tests/test_output_coreaudio.c $(OCA_TEST_UPSTREAM) -framework CoreAudio -framework CoreFoundation
+
+# the player name (LMS OWNS THE PLAYER NAME): the suite #includes slimproto.c, the rest stubbed
+tests/test_slimproto_name: tests/test_slimproto_name.c slimproto.c slimproto.h squeezelite.h utils.c
+	$(CC) $(ARCH) -O1 -Wall -std=gnu99 -D_FORTIFY_SOURCE=0 $(OPTS) -I. \
+		-o $@ tests/test_slimproto_name.c utils.c

@@ -96,6 +96,22 @@ const char *name_file = NULL;
 // the -N file held a name at start (squeezelite wrote it from LMS), or LMS set one since. Until
 // then the -n name is offered once, for a new player.
 static bool name_from_lms = false;
+// The server that name came from, kept beside the -N file as "<file>.server": its IPv4 address on
+// the first line, its LMS server_uuid on the second when it answered for one. Only that server gets
+// the empty answer: the loop needs a rename LMS holds for this player, and only a server that named
+// it can hold one. Any other server (the Server setting changed, a new LMS, LMS's serv switch) is
+// offered the name, as upstream offers it, so the player keeps its name there instead of taking that
+// server's default (SqueezeLiteMac). Slimproto carries no server identity, so the UUID is asked at
+// each connect by LMS's discovery request sent to the server's own address (ask_server_uuid): one
+// server reached at two addresses (a hostname giving a LAN address at home, a Tailscale one away) is
+// one server. No stamp (a name file from before it, or 0.3.x's adopted one) keeps the empty answer;
+// the next name LMS sends stamps it.
+#define SERVER_UUID_LEN 63
+static in_addr_t name_server_ip = 0;
+static char name_server_uuid[SERVER_UUID_LEN + 1] = "";
+static char *name_server_file = NULL;
+// the connected server's UUID, "" when it did not answer
+static char server_uuid[SERVER_UUID_LEN + 1] = "";
 #endif
 
 void send_packet(u8_t *packet, size_t len) {
@@ -456,6 +472,105 @@ static void process_audg(u8_t *pkt, int len) {
 	set_volume(audg->adjust ? audg->gainL : FIXED_ONE, audg->adjust ? audg->gainR : FIXED_ONE);
 }
 
+#if COREAUDIO
+// Whether the connected server is the one that named the player. Both UUIDs known: they decide, so a
+// new LMS at an old address is another server and one LMS at two addresses is one. Otherwise the
+// address decides. No stamp counts as the same server (the empty answer, as before the stamp).
+static bool named_by_this_server(void) {
+	if (!name_server_ip && !name_server_uuid[0]) return true;
+	if (name_server_uuid[0] && server_uuid[0]) return strcmp(name_server_uuid, server_uuid) == 0;
+	return name_server_ip == slimproto_ip;
+}
+
+// the server that sent the name just stored: after the name file, so a failed write leaves an older
+// stamp, which at worst gives that server the name instead of the empty answer
+static void store_name_server(void) {
+	struct in_addr addr;
+	FILE *fp;
+	if (!name_server_file) return;
+	addr.s_addr = name_server_ip;
+	fp = fopen(name_server_file, "w");
+	if (fp) {
+		fprintf(fp, "%s\n%s\n", inet_ntoa(addr), name_server_uuid);
+		fclose(fp);
+	} else {
+		LOG_WARN("unable to store the name's server in %s", name_server_file);
+	}
+}
+
+static void load_name_server(void) {
+	char line[SERVER_UUID_LEN + 3];
+	FILE *fp;
+	if (!name_server_file || !(fp = fopen(name_server_file, "r"))) return;
+	if (fgets(line, sizeof(line), fp)) {
+		in_addr_t addr;
+		line[strcspn(line, "\r\n")] = '\0';
+		addr = inet_addr(line);
+		if (addr != INADDR_NONE) name_server_ip = addr;
+		if (name_server_ip && fgets(line, sizeof(line), fp)) {
+			line[strcspn(line, "\r\n")] = '\0';
+			strncpy(name_server_uuid, line, SERVER_UUID_LEN);
+			name_server_uuid[SERVER_UUID_LEN] = '\0';
+		}
+	}
+	fclose(fp);
+}
+
+// LMS's discovery answer: 'E', then TLVs (4-byte tag, 1-byte length, value; Slim/Networking/
+// Discovery.pm). The UUID tag's value into uuid, "" when there is none or it is not one line of
+// printable characters.
+static void parse_server_uuid(const u8_t *reply, int len, char *uuid) {
+	int i = 1;
+	uuid[0] = '\0';
+	if (len < 1 || reply[0] != 'E') return;
+	while (i + 5 <= len) {
+		int n = reply[i + 4];
+		if (i + 5 + n > len) return;
+		if (!memcmp(reply + i, "UUID", 4) && n > 0 && n <= SERVER_UUID_LEN) {
+			int j;
+			for (j = 0; j < n; j++) {
+				if (reply[i + 5 + j] <= ' ' || reply[i + 5 + j] > '~') return;
+			}
+			memcpy(uuid, reply + i + 5, n);
+			uuid[n] = '\0';
+			return;
+		}
+		i += 5 + n;
+	}
+}
+
+// asks the server at ip for its server_uuid with LMS's discovery request, sent to that address only
+// (measured 2026-10-15: 11-26 ms over Tailscale); two tries of 250 ms, then "" and the address decides
+static void ask_server_uuid(in_addr_t ip, u16_t port) {
+	static const char request[] = "eUUID";  // 'e', then the tag with length 0
+	struct sockaddr_in addr;
+	sockfd s = socket(AF_INET, SOCK_DGRAM, 0);
+	int try;
+	server_uuid[0] = '\0';
+	if (s < 0) return;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = ip;
+	addr.sin_port = htons(port);
+	for (try = 0; try < 2 && !server_uuid[0]; try++) {
+		struct pollfd pollinfo = { s, POLLIN, 0 };
+		if (sendto(s, request, sizeof(request), 0, (struct sockaddr *)&addr, sizeof(addr)) < 0) break;
+		while (poll(&pollinfo, 1, 250) == 1) {
+			u8_t reply[512];
+			struct sockaddr_in from;
+			socklen_t fromlen = sizeof(from);
+			int n = recvfrom(s, (char *)reply, sizeof(reply), 0, (struct sockaddr *)&from, &fromlen);
+			if (n > 0 && from.sin_addr.s_addr == ip) {
+				parse_server_uuid(reply, n, server_uuid);
+				break;
+			}
+		}
+	}
+	closesocket(s);
+	LOG_INFO("server uuid: %s", server_uuid[0] ? server_uuid : "(no answer)");
+}
+#endif
+
 static void process_setd(u8_t *pkt, int len) {
 	struct setd_packet *setd = (struct setd_packet *)pkt;
 
@@ -468,8 +583,9 @@ static void process_setd(u8_t *pkt, int len) {
 			// LMS until it stops, so after a reconnect both names were in flight and LMS and the player
 			// confirmed each other's for good (2026-10-15, ~150 a second on the DragonFly). An empty
 			// answer has LMS send its own name instead (Squeezebox2.pm playerSettingsFrame), so only
-			// LMS's name ever moves. A new player offers its -n name, which LMS takes.
-			if (name_from_lms) {
+			// LMS's name ever moves. A new player offers its -n name, which LMS takes; so does a server
+			// other than the one that named it (named_by_this_server).
+			if (name_from_lms && named_by_this_server()) {
 				sendSETDName("");
 			} else
 #endif
@@ -479,6 +595,8 @@ static void process_setd(u8_t *pkt, int len) {
 		} else if (len > 5) {
 #if COREAUDIO
 			name_from_lms = true;
+			name_server_ip = slimproto_ip;
+			strcpy(name_server_uuid, server_uuid);
 #endif
 			strncpy(player_name, setd->data, PLAYER_NAME_LEN);
 			player_name[PLAYER_NAME_LEN] = '\0';
@@ -492,6 +610,9 @@ static void process_setd(u8_t *pkt, int len) {
 					LOG_INFO("storing name in %s", name_file);
 					fputs(player_name, fp);
 					fclose(fp);
+#if COREAUDIO
+					store_name_server();
+#endif
 				} else {
 					LOG_WARN("unable to store new name in %s", name_file);
 				}
@@ -859,6 +980,49 @@ in_addr_t discover_server(char *default_server) {
 #define FIXED_CAP_LEN 256
 #define VAR_CAP_LEN   128
 
+// -n and the -N file; split out of slimproto() so the name rules can be tested (tests/test_slimproto_name.c)
+static void load_player_name(const char *name, const char *namefile) {
+	if (name) {
+		strncpy(player_name, name, PLAYER_NAME_LEN);
+		player_name[PLAYER_NAME_LEN] = '\0';
+	}
+
+	if (namefile) {
+		FILE *fp;
+		name_file = namefile;
+#if COREAUDIO
+		name_server_file = malloc(strlen(namefile) + sizeof(".server"));
+		if (name_server_file) {
+			strcpy(name_server_file, namefile);
+			strcat(name_server_file, ".server");
+		}
+#endif
+		fp = fopen(namefile, "r");
+		if (fp) {
+			if (!fgets(player_name, PLAYER_NAME_LEN, fp)) {
+				player_name[PLAYER_NAME_LEN] = '\0';
+			} else {
+				// strip any \n from fgets response
+				int len = strlen(player_name);
+				if (len > 0 && player_name[len - 1] == '\n') {
+					player_name[len - 1] = '\0';
+				}
+				LOG_INFO("retrieved name %s from %s", player_name, name_file);
+#if COREAUDIO
+				name_from_lms = strlen(player_name) > 0;
+				// an empty file: the -n name, as upstream when fgets reads nothing
+				if (!name_from_lms && name) {
+					strncpy(player_name, name, PLAYER_NAME_LEN);
+					player_name[PLAYER_NAME_LEN] = '\0';
+				}
+				if (name_from_lms) load_name_server();
+#endif
+			}
+			fclose(fp);
+		}
+	}
+}
+
 void slimproto(log_level level, char *server, u8_t mac[6], const char *name, const char *namefile, const char *modelname, int maxSampleRate) {
 	struct sockaddr_in serv_addr;
 	static char fixed_cap[FIXED_CAP_LEN], var_cap[VAR_CAP_LEN] = "";
@@ -887,37 +1051,7 @@ void slimproto(log_level level, char *server, u8_t mac[6], const char *name, con
 		slimproto_port = PORT;
 	}
 
-	if (name) {
-		strncpy(player_name, name, PLAYER_NAME_LEN);
-		player_name[PLAYER_NAME_LEN] = '\0';
-	}
-
-	if (namefile) {
-		FILE *fp;
-		name_file = namefile;
-		fp = fopen(namefile, "r");
-		if (fp) {
-			if (!fgets(player_name, PLAYER_NAME_LEN, fp)) {
-				player_name[PLAYER_NAME_LEN] = '\0';
-			} else {
-				// strip any \n from fgets response
-				int len = strlen(player_name);
-				if (len > 0 && player_name[len - 1] == '\n') {
-					player_name[len - 1] = '\0';
-				}
-				LOG_INFO("retrieved name %s from %s", player_name, name_file);
-#if COREAUDIO
-				name_from_lms = strlen(player_name) > 0;
-				// an empty file: the -n name, as upstream when fgets reads nothing
-				if (!name_from_lms && name) {
-					strncpy(player_name, name, PLAYER_NAME_LEN);
-					player_name[PLAYER_NAME_LEN] = '\0';
-				}
-#endif
-			}
-			fclose(fp);
-		}
-	}
+	load_player_name(name, namefile);
 
 	if (!running) return;
 
@@ -982,6 +1116,10 @@ void slimproto(log_level level, char *server, u8_t mac[6], const char *name, con
 			socklen_t len;
 
 			LOG_INFO("connected");
+#if COREAUDIO
+			// before the HELO: LMS asks for the name after it (named_by_this_server)
+			ask_server_uuid(slimproto_ip, PORT);
+#endif
 
 			var_cap[0] = '\0';
 			failed_connect = 0;

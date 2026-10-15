@@ -231,6 +231,9 @@ disproven belief or a cleared finding that is not written here will be re-report
 | a device with no saved settings (removed, or never set up) gone from the Settings list when unplugged (`PlayerList.rows`) | **BY DESIGN, Simon 2026-10-15** ("makes sense") | `AN UNPLUGGED DEVICE WITH NO SAVED SETTINGS` |
 | a player's name bouncing between two values ~150 times a second (LMS and squeezelite confirming each other's `setd`); an LMS rename not reaching a playing player | **MEASURED 2026-10-15** (rig engine log + LMS 9.1 source, §A3) | `TWO NAMES IN FLIGHT LOOP` |
 | /code-review 2026-10-15 (2) of the 2026-10-15 fixes (tree): the defaults' name over a name file when settings.json is missing (`loadSettings`, `settingsRead`); the app's Save over an unreadable file; names past squeezelite's 63 bytes or blank (`fitName`); the engine's `<lms>` -1 comment; `applyName`'s `saved:`; the duplicated settings adopt in `run`/`tick`; `chooseVolume`'s inline MAC parse (`PlayerIdentity.mac(at:)`) | **ALL 7 VERIFIED + FIXED 2026-10-15** (Simon: "review this area thorouhgly … Verify and fix all"); 1, 5, 6 by removing the agent's name writing (`THE NAME FILE HAS TWO WRITERS`); 6 mutants killed; suite PASS; **INSTALLED as 0.4.6** 2026-10-15 00:09Z (commit 73735a1, dev, unpushed); a rename saved while off VERIFIED LIVE (§B) | `CODE-REVIEW 2026-10-15 (2)` |
+| /code-review 2026-10-15 (3) of 0.4.7-0.4.9 (bb4b0d0): a server that never saw the player naming it SqueezeLiteMac over its name file (`name_from_lms`, the empty answer; now `name_server`, `<-N file>.server`, `store_name_server`/`load_name_server`, `load_player_name`); a plug-in missed for 10 s after Off (`agentAlive`, now `agentReportsDevices`); the device probe on the main thread with Settings closed (`devicesChanged`, `settingsOpen`); settings.json's name in the cog header, Save's error, the agent's Follow log line (`lmsName`, agent `playerName`); `removePlayer`'s 10 s wait; the name-file comments (`adoptOldPlayer`); `playerStates` repeating `listing(of:in:)`; name files read every 1.5 s | **1 CONFIRMED LIVE by Simon** (engine-follow.log 08:14:30 "set name: SqueezeLiteMac" at 192.168.1.119) **+ FIXED** (Simon: "as long as we dont go down the same path … fix, verify the rest and fix those"); **2, 3, 4, 6, 7, 8 VERIFIED + FIXED**; **5 CLEARED** (§A3 `A REMOVE TIMES OUT ONLY ON A WEDGED AGENT`); engine name suite BUILT (13 tests, 6 mutants killed); suite PASS; not built | `CODE-REVIEW 2026-10-15 (3)` |
+| one LMS reached at two addresses (hostname -> LAN / Tailscale IP) seen as two servers; `ask_server_uuid`, `parse_server_uuid`, `named_by_this_server`, the stamp's UUID line | **BUILT 2026-10-15** (Simon: "measure it", "build it"): the server's LMS `server_uuid`, asked by a discovery request to its own address at each connect, decides (§A2) | `One LMS at two addresses` |
+| "`removePlayer`'s 10 s wait for the agent can run out on a healthy agent, leaving a half-removed player" | **WRONG** (§A3, agent timing, 2026-10-15) | `A REMOVE TIMES OUT ONLY ON A WEDGED AGENT` |
 
 ### HOW TO LOG A VERDICT so the next round finds it
 Every new decision goes in §A2 (declined or by design), §A3 (a belief a measurement killed), §B
@@ -974,7 +977,8 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
     player settings."), the player row and Follow's subtitle show it: `PlayerModel.lmsName`, the name
     file, else settings.json's. Never put into the draft: saved, it would change `-n` and restart the
     engine. settings.json's `name` is only the name a NEW player offers (the defaults, `fitName`d).
-  - **Nothing in LyrionPlay writes the name file;** only the engine does, with every name LMS sends
+  - **Nothing in the app or the agent writes the name file** but `adoptOldPlayer`'s one-time copy of
+    0.3.x's (Follow, missing only); the engine does, with every name LMS sends
     (upstream `process_setd`). The agent passes `-n <settings name> -N <file>` (`EngineArguments`; both
     together only in this fork, main.c). The menu and agent.log read the file (`writeStatus`, `makeSlot`).
   - **The engine leaves the name to LMS** (`slimproto.c`, `name_from_lms`): once the `-N` file held a
@@ -984,6 +988,38 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
     writes the file. So an LMS rename made while the player was disconnected, or queued while it played,
     reaches the player at the next connect instead of being overwritten by the player's old name, and
     two names can no longer chase each other (`TWO NAMES IN FLIGHT LOOP`, §A3).
+  - **Only to the server that named it** (since CODE-REVIEW 2026-10-15 (3), Simon tested it: a new LMS at
+    192.168.1.119 named Follow "SqueezeLiteMac" over "simonsMac", engine-follow.log 08:14:30). The engine
+    keeps the server each name came from beside the `-N` file, `<file>.server` (its IPv4 address, then
+    its LMS `server_uuid`; written after the name file by `store_name_server`, read at start by
+    `load_name_server` in `load_player_name`). The empty answer goes only to that server
+    (`named_by_this_server`), or when there
+    is no stamp (a name file from 0.4.8-0.4.9, 0.3.x's adopted one: as 0.4.9, until the next name LMS
+    sends stamps it); any other server, a `serv` switch included, is offered the name, as upstream, and
+    takes it (LMS's `playerSettingsFrame`: a value that differs sets the pref). Why that is loop-safe:
+    the loop needs a rename LMS HELD for this player, and only a server the player was connected to can
+    hold one, and that server is the stamp. **One LMS at two addresses — BUILT 2026-10-15** (Simon
+    first: "a user issue to solve … if LMS only offers ip and not mac"; then, told LMS has a UUID,
+    "measure it", "build it"). Slimproto carries NO server identity (LMS 9.1 source: server -> player
+    frames strm/cont/codc/aude/audg/setd/serv/vers; `vers` is the version string; the HELO's MAC/UUID are
+    the player's; the server's MAC is sent nowhere). LMS's stable `server_uuid` is in its discovery reply
+    for the `UUID` TLV (Discovery.pm:124; UDP port fixed at 3483, UDP.pm `SERVERPORT`) and in JSON
+    `serverstatus`. So `ask_server_uuid` sends LMS's discovery request (`eUUID`) by UDP to the connected
+    server's own address after the TCP connect and before the HELO (LMS asks for the name after the
+    HELO); two tries of 250 ms, then no UUID (`parse_server_uuid` reads the `E` TLV answer). The stamp
+    holds the address and the UUID; `named_by_this_server`: both UUIDs known, they decide (Simon's
+    hostname, LAN at home and Tailscale away, is one server; a new LMS at an old address is another);
+    else the address. Residual: a server that does not answer UDP is judged by its address.
+    MEASURED 2026-10-15 (Mac on another network, 192.168.47.200): the request with NAME, UUID, VERS, JSON
+    tags straight to plex:3483 answered from 100.71.35.108 (Tailscale) in 11-26 ms: NAME "Simons Music",
+    UUID 2c913d97-fd70-4828-aa63-736619393939, VERS 9.1.2, JSON 9000; `plex` resolves by MagicDNS to that
+    address (`plex.taildebbf.ts.net`). The engine's own `ask_server_uuid` after the build: 23 ms with the
+    UUID over Tailscale; "" after 503 ms at the unreachable LAN address (in use never asked: only after
+    a TCP connect). UNMEASURED, owed at home: the LAN answer, and what `plex` resolves to there.
+    (My first note said "not on the rig, the Server setting is a literal IP": WRONG, the IP seen was
+    Simon's .119 test; he uses a hostname.) Each server owns its own name for the player: renamed
+    on one, the other offers or keeps its own. Suite `engine/tests/test_slimproto_name.c` (22 tests,
+    with a model of LMS's side that reproduces the loop).
   - Never re-add a Name field, a rename path in the app, or an agent that writes names.
 
 - **REMOVE A PLAYER — BUILT 2026-10-15 at Simon's request, INSTALLED as 0.4.8 (uncommitted), not live-tested** (Simon:
@@ -1126,6 +1162,7 @@ evidence it cites.
 | THE MAC'S NAME LOOKUP STALLS: `Host.current().localizedName` (NSHost) can block, so `PlayerSettings.macName`, read in every `Settings()` decode and for each unsaved device row at every Settings redraw, can stall the window or the agent | **WRONG** (measured 2026-10-14 on prodmac46, /code-review 2026-10-14 finding 5) | A scratch Swift binary timed it five times in one process: 3.1 ms the first call, then 0.05-0.12 ms each; `SCDynamicStoreCopyComputerName` 0.06 ms; both gave "prodmac46". Not measured: a Mac with no network or a slow DNS. Re-raise only with a measured stall. |
 | A STATUS CHECK HOLDS UP A PUSH: `LMSClient.playerStates` asks `status` for each player in turn, so with several players a Mac volume push waits behind the check | **WRONG** (source, 2026-10-14, /code-review 2026-10-14 finding 7) | The check runs on its own detached task (`refreshLMS`), and each push is its own `URLSession.shared` request from that player's `LatestValueSender` (`PlayerSlot.volumeSender`); nothing orders the two (no lock or queue in `LMSClient.call`; URLSession opens several connections per host). The calls in turn only delay what the menu shows, by about one LMS answer per extra player (38-49 ms, §B MAC SLIDER LAG), in a check every 5 s. Re-raise only with a push measured waiting on a check. |
 | TWO NAMES IN FLIGHT LOOP: a player's name syncs between LMS and squeezelite by itself: an LMS rename reaches the player, and the player's `-N` name reaches LMS, without conflict | **WRONG** (LMS 9.1 source + the rig's engine log, 2026-10-15) | LMS 9.1 `Squeezebox2.pm`: a `playername` pref change (`setChange`) calls `setPlayerSetting`, which sends `setd` ONLY if the player is stopped and no answer is awaited, else marks it pending and sends the pref at the next stop (~line 410). At every (re)connect `reconnect` sends the name QUERY (`getPlayerSetting`); squeezelite answers with its name (`process_setd`, len 5); `playerSettingsFrame` sets the pref to that answer (an empty answer instead makes LMS send its own pref). Every `setd` set is confirmed by squeezelite echoing the name. So a rename in LMS while the DragonFly was not stopped (between 01:12 and 01:20 local: no `set name` in its engine log) waited; the 0.4.7 install's reconnect at 01:20:39 put the query answer "AudioQuest DragonFly" and the pending "AudioQuest" in flight together; each confirm set the pref to the other value, whose change sent it again: 124,242 `set name` lines in 8 min 40 s (~240/s), the engine log 29 MB, until the engine stopped at 01:29:20. Fixed by `LMS OWNS THE PLAYER NAME` (the empty answer). Not reproduced on purpose. |
+| A REMOVE TIMES OUT ONLY ON A WEDGED AGENT: `PlayerModel.removePlayer` gives the agent 10 s (20 polls of status.json) to stop the engine, which a healthy agent can miss, leaving the settings entry gone but the MAC, the name file and the LMS player kept | **WRONG** (agent source, /code-review 2026-10-15 (3) finding 5) | The agent's tick runs every 2 s (`timer.schedule(deadline: .now() + 2, repeating: 2)`) and reads settings.json by its modification date; `reconcile` stops engines with one SIGTERM and one wait of at most 3 s, then SIGKILL (`stopEngines`); `writeStatus` runs at every tick. Worst case for a healthy agent: 2 s to the tick + the probe + 3 s + 2 s to the next status, about 7 s, inside the 10 s. So the timeout means the agent is wedged; then the window says the identity and LMS's player were kept and "try Remove again", and Remove stays in the cog for every device row. Switching the device on instead reuses the old MAC, as the message implies. Re-raise only with a timeout seen while agent.log shows the agent ticking. |
 
 ### B. KNOWN-OPEN AND ACCEPTED — do not re-report as new
 
@@ -1685,6 +1722,56 @@ evidence it cites.
 Each entry records that a defect, as described, was fixed. It does not cover the code written to
 fix it (see HOW TO LOG).
 
+- **CODE-REVIEW 2026-10-15 (3) — /code-review of 0.4.7-0.4.9 (bb4b0d0, the only code no round had
+  covered), FIXED, not built** (Simon: "lets do a /code-review lyrionplay"; on finding 1, "squeezelitemac",
+  "i am right just tested it", then "as long as we dont go down the same path and have issues with saving
+  and the loop.fix, verify the rest and fix those"). Eight findings, each read in the code first:
+  1. **A server that never saw the player renamed it to LMS's default** — CONFIRMED LIVE by Simon: Server
+     set to 192.168.1.119 (another LMS), engine-follow.log 08:14:29 "retrieved name simonsMac", 08:14:30
+     "set name: SqueezeLiteMac", the name file overwritten. LMS 9.1: the empty answer makes LMS send its
+     pref (`playerSettingsFrame`, Squeezebox2.pm:1016-1029); for a client it has never seen that pref is
+     `_makeDefaultName` (Client.pm:479), the model name, numbered when taken, so every LyrionPlay player.
+     FIXED: the stamp (§A2 `LMS OWNS THE PLAYER NAME`, "Only to the server that named it"), keyed on the
+     server's UUID where it answers ("One LMS at two addresses — BUILT"); the name
+     reading moved into `load_player_name` for the suite (UPSTREAM.md). Simon's Follow file still says
+     "SqueezeLiteMac" from the test, with no stamp: back on plex FIRST (0.4.9 or this build alike) the
+     empty answer has plex send "simonsMac" again and stamps plex. If this build first runs on .119, .119
+     stamps "SqueezeLiteMac", and the next connect to plex OFFERS it, renaming the plex player (the rule
+     working as designed on a name the bug wrote).
+     **Suite `engine name`** (`tests/test_slimproto_name.c`, slimproto.c #included, the rest stubbed, its
+     packets read off a socket pair): 22 tests (9 for the UUID: plex's measured reply parsed, the request
+     against a stand-in LMS on 127.0.0.1, one LMS at two addresses, a new LMS at an old one, a held rename
+     across an address change, and its CONTROL without the UUID: the loop; 8 more mutants, all killed), among them the rig's loop case (a rename held by the
+     server that named it), the upgrade case (no stamp, a held rename), a new server keeping the name, a
+     `serv` switch, and a CONTROL that the model loops when the name crosses a held rename. MUTANTS, 6 of
+     6 killed: 0.4.9's rule (5 fail), upstream's (9 fail, both held-rename tests loop), no stamp read as
+     another server (3), no stamp written (4), the server not kept in memory (2), the stamp not read (4).
+  2. **A device plugged in within ~10 s of Off was missed** — VERIFIED: `devicesChanged` and the copy of
+     status.json's devices in `refresh` trusted `agentAlive` (status under 10 s old) alone. FIXED:
+     `agentReportsDevices` = `isOn && agentAlive` for both (LaunchAgent.isOn is the plist, gone at Off).
+     `agentAlive`'s other readers (menu, `heldFollowDevice`, `statusServer`, `removePlayer`) unchanged.
+  3. **The device probe ran on the main thread with Settings closed** — VERIFIED (`DeviceCaps.probe` waits
+     for `squeezelite -l`; the watcher lived for the app's life). FIXED: `settingsOpen` (set in the
+     window's `onAppear`/`onDisappear`) gates `devicesChanged`, whose probe now runs on a detached task;
+     the window's own probe when it opens is unchanged.
+  4. **settings.json's name where LMS's was due** — VERIFIED at three places: the cog header of an
+     unplugged device, Save's "Fixed has no level to hold", the agent's Follow log line. FIXED:
+     `lmsName(row)` in the app; agent `playerName(_:)` (the name file, else settings.json's), which
+     `makeSlot` uses too.
+  5. **`removePlayer`'s 10 s wait** — CLEARED (§A3 `A REMOVE TIMES OUT ONLY ON A WEDGED AGENT`).
+  6. **The name file's comments said only the engine writes it** — VERIFIED (`adoptOldPlayer` copies
+     0.3.x's). FIXED, prose: `PlayerIdentity.name`, `Paths.playerName`, §A2.
+  7. **`playerStates` repeated `listing(of:in:)` and read `connected` another way** — VERIFIED; latent
+     (JSON numbers arrive as NSNumber, which both reads agree on). FIXED: `playerStates` calls `listing`.
+  8. **Every name file read every 1.5 s** — VERIFIED; FIXED with 3: `refresh` reads them only while
+     Settings is open, and once more as it opens.
+  - After: `scripts/test.sh` PASS (engine conversion; engine output 69/69; engine name 13/13; swift 108
+    in 22 suites; install.sh 3/3; engine name 22/22 after the UUID); `swift build` of every target, the one known warning; the engine
+    builds with no warning. Not covered by a suite: 2, 3, 4, 8 (app UI / agent main). Not built, not
+    installed, not live-tested. Live check owed: Follow on 192.168.1.119 renamed in that LMS or, after a
+    connect to plex restores "simonsMac" and stamps plex, back on .119 offered "simonsMac"; a held rename
+    on plex then a restart: one `set name` line.
+
 - **LMS OWNS THE PLAYER NAME — BUILT 2026-10-15, not built/installed** (Simon: "the name saved in the app
   changed the player name in LMS on restart it did not go the other way", then "LMS name before restart
   was just AudioQuest and on previous build that did not sync to the app so you had two different
@@ -1703,7 +1790,8 @@ fix it (see HOW TO LOG).
   - **Tests:** `lmsOwnsThePlayerName` (name file read rules; `-n`/`-N` in the arguments; an LMS rename
     leaves the arguments unchanged), `eachPlayerHasItsOwnIdentity` with `-n`; the rename tests removed
     with their API. `scripts/test.sh` PASS; the full engine builds with no warning. The engine's name
-    logic is NOT covered by a suite (slimproto.c is not linked into it): live check owed after a build,
+    logic is NOT covered by a suite (slimproto.c is not linked into it) [since CODE-REVIEW 2026-10-15 (3) it is:
+    `engine/tests/test_slimproto_name.c`]: live check owed after a build,
     with Simon: rename a player in LMS while it plays, restart LyrionPlay before it stops; one `set
     name` line, LMS's name kept, the menu and the cog show it.
 

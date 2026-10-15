@@ -29,7 +29,8 @@ public enum Paths {
 	public static func player(_ key: String) -> URL { players.appendingPathComponent(slug(key)) }
 	/// the player's MAC address, generated once
 	public static func mac(_ key: String) -> URL { player(key).appendingPathComponent("mac") }
-	/// squeezelite -N: the player's name as LMS has it, written by the engine only (PlayerIdentity.name)
+	/// squeezelite -N: the player's name as LMS has it, written by the engine (and once by
+	/// PlayerIdentity.adoptOldPlayer; PlayerIdentity.name)
 	public static func playerName(_ key: String) -> URL { player(key).appendingPathComponent("name") }
 	/// the player's running engine's PID, so a restarted agent can stop an engine its crashed
 	/// predecessor left

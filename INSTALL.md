@@ -114,7 +114,7 @@ back to what is saved. If a save fails, the window says why and keeps your chang
 
 **Name** is the player's name in LMS; it starts as your Mac's name, or your Mac's name followed by
 the device's. To rename a player, use its player settings in LMS (or Material); LyrionPlay shows the
-new name.
+new name. A player moved to another LMS server keeps its name there.
 
 **Remove This Player…** (a device's player, not *Follow the macOS output*) removes it for good: its
 settings, its identity and logs, and its player in LMS. Use it for a device you no longer have, or to

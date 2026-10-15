@@ -135,10 +135,13 @@ final class PlayerModel {
 	var confirmRemove: String?
 	var removing: String?
 	var removeNote: String?
-	/// each player's name as LMS has it (its name file), read at every refresh: a file is nothing the
-	/// window can observe, so read in the view a rename in LMS never showed until it was reopened
-	/// (live 2026-10-15, 0.4.8: "but not in the app")
+	/// each player's name as LMS has it (its name file), read at every refresh while the Settings
+	/// window is open: a file is nothing the window can observe, so read in the view a rename in LMS
+	/// never showed until it was reopened (live 2026-10-15, 0.4.8: "but not in the app")
 	var lmsNames: [String: String] = [:]
+	/// the Settings window is open: only it shows lmsNames and the probed devices
+	/// (/code-review 2026-10-15 (3), findings 3 and 8)
+	var settingsOpen = false
 	@ObservationIgnored private var timer: Timer?
 	/// while no agent reports the devices (the player off), a device plugged in or out is probed here
 	@ObservationIgnored private var deviceWatcher: AudioDeviceWatcher?
@@ -160,7 +163,8 @@ final class PlayerModel {
 	func refresh() {
 		isOn = LaunchAgent.isOn
 		status = AgentStatus.load()
-		if agentAlive, let status, !status.devices.isEmpty { devices = status.devices }
+		if agentReportsDevices, let status, !status.devices.isEmpty { devices = status.devices }
+		guard settingsOpen else { return }
 		let keys = Set(draft.players.keys).union(devices.map(\.uid)).union([PlayerKey.follow])
 		var names: [String: String] = [:]
 		for key in keys { names[key] = PlayerIdentity.name(at: Paths.playerName(key)) }
@@ -170,17 +174,28 @@ final class PlayerModel {
 	/// With the player off nothing else probed: a device plugged in while the Settings window was open
 	/// never showed until it was opened again (live 2026-10-15: the DragonFly, removed and plugged
 	/// back in). Notifications come in bursts, so one probe a second after the first, as the agent does.
+	/// Only for the open window, and off the main thread: the probe runs the engine and waits for it,
+	/// which froze the menu at every output change (/code-review 2026-10-15 (3), finding 3).
 	private func devicesChanged() {
-		guard !agentAlive, !probePending else { return }
+		guard settingsOpen, !agentReportsDevices, !probePending else { return }
 		probePending = true
+		let engine = Paths.executable("squeezelite")
 		DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-			MainActor.assumeIsolated {
-				guard let self else { return }
-				self.probePending = false
-				if !self.agentAlive { self.loadDevices() }
+			Task.detached {
+				let probed = DeviceCaps.probe(engine: engine)
+				await MainActor.run {
+					guard let self else { return }
+					self.probePending = false
+					if !self.agentReportsDevices, !probed.isEmpty { self.devices = probed }
+				}
 			}
 		}
 	}
+
+	/// A running agent probes the devices and lists them in status.json. Not while the player is off:
+	/// status.json stays fresh for up to 10 s after Off, and a device plugged in meanwhile was never
+	/// probed (/code-review 2026-10-15 (3), finding 2).
+	private var agentReportsDevices: Bool { isOn && agentAlive }
 
 	/// the device *Follow the macOS output* holds exclusively, which it stays on (Settings.followDevice)
 	var heldFollowDevice: String? {
@@ -360,7 +375,7 @@ final class PlayerModel {
 			guard let device = row.device, device.volume != nil, draft.players[row.key] != nil else { continue }
 			let player = draft.player(row.key, device: device)
 			guard player.volume == .fixed, player.heldVolume == nil else { continue }
-			lastError = "\(player.name): Fixed has no level to hold. \(heldNote[row.key] ?? "Choose Fixed again.")"
+			lastError = "\(lmsName(row)): Fixed has no level to hold. \(heldNote[row.key] ?? "Choose Fixed again.")"
 			saveError = lastError
 			return false
 		}
@@ -561,9 +576,12 @@ struct SettingsView: View {
 		.onAppear {
 			model.clearSaveError() // from an earlier opening
 			model.removeNote = nil
+			model.settingsOpen = true
 			model.loadDevices()
 			model.reload()
+			model.refresh()
 		}
+		.onDisappear { model.settingsOpen = false }
 	}
 }
 
@@ -612,7 +630,7 @@ struct PlayerSettingsView: View {
 
 	var body: some View {
 		Form {
-			Section(row.isFollow ? "Follow the macOS output" : (row.device?.name ?? model.draft.player(row.key, device: nil).name)) {
+			Section(row.isFollow ? "Follow the macOS output" : (row.device?.name ?? model.lmsName(row))) {
 				// renamed in LMS only (LMS OWNS THE PLAYER NAME, Simon 2026-10-15)
 				LabeledContent("Name", value: model.lmsName(row))
 				Text("Rename this player in LMS, in its player settings.")

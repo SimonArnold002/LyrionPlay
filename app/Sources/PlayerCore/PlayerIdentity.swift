@@ -47,8 +47,9 @@ public enum PlayerIdentity {
 
 	/// The player's name in LMS, as its name file holds it: squeezelite writes there every name LMS
 	/// sends, and LMS sends its own at each connect (LMS OWNS THE PLAYER NAME). nil before LMS has
-	/// named the player, or for an empty file. Nothing in LyrionPlay writes it; a player is renamed in
-	/// LMS only.
+	/// named the player, or for an empty file. The engine is its one writer but for adoptOldPlayer,
+	/// which copies 0.3.x's name file once, before Follow's engine first starts; a player is renamed
+	/// in LMS only.
 	public static func name(at url: URL) -> String? {
 		let name = (try? String(contentsOf: url, encoding: .utf8))?.trimmingCharacters(in: .newlines)
 		return name?.isEmpty == false ? name : nil

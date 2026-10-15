@@ -6,6 +6,8 @@
 #                       buffer.c, output_pack.c and dop.c (hog, rates, retries, volume both ways),
 #                       and the scenario matrix: ~25,700 plays through LMS's strm commands, every
 #                       frame the device gets checked (silence format, rate, order, delay, switches)
+#   engine name         slimproto.c's player name: the answer to LMS's name query, the name and
+#                       its server stored, and a model of LMS's side (no loop with a held rename)
 #   swift               PlayerCore: probe parsing, arguments, settings, menu lock, volume curve and
 #                       pushes, following the macOS output, App Transport Security, the server
 #                       choice and agent.log's LMS lines
@@ -40,11 +42,12 @@ FAIL  $name (exit $status, ${summary:-no summary line: it died first})"
 	fi
 }
 
-make -C "$ROOT/engine" -f Makefile.coreaudio tests/test_conversion tests/test_output_coreaudio > "$LOGS/make.log" 2>&1 ||
+make -C "$ROOT/engine" -f Makefile.coreaudio tests/test_conversion tests/test_output_coreaudio tests/test_slimproto_name > "$LOGS/make.log" 2>&1 ||
 	{ cat "$LOGS/make.log"; echo "FAIL: the engine tests did not build"; exit 1; }
 
 suite "engine conversion" '^result: PASS$' "$ROOT/engine/tests/test_conversion"
 suite "engine output" '^result: PASS$' "$ROOT/engine/tests/test_output_coreaudio"
+suite "engine name" '^result: PASS$' "$ROOT/engine/tests/test_slimproto_name"
 # Command Line Tools 27.0 (Swift 6.4): found by search, the Swift Testing macro plugin fails to load
 # in about half the compiles ("plugin for module 'TestingMacros' not found"), even for a package
 # with one test; named directly, 12 of 12 loaded (measured 2026-10-10). Xcode keeps it elsewhere.

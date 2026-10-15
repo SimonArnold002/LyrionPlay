@@ -305,14 +305,10 @@ public struct LMSClient: Sendable {
 	/// nil when the server did not answer the first.
 	public func playerStates(macs: [String]) async -> [String: PlayerState]? {
 		guard let players = await call(player: "", ["players", "0", "99"]) else { return nil }
-		let loop = players["players_loop"] as? [[String: Any]] ?? []
 		var states: [String: PlayerState] = [:]
 		for mac in macs {
-			guard let me = loop.first(where: { ($0["playerid"] as? String)?.lowercased() == mac }) else {
-				states[mac] = PlayerState(connected: false)
-				continue
-			}
-			var state = PlayerState(connected: (me["connected"] as? Int ?? 0) == 1)
+			// one reading of `players` for this and forget (/code-review 2026-10-15 (3), finding 7)
+			var state = PlayerState(connected: Self.listing(of: mac, in: players).connected)
 			if state.connected, let status = await call(player: mac, ["status", "-", "1", "tags:a"]) {
 				state.mode = status["mode"] as? String
 				state.digitalVolumeControl = PlayerState.digitalVolumeControl(in: status)

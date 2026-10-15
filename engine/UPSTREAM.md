@@ -22,7 +22,8 @@ New files (ours): `output_coreaudio.c`, `output_coreaudio_conv.h`, `Makefile.cor
 `tests/test_conversion.c`, `tests/test_output_coreaudio.c` (built with upstream's `output.c`,
 `buffer.c`, `output_pack.c` and `dop.c`, which it links as they are).
 
-Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines:
+Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines and the
+`load_player_name` split in `slimproto.c`:
 
 - `squeezelite.h`
   - On `__APPLE__`, `PORTAUDIO` is defined only `#if !defined(COREAUDIO)`.
@@ -46,6 +47,17 @@ Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines:
     answers LMS's name query with an empty name while it is set, so LMS sends its own: LMS owns the
     name, and a queued LMS rename and the player's name can no longer chase each other. An empty
     `-N` file falls back to `-n`.
+  - The server that name came from, kept beside the `-N` file as `<file>.server` (its IPv4 address,
+    then its LMS `server_uuid`; written after each name LMS sends: `store_name_server`, read at start:
+    `load_name_server`). Only that server gets the empty answer (`named_by_this_server`: the UUIDs
+    decide when both are known, else the address); any other (a changed server, a new LMS, LMS's
+    `serv` switch) is offered the name, as upstream, so the player keeps it there. No stamp (a file
+    from before it) keeps the empty answer.
+  - `ask_server_uuid`: in the main loop, after `connected` and before the HELO, LMS's discovery
+    request (`eUUID`) sent by UDP to the server's own address, port 3483; two tries of 250 ms;
+    `parse_server_uuid` reads the `E` TLV answer.
+  - Upstream's `-n` / `-N` reading moved, unchanged but for the lines above, out of `slimproto()`
+    into `load_player_name()`, so `tests/test_slimproto_name.c` can call it.
 - `Makefile`
   - `OPT_COREAUDIO`.
   - `output_coreaudio.c` added to `SOURCES`.

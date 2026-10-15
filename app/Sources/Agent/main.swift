@@ -241,7 +241,7 @@ final class Supervisor {
 		// Taking exclusive access moves the macOS default output elsewhere; that is not the user
 		// choosing another output. Follow it once the engine lets go (tick).
 		if follow.deferred && !wasDeferred, let device = followDevice {
-			log("\(reason): the macOS output is elsewhere while \(settings.player(PlayerKey.follow, device: device).name) holds \(device.name) exclusively; staying on it until it lets go")
+			log("\(reason): the macOS output is elsewhere while \(playerName(PlayerKey.follow)) holds \(device.name) exclusively; staying on it until it lets go")
 		}
 		for key in on where slots[key] == nil {
 			guard let slot = makeSlot(key) else { continue }
@@ -292,10 +292,15 @@ final class Supervisor {
 		writeStatus()
 	}
 
-	/// a player's identity in LMS, made once and kept (PlayerIdentity), and its name in LMS for the log
-	/// and the menu (LMS OWNS THE PLAYER NAME): settings.json's until LMS has named it
+	/// a player's name in LMS, for the log and the menu (LMS OWNS THE PLAYER NAME): settings.json's
+	/// until LMS has named it
+	private func playerName(_ key: String) -> String {
+		PlayerIdentity.name(at: Paths.playerName(key)) ?? settings.player(key, device: devices.first { $0.uid == key }).name
+	}
+
+	/// a player's identity in LMS, made once and kept (PlayerIdentity), and its name (playerName)
 	private func makeSlot(_ key: String) -> PlayerSlot? {
-		let name = PlayerIdentity.name(at: Paths.playerName(key)) ?? settings.player(key, device: devices.first { $0.uid == key }).name
+		let name = playerName(key)
 		do {
 			if key == PlayerKey.follow,
 			   let mac = try PlayerIdentity.adoptOldPlayer(mac: Paths.oldMAC, name: Paths.oldPlayerName,
