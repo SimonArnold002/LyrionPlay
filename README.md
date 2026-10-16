@@ -13,9 +13,38 @@ ordinary squeezelite player. It lives in your menu bar, and its player runs in t
 | **Told about your DAC** | LMS learns your DAC's highest sample rate and transcodes anything above it. Rates the DAC lacks below that are resampled in the player, only when needed. |
 | **DSD** | Sent as DoP to DACs you switch DoP on for (macOS can't tell which accept it), and converted to PCM for the rest. |
 | **LMS replay gain** | Applied by the player, exactly as LMS sends it. |
-| **Volume, your choice per device** | *Device's own volume*: the LMS slider moves your Mac's volume or your DAC's hardware volume, and a change made on the Mac moves the LMS slider (the volume keys when the output is the Mac's built-in speakers or Follow the macOS output, with Exclusive mode off). *Software*, where the Mac can't set the device's volume: the player scales the samples. *Fixed*, on a DAC: LyrionPlay sets LMS's fixed output level for you; a DAC whose volume the Mac sets holds the level LMS had, and on any other you use the DAC's or amplifier's own volume. |
-| **Menu bar app** | Switch the player on and off, see what it's doing (the server, the device and the rate it plays at, the DSD rate for DoP), and choose the output device and its options. |
+| **Volume, your choice per player** | *Device's own volume*: the LMS slider moves your Mac's volume or your DAC's hardware volume, and a change made on the Mac moves the LMS slider (the volume keys when the output is the Mac's built-in speakers or Follow the macOS output, with Exclusive mode off). *Software*, where the Mac can't set the device's volume: the player scales the samples. *Fixed*, on a DAC: LyrionPlay sets LMS's fixed output level for you; a DAC whose volume the Mac sets holds the level LMS had, and on any other you use the DAC's or amplifier's own volume. |
+| **One player, or one per device** | Use *Follow the macOS output* as a single player that plays wherever your Mac's sound goes, or switch a DAC or other output on as a player of its own, or both. Each is its own player in LMS, with its own name, volume and settings. |
+| **Menu bar app** | Switch LyrionPlay on and off, see what each player is doing (the server, the device and the rate it plays at, the DSD rate for DoP), and set each player's options. |
 | **Signed by you** | Every user signs their own copy with a certificate made on their own Mac, so no Apple developer account is involved. |
+
+## One player, or one per device
+
+You choose how LyrionPlay appears in LMS, in Settings:
+
+- **One player for everything.** Leave only *Follow the macOS output* on. It plays to whatever
+  output your Mac is using (the built-in speakers, headphones, a USB DAC), and follows when you
+  change the Mac's output. LMS sees one player.
+- **A player for each device.** Switch a DAC, or any other output, on in Settings and it becomes a
+  player of its own in LMS. It always plays to that device, with its own name, volume and options.
+  Play different music on two outputs at once, or sync them in LMS.
+- **Both.** *Follow the macOS output* carries on beside the device players. When the Mac's output is
+  a device that has its own player on, *Follow the macOS output* plays to the Mac's built-in output
+  instead, so two players never share one device.
+
+## What it looks like
+
+**The menu bar** shows each player that is on: its server, and the device with the rate it plays at. **In LMS** each is an ordinary player, shown in Material with an Apple icon.
+
+<img src="docs/images/menu-bar.png" width="376" alt="The LyrionPlay menu bar panel with two players, each connected, showing its device and sample rate"> <img src="docs/images/material-players.png" width="298" alt="Material's player list with the two LyrionPlay players and their Apple icons">
+
+**Settings** lists *Follow the macOS output* and every other output the Mac has. Switch a player on or off, and open its options with the cog. The server and the rest are set once for all players.
+
+<img src="docs/images/settings.png" width="495" alt="The Settings window: the players, each with a switch and a cog, then the shared settings">
+
+**A player's options:** exclusive mode, DoP, how the LMS volume slider works, and silence on a rate change. A DAC whose volume the Mac sets offers *Device's own volume* and *Fixed*.
+
+<img src="docs/images/player-follow.png" width="400" alt="The options of Follow the macOS output"> <img src="docs/images/player-dac.png" width="400" alt="The options of a DAC player, with the LMS volume choices open">
 
 ## Requirements
 
@@ -31,7 +60,7 @@ Download the [latest release](https://github.com/SimonArnold002/LyrionPlay/relea
 | part | what it does |
 |---|---|
 | `engine/` | squeezelite with a native CoreAudio output added (`output_coreaudio.c`): exclusive mode, per-track rate and format switching, DoP, the device's volume in both directions, and a report of what it plays for the menu. |
-| `app/Sources/Agent` | A background launch agent. It reads the device's abilities from the engine, builds the engine's arguments, keeps the engine running, passes volume changes made on the Mac to LMS, and keeps LMS's fixed-volume setting in step with each device's choice. |
+| `app/Sources/Agent` | A background launch agent. It reads the devices' abilities from the engine, runs one engine for each player that is on and keeps it running, passes volume changes made on the Mac to LMS, and keeps LMS's fixed-volume setting in step with each device's choice. |
 | `app/Sources/App` | The menu bar app: On/Off, status, settings. |
 | `scripts/` | `build.sh` builds the app and the release. `test.sh` is the regression suite. `install.sh` and `uninstall.sh` are what users run. |
 

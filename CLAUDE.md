@@ -589,6 +589,13 @@ The workspace `CLAUDE.md` Gate 1 applies in full. The rows that arise here:
     - **0.4.13** (Simon: "build install and commit", "Yes, 0.4.13", 2026-10-15): `CODE-REVIEW 2026-10-15
       (7)`. INSTALLED 22:15Z (202610152314), suite PASS inside build.sh; the agent restarted on it and
       used Simons Music, each player on its old MAC (the slug unchanged); details in §C.
+    - **0.4.14** (2026-10-16): `CODE-REVIEW 2026-10-15 (8)`, installed (§C). **FIRST RELEASE: merged to
+      `main` 2026-10-16** (Simon: "commit and push to dev then merge to main"), a fast-forward of `dev`
+      (main held only the initial README), tagged `v0.4.14`. With it, written at the merge as the fleet
+      does: CHANGELOG.md (created, one 0.4.14 entry), README.md brought up to 0.4.x (*One player, or
+      one per device*, the screenshots in `docs/images/`, shown by `tools/make_readme_html.py`'s
+      `<img>` rule). The GitHub release page and its two zips (`build.sh --release`) are Simon's step:
+      no `gh` here. The forum post (BBCode) was written the same day, not kept in the repo.
 - **APPLE SILICON ONLY — Simon, 2026-10-09.** arm64 only, macOS 14+. No universal builds.
 - **NO VIRTUAL AUDIO DRIVERS — Simon, 2026-10-09.**
   - Simon: "we dont need blackhole it messes up things last time i installed it and was hard to

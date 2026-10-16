@@ -13,6 +13,10 @@ with a feature-card grid. The colours are Lyrion's green.
 - **Features.** The "Features" table renders as cards; every other table is a styled <table>.
 - **The version badge** is read live from VERSION, the one place the version is set (build.sh
   reads it too), so a regen always shows the current release.
+- **Screenshots.** An `<img src="docs/images/x.png" width="N" alt="...">` tag (exactly that shape,
+  which GitHub shows at width N too) is kept as an image with its relative src, so the page shows
+  the file beside it. A paragraph of only such tags is a row of screenshots. Any other HTML is
+  escaped, as before. Keep images out of INSTALL.md: INSTALL.html ships in the zip without them.
 - **Links.** A link to INSTALL.md or README.md becomes the .html page. Any other relative link
   (engine/UPSTREAM.md, LICENSE) goes to the file on GitHub, so the pages work from GitHub Pages,
   and from the copy of INSTALL.html in the release zip.
@@ -124,6 +128,8 @@ CSS = """
     background: var(--code-bg); padding: 2px 6px; border-radius: 5px;
     font-family: "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.88em;
   }
+  .shots { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .shots img { max-width: 100%; height: auto; }
   pre {
     background: var(--brand-dark); color: #f1fbf5; padding: 16px 18px;
     border-radius: 10px; overflow-x: auto; font-size: 0.9rem;
@@ -170,14 +176,28 @@ def link_target(url):
     return "%s/blob/main/%s" % (GITHUB_URL, url)
 
 
+IMG = re.compile(r'<img src="([\w./-]+\.(?:png|jpg|gif))" width="(\d+)" alt="([^"<>&]*)">')
+
+
+def only_images(text):
+    """True when a paragraph is nothing but screenshot tags."""
+    return bool(text.strip()) and not IMG.sub("", text).strip()
+
+
 def inline(text):
-    """Convert inline Markdown to HTML (code spans protected from other rules)."""
+    """Convert inline Markdown to HTML (code spans and screenshot tags protected from other rules)."""
     codes = []
+    imgs = []
 
     def stash(m):
         codes.append(m.group(1))
         return "\x00%d\x00" % (len(codes) - 1)
 
+    def stash_img(m):
+        imgs.append('<img src="%s" width="%s" alt="%s" loading="lazy">' % m.groups())
+        return "\x01%d\x01" % (len(imgs) - 1)
+
+    text = IMG.sub(stash_img, text)
     text = re.sub(r"`([^`]+)`", stash, text)
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", lambda m: '<a href="%s">%s</a>' % (link_target(m.group(2)), m.group(1)), text)
@@ -189,7 +209,8 @@ def inline(text):
         c = c.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         return "<code>%s</code>" % c
 
-    return re.sub(r"\x00(\d+)\x00", unstash, text)
+    text = re.sub(r"\x00(\d+)\x00", unstash, text)
+    return re.sub(r"\x01(\d+)\x01", lambda m: imgs[int(m.group(1))], text)
 
 
 def parse_table(lines, i):
@@ -305,7 +326,8 @@ def convert_blocks(lines, sections=False):
 
     def para_flush():
         if para:
-            out.append("<p>%s</p>" % inline(" ".join(para)))
+            text = " ".join(para)
+            out.append(('<p class="shots">%s</p>' if only_images(text) else "<p>%s</p>") % inline(text))
             para.clear()
 
     while i < len(lines):
