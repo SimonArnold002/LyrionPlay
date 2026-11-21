@@ -158,6 +158,8 @@ final class PlayerModel {
 	/// (/code-review 2026-10-15 (3), findings 3 and 8)
 	var settingsOpen = false
 	@ObservationIgnored private var timer: Timer?
+	/// macOS Now Playing, from the menu app's own LMS subscription (themmm/LyrionPlay#1)
+	@ObservationIgnored private let nowPlaying = NowPlayingPublisher()
 	/// while no agent reports the devices (the player off), a device plugged in or out is probed here
 	@ObservationIgnored private var deviceWatcher: AudioDeviceWatcher?
 	@ObservationIgnored private var probePending = false
@@ -179,6 +181,8 @@ final class PlayerModel {
 		isOn = LaunchAgent.isOn
 		status = AgentStatus.load()
 		if agentReportsDevices, let status, !status.devices.isEmpty { devices = status.devices }
+		// the saved settings, at the server the agent last used (also while the player is off)
+		nowPlaying.update(server: lastServer, settings: settings)
 		guard settingsOpen else { return }
 		let keys = Set(draft.players.keys).union(devices.map(\.uid)).union([PlayerKey.follow])
 		var names: [String: String] = [:]
@@ -531,6 +535,14 @@ struct SettingsView: View {
 	@Bindable var model: PlayerModel
 	@Environment(\.dismissWindow) private var dismissWindow
 
+	/// a chosen player that was removed reads as the default, which it falls back to (NowPlaying)
+	private var nowPlayingChoice: Binding<NowPlayingChoice> {
+		Binding(get: {
+			if case .player(let key) = model.draft.nowPlaying, !model.rows.contains(where: { $0.key == key }) { return .mostRecent }
+			return model.draft.nowPlaying
+		}, set: { model.draft.nowPlaying = $0 })
+	}
+
 	var body: some View {
 		Form {
 			Section("Players") {
@@ -555,6 +567,15 @@ struct SettingsView: View {
 					Text("Normal").tag("info")
 					Text("Debug").tag("debug")
 				}
+				Picker("Now Playing", selection: nowPlayingChoice) {
+					Text("Off").tag(NowPlayingChoice.off)
+					Text("Most recently started player").tag(NowPlayingChoice.mostRecent)
+					ForEach(model.rows) { row in
+						Text(row.isFollow ? "Follow the macOS output" : model.lmsName(row)).tag(NowPlayingChoice.player(row.key))
+					}
+				}
+				Text("The player whose track Control Center, the media keys and apps such as boring.notch show and control.")
+					.font(.caption).foregroundStyle(.secondary)
 			}
 			if model.settingsUnreadable {
 				Text("settings.json could not be read, so these are the defaults. Save replaces it; the old file is kept as settings-unreadable.json.")

@@ -109,6 +109,22 @@ network by itself; enter its name or IP address if it is on another network. The
 **Resampling quality**, used only when your device lacks a track's rate, and **Log detail**: Debug
 writes more to the logs.
 
+**Now Playing** chooses the player whose track macOS shows in Control Center, on the media keys and
+in apps such as boring.notch, which can then play, pause, skip, go back and seek on it in LMS:
+
+- *Most recently started player* (the default): the player that last started playing. When it
+  stops, another player that is still playing takes its place.
+- *Follow the macOS output*, or another player by name: only that player, while it plays or is
+  paused. A player you remove falls back to the default.
+- *Off*: LyrionPlay shows nothing there.
+
+A paused track stays, shown as paused. When the player stops, is switched off or disconnects from
+LMS, the track goes. Back works as LMS's own Back button: within the first 5 seconds of a track it
+goes to the one before, later it starts the track again. A radio stream shows the station and the
+song LMS reports, without a length or seeking. LyrionPlay gets all this from your server itself, so
+the server must be reachable from the Mac; if the connection drops for more than 5 seconds, the
+track goes until it is back.
+
 **Save** keeps your changes, **Save and Close** keeps them and closes the window, and **Revert** goes
 back to what is saved. If a save fails, the window says why and keeps your changes on screen.
 
