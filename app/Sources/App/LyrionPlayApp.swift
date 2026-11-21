@@ -535,12 +535,10 @@ struct SettingsView: View {
 	@Bindable var model: PlayerModel
 	@Environment(\.dismissWindow) private var dismissWindow
 
-	/// a chosen player that was removed reads as the default, which it falls back to (NowPlaying)
+	/// a chosen player no longer saved reads as the default it falls back to (NowPlayingChoice.effective)
 	private var nowPlayingChoice: Binding<NowPlayingChoice> {
-		Binding(get: {
-			if case .player(let key) = model.draft.nowPlaying, !model.rows.contains(where: { $0.key == key }) { return .mostRecent }
-			return model.draft.nowPlaying
-		}, set: { model.draft.nowPlaying = $0 })
+		Binding(get: { model.draft.nowPlaying.effective(in: model.draft) },
+				set: { model.draft.nowPlaying = $0 })
 	}
 
 	var body: some View {
@@ -570,8 +568,9 @@ struct SettingsView: View {
 				Picker("Now Playing", selection: nowPlayingChoice) {
 					Text("Off").tag(NowPlayingChoice.off)
 					Text("Most recently started player").tag(NowPlayingChoice.mostRecent)
-					ForEach(model.rows) { row in
-						Text(row.isFollow ? "Follow the macOS output" : model.lmsName(row)).tag(NowPlayingChoice.player(row.key))
+					ForEach(NowPlaying.playerKeys(in: model.draft), id: \.self) { key in
+						Text(key == PlayerKey.follow ? "Follow the macOS output" : model.lmsNames[key] ?? model.draft.players[key]?.name ?? key)
+							.tag(NowPlayingChoice.player(key))
 					}
 				}
 				Text("The player whose track Control Center, the media keys and apps such as boring.notch show and control.")

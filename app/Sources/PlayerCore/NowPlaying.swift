@@ -17,6 +17,13 @@ public enum NowPlayingChoice: Hashable, Sendable, Codable {
 		}
 	}
 
+	/// what the choice means with these settings: one of a Player no longer saved (removed, or a device
+	/// never set up) is the default it falls back to (decision 7), as the Settings picker shows it
+	public func effective(in settings: Settings) -> NowPlayingChoice {
+		if case .player(let key) = self, !NowPlaying.playerKeys(in: settings).contains(key) { return .mostRecent }
+		return self
+	}
+
 	public func encode(to encoder: Encoder) throws {
 		var c = encoder.singleValueContainer()
 		switch self {
@@ -116,10 +123,14 @@ public struct LMSServerStatus: Equatable, Sendable {
 /// A LyrionPlay Player as Now Playing sees it: its key, its LMS ID, and whether it is switched on
 public struct NowPlayingPlayer: Equatable, Sendable {
 	public var key: String
-	public var mac: String
+	/// nil for a Player that never ran: LMS cannot know it
+	public var mac: String?
 	public var on: Bool
 
-	public init(key: String, mac: String, on: Bool) {
+	/// the MAC as LMS's channels and answers are matched: lowercase
+	var id: String? { mac?.lowercased() }
+
+	public init(key: String, mac: String?, on: Bool) {
 		self.key = key
 		self.mac = mac
 		self.on = on
@@ -144,10 +155,10 @@ public struct NowPlayingInfo: Equatable, Sendable {
 
 	/// a Player's status as Now Playing shows it. A radio stream: the song as title and artist, the
 	/// station as album (as the title when no song is sent), no duration, time or seek (decision 5)
-	init(player: NowPlayingPlayer, status: LMSPlayerStatus, at time: Date, server: LMSServer) {
-		self.player = player.key
+	init(player: String, mac: String, status: LMSPlayerStatus, at time: Date, server: LMSServer) {
+		self.player = player
 		artwork = status.artwork(on: server)
-		mac = player.mac
+		self.mac = mac
 		playing = status.mode == "play"
 		elapsedAt = time
 		artist = status.artist
@@ -199,13 +210,18 @@ public struct NowPlaying: Sendable {
 		self.choice = choice
 	}
 
-	/// LyrionPlay's Players: *Follow the macOS output*, then each saved device player, each with the MAC
-	/// its folder holds (`mac`: `PlayerIdentity.mac(at: Paths.mac(key))`). One that never ran has none,
-	/// so LMS cannot know it. A switched-off Player stays listed: a fixed choice of it frees the slot,
-	/// only a removed one falls back to the default (decision 7).
+	/// LyrionPlay's Players, as the Settings picker offers them: *Follow the macOS output*, then each
+	/// saved device player by name. A device never saved is no Player yet.
+	public static func playerKeys(in settings: Settings) -> [String] {
+		let saved = settings.players.filter { $0.key != PlayerKey.follow }
+		return [PlayerKey.follow] + saved.keys.sorted { (saved[$0]!.name, $0) < (saved[$1]!.name, $1) }
+	}
+
+	/// Each Player with the MAC its folder holds (`mac`: `PlayerIdentity.mac(at: Paths.mac(key))`); nil
+	/// for one that never ran. A switched-off Player, or one that never ran, stays listed: a fixed
+	/// choice of it frees the slot; only a removed one falls back to the default (decision 7).
 	public static func players(in settings: Settings, mac: (String) -> String?) -> [NowPlayingPlayer] {
-		let keys = [PlayerKey.follow] + settings.players.keys.filter { $0 != PlayerKey.follow }.sorted()
-		return keys.compactMap { key in mac(key).map { NowPlayingPlayer(key: key, mac: $0, on: settings.isOn(key)) } }
+		playerKeys(in: settings).map { NowPlayingPlayer(key: $0, mac: mac($0), on: settings.isOn($0)) }
 	}
 
 	/// the Players (from settings.json and their identities) or the shared setting changed
@@ -254,15 +270,15 @@ public struct NowPlaying: Sendable {
 		case .player(let key):
 			// a chosen Player that was removed falls back to the default rule
 			if let chosen = players.first(where: { $0.key == key }) {
-				holder = current(chosen) == nil ? nil : chosen.mac.lowercased()
+				holder = current(chosen) == nil ? nil : chosen.id
 				return
 			}
 		case .mostRecent:
 			break
 		}
-		let playing = players.filter { current($0)?.status.mode == "play" }.map { $0.mac.lowercased() }
+		let playing = players.filter { current($0)?.status.mode == "play" }.compactMap(\.id)
 		let latest = playing.max { (started[$0] ?? .distantPast) < (started[$1] ?? .distantPast) }
-		if let holder, players.contains(where: { $0.mac.lowercased() == holder && current($0) != nil }) {
+		if let holder, players.contains(where: { $0.id == holder && current($0) != nil }) {
 			if let latest, (started[latest] ?? .distantPast) > (started[holder] ?? .distantPast) { self.holder = latest }
 		} else {
 			holder = latest
@@ -271,8 +287,7 @@ public struct NowPlaying: Sendable {
 
 	/// playing or paused, connected, listed by LMS, and switched on in LyrionPlay
 	private func current(_ player: NowPlayingPlayer) -> (status: LMSPlayerStatus, at: Date)? {
-		let mac = player.mac.lowercased()
-		guard player.on, let entry = statuses[mac], entry.status.connected,
+		guard player.on, let mac = player.id, let entry = statuses[mac], entry.status.connected,
 			  entry.status.mode == "play" || entry.status.mode == "pause" else { return nil }
 		if let listed, listed.players[mac] != true { return nil }
 		return entry
@@ -280,9 +295,9 @@ public struct NowPlaying: Sendable {
 
 	public func shown(at now: Date) -> NowPlayingInfo? {
 		if let lostAt, now.timeIntervalSince(lostAt) >= Self.grace { return nil }
-		for player in players where player.mac.lowercased() == holder {
-			guard let (status, at) = current(player) else { continue }
-			return NowPlayingInfo(player: player, status: status, at: at, server: server)
+		for player in players where player.id == holder {
+			guard let (status, at) = current(player), let mac = player.mac else { continue }
+			return NowPlayingInfo(player: player.key, mac: mac, status: status, at: at, server: server)
 		}
 		return nil
 	}

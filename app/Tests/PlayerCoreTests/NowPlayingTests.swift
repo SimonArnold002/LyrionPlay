@@ -12,6 +12,19 @@ import Testing
 		#expect(Settings().nowPlaying == .mostRecent)
 	}
 
+	/// a removed Player's choice is not kept: the same device switched on again later would have taken
+	/// the slot back without being chosen (spec review, finding 4)
+	@Test func removingAChosenPlayerChoosesTheDefault() {
+		var settings = Settings()
+		settings.players[fiio.uid] = player(fiio, volume: .software)
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .device)
+		settings.nowPlaying = .player(fiio.uid)
+		#expect(settings.removing(dragonfly.uid).nowPlaying == .player(fiio.uid))
+		#expect(settings.removing(fiio.uid).nowPlaying == .mostRecent)
+		settings.nowPlaying = .off
+		#expect(settings.removing(fiio.uid).nowPlaying == .off)
+	}
+
 	@Test func eachChoiceRoundTrips() throws {
 		let url = FileManager.default.temporaryDirectory.appendingPathComponent("lyrionplay-settings-\(UUID()).json")
 		defer { try? FileManager.default.removeItem(at: url) }
@@ -190,6 +203,15 @@ func listing(_ macs: String..., connected: Int = 1) -> LMSServerStatus {
 		#expect(np.shown(at: at(5))?.title == "DAC")
 		np.status(localTrack("stop", title: "DAC"), of: dacMAC, at: at(6))
 		#expect(np.shown(at: at(6)) == nil)
+	}
+
+	/// a chosen Player that never ran is not in LMS, so it neither plays nor is paused: the slot is
+	/// free, it does not fall back (spec review, finding 3)
+	@Test func aChosenPlayerThatNeverRanFreesTheSlot() {
+		let list = both + [NowPlayingPlayer(key: dragonfly.uid, mac: nil, on: true)]
+		var np = NowPlaying(server: nowPlayingServer, players: list, choice: .player(dragonfly.uid))
+		np.status(localTrack(title: "Follow"), of: followMAC, at: at(0))
+		#expect(np.shown(at: at(0)) == nil)
 	}
 
 	/// a chosen Player that was removed: the default rule
@@ -499,9 +521,14 @@ let statusRequest = "status - 1 tags:acdKlNx subscribe:30"
 		_ = await feed.poll()
 		await lms.fail(URLError(.timedOut))
 		#expect(await feed.poll() == [.lost])
-		#expect(await feed.poll() == [.restored])
-		// LMS kept the client: nothing to subscribe again
-		#expect(await lms.lastSubscribes() == [])
+		let back = await feed.poll()
+		#expect(back.first == .restored)
+		// everything is subscribed again, so LMS sends the current state at once: NowPlaying drops a
+		// state older than the grace, and LMS keeps quiet about a track that plays on unchanged
+		// (spec review, finding 1). A repeat replaces LMS's earlier subscription (Request.pm
+		// registerAutoExecute, keyed by client ID, command and player): nothing comes twice
+		#expect(await lms.lastSubscribes() == [" serverstatus 0 100 subscribe:60", "\(followMAC) \(statusRequest)"])
+		#expect(back.contains { if case .status(followMAC, _) = $0 { true } else { false } })
 	}
 
 	/// LMS forgot the client (restarted, or no poll for 3 minutes): it advises a new handshake, and
@@ -560,9 +587,24 @@ let statusRequest = "status - 1 tags:acdKlNx subscribe:30"
 		settings.players[dragonfly.uid] = player(dragonfly, volume: .device)
 		let macs = [PlayerKey.follow: followMAC, fiio.uid: dacMAC]
 		let list = NowPlaying.players(in: settings) { macs[$0] }
-		// the DragonFly never ran: no MAC, so LMS cannot know it
+		// the DragonFly never ran: no MAC, so LMS cannot know it, but it is a Player (spec review,
+		// finding 3). Follow first, then by name
 		#expect(list == [NowPlayingPlayer(key: PlayerKey.follow, mac: followMAC, on: true),
+						 NowPlayingPlayer(key: dragonfly.uid, mac: nil, on: true),
 						 NowPlayingPlayer(key: fiio.uid, mac: dacMAC, on: false)])
+	}
+
+	/// what the Settings picker offers and shows: the same Players; a choice of one that is no
+	/// longer saved reads as the default it falls back to
+	@Test func thePickerOffersThePlayersAndShowsTheFallback() {
+		var settings = Settings()
+		settings.players[fiio.uid] = player(fiio, enabled: false, volume: .software)
+		#expect(NowPlaying.playerKeys(in: settings) == [PlayerKey.follow, fiio.uid])
+		for kept in [NowPlayingChoice.off, .mostRecent, .player(PlayerKey.follow), .player(fiio.uid)] {
+			#expect(kept.effective(in: settings) == kept)
+		}
+		// a device plugged in but never saved, or one removed
+		#expect(NowPlayingChoice.player(dragonfly.uid).effective(in: settings) == .mostRecent)
 	}
 
 	/// Follow is a Player even before settings.json names it (on by default)

@@ -82,6 +82,12 @@ public actor LMSFeed {
 		} catch {
 			let wasHealthy = healthy
 			healthy = false
+			// subscribe everything again at the next good poll, so LMS sends the current state at once:
+			// after the grace NowPlaying drops what it had, and LMS says nothing more of a track that
+			// plays on unchanged until its 30 s resend (spec review, finding 1). A repeat replaces LMS's
+			// earlier subscription (Request.pm registerAutoExecute: one per client ID, command and player)
+			serverSubscribed = false
+			subscribed = []
 			return wasHealthy ? [.lost] : []
 		}
 	}

@@ -45,7 +45,7 @@ final class NowPlayingPublisher {
 		} else if var current = state, current.players != players || current.choice != choice {
 			current.update(players: players, choice: choice)
 			state = current
-			let feed = self.feed, macs = players.map(\.mac)
+			let feed = self.feed, macs = players.compactMap(\.mac)
 			Task { await feed?.setPlayers(macs) }
 		}
 		publish()
@@ -56,7 +56,7 @@ final class NowPlayingPublisher {
 
 	private func startFeed(on server: LMSServer, players: [NowPlayingPlayer]) {
 		guard let transport = HTTPCometd(server: server) else { return }
-		let feed = LMSFeed(transport: transport, players: players.map(\.mac))
+		let feed = LMSFeed(transport: transport, players: players.compactMap(\.mac))
 		self.feed = feed
 		feedTask = Task {
 			await feed.run { [weak self] events in
