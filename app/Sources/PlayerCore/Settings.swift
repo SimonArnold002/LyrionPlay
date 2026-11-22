@@ -153,6 +153,8 @@ public struct Settings: Codable, Equatable, Sendable {
 	public var logLevel: String
 	/// keyed `PlayerKey.follow` or a device UID
 	public var players: [String: PlayerSettings]
+	/// which Player's Current track the menu app puts in macOS Now Playing; the agent ignores it
+	public var nowPlaying: NowPlayingChoice
 
 	public init() {
 		version = Settings.currentVersion
@@ -161,6 +163,7 @@ public struct Settings: Codable, Equatable, Sendable {
 		resampleQuality = "v"
 		logLevel = "info"
 		players = [PlayerKey.follow: .followDefaults]
+		nowPlaying = .mostRecent
 	}
 
 	// missing keys take the defaults, so a file from an earlier 0.4.x, without a key a later build
@@ -174,6 +177,7 @@ public struct Settings: Codable, Equatable, Sendable {
 		resampleQuality = try c.decodeIfPresent(String.self, forKey: .resampleQuality) ?? defaults.resampleQuality
 		logLevel = try c.decodeIfPresent(String.self, forKey: .logLevel) ?? defaults.logLevel
 		players = try c.decodeIfPresent([String: PlayerSettings].self, forKey: .players) ?? defaults.players
+		nowPlaying = try c.decodeIfPresent(NowPlayingChoice.self, forKey: .nowPlaying) ?? defaults.nowPlaying
 	}
 
 	/// Every reader takes a player's settings here (the engine's arguments, the agent's LMS sync, the
@@ -202,11 +206,14 @@ public struct Settings: Codable, Equatable, Sendable {
 	}
 
 	/// Without a device's player: its settings go, so it is off, and a device still connected is listed
-	/// again with the defaults, as a new one. *Follow the macOS output* is never removed.
+	/// again with the defaults, as a new one. *Follow the macOS output* is never removed. Now Playing
+	/// chosen for it goes back to the default: kept, the device switched on again would take the slot
+	/// back unchosen.
 	public func removing(_ key: String) -> Settings {
 		guard key != PlayerKey.follow else { return self }
 		var settings = self
 		settings.players[key] = nil
+		if settings.nowPlaying == .player(key) { settings.nowPlaying = .mostRecent }
 		return settings
 	}
 

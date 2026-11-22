@@ -217,6 +217,13 @@
 </ul>
 <p>Each row has a switch, to turn that player on or off, and a cog, which opens its settings. If the Mac's sound output is a device whose own player is on, <em>Follow the macOS output</em> plays to the Mac's built-in output instead, so two players never share a device.</p>
 <p>Below the players are the settings they share: <strong>Server</strong> is left empty to find your server on the network by itself; enter its name or IP address if it is on another network. Then the release time, <strong>Resampling quality</strong>, used only when your device lacks a track's rate, and <strong>Log detail</strong>: Debug writes more to the logs.</p>
+<p><strong>Now Playing</strong> chooses the player whose track macOS shows in Control Center, on the media keys and in other Now Playing apps, which can then play, pause, skip, go back and seek on it in LMS:</p>
+<ul>
+<li><em>Most recently started player</em> (the default): the player that last started playing. When it stops, another player that is still playing takes its place.</li>
+<li><em>Follow the macOS output</em>, or another player by name: only that player, while it plays or is paused. A player you remove falls back to the default.</li>
+<li><em>Off</em>: LyrionPlay shows nothing there.</li>
+</ul>
+<p>A paused track stays, shown as paused. When the player stops, is switched off or disconnects from LMS, the track goes. Back works as LMS's own Back button: within the first 5 seconds of a track it goes to the one before, later it starts the track again. A radio stream shows the station and the song LMS reports, without a length or seeking. LyrionPlay gets all this from your server itself, so the server must be reachable from the Mac; if the connection drops for more than 5 seconds, the track goes until it is back.</p>
 <p><strong>Save</strong> keeps your changes, <strong>Save and Close</strong> keeps them and closes the window, and <strong>Revert</strong> goes back to what is saved. If a save fails, the window says why and keeps your changes on screen.</p>
 <h3 id="a-player-s-settings-the-cog">A player's settings (the cog)</h3>
 <p><strong>Name</strong> is the player's name in LMS; it starts as your Mac's name, or your Mac's name followed by the device's. To rename a player, use its player settings in LMS (or Material); LyrionPlay shows the new name. A player moved to another LMS server keeps its name there.</p>

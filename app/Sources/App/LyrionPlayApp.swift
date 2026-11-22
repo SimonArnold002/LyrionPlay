@@ -158,6 +158,8 @@ final class PlayerModel {
 	/// (/code-review 2026-10-15 (3), findings 3 and 8)
 	var settingsOpen = false
 	@ObservationIgnored private var timer: Timer?
+	/// macOS Now Playing, from the menu app's own LMS subscription
+	@ObservationIgnored private let nowPlaying = NowPlayingPublisher()
 	/// while no agent reports the devices (the player off), a device plugged in or out is probed here
 	@ObservationIgnored private var deviceWatcher: AudioDeviceWatcher?
 	@ObservationIgnored private var probePending = false
@@ -179,6 +181,9 @@ final class PlayerModel {
 		isOn = LaunchAgent.isOn
 		status = AgentStatus.load()
 		if agentReportsDevices, let status, !status.devices.isEmpty { devices = status.devices }
+		// the saved settings, at the server the agent last used, only while the player is on: off, no
+		// engine runs, so nothing can show, and no server stops the subscription and frees the slot
+		nowPlaying.update(server: isOn ? lastServer : nil, settings: settings)
 		guard settingsOpen else { return }
 		let keys = Set(draft.players.keys).union(devices.map(\.uid)).union([PlayerKey.follow])
 		var names: [String: String] = [:]
@@ -531,6 +536,12 @@ struct SettingsView: View {
 	@Bindable var model: PlayerModel
 	@Environment(\.dismissWindow) private var dismissWindow
 
+	/// a chosen player no longer saved reads as the default it falls back to (NowPlayingChoice.effective)
+	private var nowPlayingChoice: Binding<NowPlayingChoice> {
+		Binding(get: { model.draft.nowPlaying.effective(in: model.draft) },
+				set: { model.draft.nowPlaying = $0 })
+	}
+
 	var body: some View {
 		Form {
 			Section("Players") {
@@ -554,6 +565,14 @@ struct SettingsView: View {
 				Picker("Log detail", selection: $model.draft.logLevel) {
 					Text("Normal").tag("info")
 					Text("Debug").tag("debug")
+				}
+				Picker("Now Playing", selection: nowPlayingChoice) {
+					Text("Off").tag(NowPlayingChoice.off)
+					Text("Most recently started player").tag(NowPlayingChoice.mostRecent)
+					ForEach(NowPlaying.playerKeys(in: model.draft), id: \.self) { key in
+						Text(key == PlayerKey.follow ? "Follow the macOS output" : model.lmsNames[key] ?? model.draft.players[key]?.name ?? key)
+							.tag(NowPlayingChoice.player(key))
+					}
 				}
 			}
 			if model.settingsUnreadable {
