@@ -158,7 +158,7 @@ final class PlayerModel {
 	/// (/code-review 2026-10-15 (3), findings 3 and 8)
 	var settingsOpen = false
 	@ObservationIgnored private var timer: Timer?
-	/// macOS Now Playing, from the menu app's own LMS subscription (themmm/LyrionPlay#1)
+	/// macOS Now Playing, from the menu app's own LMS subscription
 	@ObservationIgnored private let nowPlaying = NowPlayingPublisher()
 	/// while no agent reports the devices (the player off), a device plugged in or out is probed here
 	@ObservationIgnored private var deviceWatcher: AudioDeviceWatcher?
@@ -181,8 +181,9 @@ final class PlayerModel {
 		isOn = LaunchAgent.isOn
 		status = AgentStatus.load()
 		if agentReportsDevices, let status, !status.devices.isEmpty { devices = status.devices }
-		// the saved settings, at the server the agent last used (also while the player is off)
-		nowPlaying.update(server: lastServer, settings: settings)
+		// the saved settings, at the server the agent last used, only while the player is on: off, no
+		// engine runs, so nothing can show, and no server stops the subscription and frees the slot
+		nowPlaying.update(server: isOn ? lastServer : nil, settings: settings)
 		guard settingsOpen else { return }
 		let keys = Set(draft.players.keys).union(devices.map(\.uid)).union([PlayerKey.follow])
 		var names: [String: String] = [:]
@@ -573,8 +574,6 @@ struct SettingsView: View {
 							.tag(NowPlayingChoice.player(key))
 					}
 				}
-				Text("The player whose track Control Center, the media keys and apps such as boring.notch show and control.")
-					.font(.caption).foregroundStyle(.secondary)
 			}
 			if model.settingsUnreadable {
 				Text("settings.json could not be read, so these are the defaults. Save replaces it; the old file is kept as settings-unreadable.json.")

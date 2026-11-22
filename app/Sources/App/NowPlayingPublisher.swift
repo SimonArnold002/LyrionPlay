@@ -1,5 +1,5 @@
-// macOS Now Playing (themmm/LyrionPlay#1): one Player's Current track in Control Center, the media
-// keys and apps such as boring.notch, and their commands sent to LMS. The rules are PlayerCore's
+// macOS Now Playing: one Player's Current track in Control Center, the media keys and other Now
+// Playing apps, and their commands sent to LMS. The rules are PlayerCore's
 // (NowPlaying, RemoteCommand, LMSFeed); this file only runs the subscription, downloads the artwork
 // and makes the MPNowPlayingInfoCenter / MPRemoteCommandCenter calls. The agent and the engine are
 // not involved.
@@ -95,7 +95,8 @@ final class NowPlayingPublisher {
 		target.withLock { $0 = entry }
 		let center = MPNowPlayingInfoCenter.default()
 		guard let info else {
-			// what the prototype found frees the slot for boring.notch and Control Center
+			// no info and a stopped state free the slot in Control Center and other Now Playing apps
+			// (tried live)
 			center.nowPlayingInfo = nil
 			center.playbackState = .stopped
 			setCommandsEnabled(false)
@@ -142,11 +143,12 @@ final class NowPlayingPublisher {
 		}
 	}
 
-	// MARK: commands from the notch, Control Center and the media keys
+	// MARK: commands from Control Center, the media keys and other Now Playing apps
 
 	private func registerCommands() {
 		let center = MPRemoteCommandCenter.shared()
-		// the notch sends togglePlayPause, never play or pause alone (prototype, 2026-11-21): all three
+		// a third-party Now Playing app was seen sending togglePlayPause only, never play or pause:
+		// all three are handled
 		center.togglePlayPauseCommand.addTarget { [target] _ in Self.send(.togglePlayPause, to: target) }
 		center.playCommand.addTarget { [target] _ in Self.send(.play, to: target) }
 		center.pauseCommand.addTarget { [target] _ in Self.send(.pause, to: target) }
@@ -167,7 +169,7 @@ final class NowPlayingPublisher {
 	}
 
 	/// the command for the Player in the slot, sent to LMS; refused when it has none (a seek on a
-	/// stream: the notch sends one even with seeking disabled)
+	/// stream: a third-party Now Playing app sends one even with seeking disabled)
 	nonisolated private static func send(_ command: RemoteCommand,
 										 to target: OSAllocatedUnfairLock<(info: NowPlayingInfo, server: LMSServer)?>)
 		-> MPRemoteCommandHandlerStatus {

@@ -28,7 +28,7 @@ public struct HTTPCometd: CometdTransport {
 	}
 }
 
-/// The menu app's own subscription to LMS for Now Playing (themmm/LyrionPlay#1, decision 6), over
+/// The menu app's own subscription to LMS for Now Playing, over
 /// cometd long-polling as Material does (Web/Cometd.pm, LMS 9.1): `serverstatus`, for the players LMS
 /// knows, and `status` of each of LyrionPlay's Players it lists. Only listed ones: a subscribe for a
 /// player LMS does not know is an error that stops LMS's processing of the rest of that request
@@ -84,7 +84,7 @@ public actor LMSFeed {
 			healthy = false
 			// subscribe everything again at the next good poll, so LMS sends the current state at once:
 			// after the grace NowPlaying drops what it had, and LMS says nothing more of a track that
-			// plays on unchanged until its 30 s resend (spec review, finding 1). A repeat replaces LMS's
+			// plays on unchanged until its 30 s resend. A repeat replaces LMS's
 			// earlier subscription (Request.pm registerAutoExecute: one per client ID, command and player)
 			serverSubscribed = false
 			subscribed = []

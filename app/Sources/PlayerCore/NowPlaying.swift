@@ -1,6 +1,6 @@
 import Foundation
 
-/// Which Player's Current track fills macOS Now Playing (themmm/LyrionPlay#1, decision 7): none, the
+/// Which Player's Current track fills macOS Now Playing: none, the
 /// Player that most recently started playing (the default), or one Player, by its key
 /// (`PlayerKey.follow` or a device UID). Stored as one string: "off", "recent", or the key.
 public enum NowPlayingChoice: Hashable, Sendable, Codable {
@@ -18,7 +18,7 @@ public enum NowPlayingChoice: Hashable, Sendable, Codable {
 	}
 
 	/// what the choice means with these settings: one of a Player no longer saved (removed, or a device
-	/// never set up) is the default it falls back to (decision 7), as the Settings picker shows it
+	/// never set up) is the default it falls back to, as the Settings picker shows it
 	public func effective(in settings: Settings) -> NowPlayingChoice {
 		if case .player(let key) = self, !NowPlaying.playerKeys(in: settings).contains(key) { return .mostRecent }
 		return self
@@ -154,7 +154,7 @@ public struct NowPlayingInfo: Equatable, Sendable {
 	public var elapsedAt: Date
 
 	/// a Player's status as Now Playing shows it. A radio stream: the song as title and artist, the
-	/// station as album (as the title when no song is sent), no duration, time or seek (decision 5)
+	/// station as album (as the title when no song is sent), no duration, time or seek
 	init(player: String, mac: String, status: LMSPlayerStatus, at time: Date, server: LMSServer) {
 		self.player = player
 		artwork = status.artwork(on: server)
@@ -185,7 +185,7 @@ public struct NowPlayingInfo: Equatable, Sendable {
 	}
 }
 
-/// Which Player fills macOS Now Playing, and with what (themmm/LyrionPlay#1). Fed with each Player's
+/// Which Player fills macOS Now Playing, and with what. Fed with each Player's
 /// LMS status as the cometd subscription delivers it; `shown(at:)` is what to publish, nil to free it.
 public struct NowPlaying: Sendable {
 	public let server: LMSServer
@@ -201,7 +201,7 @@ public struct NowPlaying: Sendable {
 	/// when the subscription was lost, while it is
 	private var lostAt: Date?
 
-	/// how long a lost subscription keeps the slot (decision 8)
+	/// how long a lost subscription keeps the slot
 	public static let grace: TimeInterval = 5
 
 	public init(server: LMSServer, players: [NowPlayingPlayer], choice: NowPlayingChoice) {
@@ -219,7 +219,7 @@ public struct NowPlaying: Sendable {
 
 	/// Each Player with the MAC its folder holds (`mac`: `PlayerIdentity.mac(at: Paths.mac(key))`); nil
 	/// for one that never ran. A switched-off Player, or one that never ran, stays listed: a fixed
-	/// choice of it frees the slot; only a removed one falls back to the default (decision 7).
+	/// choice of it frees the slot; only a removed one falls back to the default.
 	public static func players(in settings: Settings, mac: (String) -> String?) -> [NowPlayingPlayer] {
 		playerKeys(in: settings).map { NowPlayingPlayer(key: $0, mac: mac($0), on: settings.isOn($0)) }
 	}
@@ -303,15 +303,15 @@ public struct NowPlaying: Sendable {
 	}
 }
 
-/// What macOS Now Playing sends (the notch, Control Center, the media keys; MPRemoteCommandCenter),
-/// as an LMS command for the Player in the slot (decisions 3 and 4).
+/// What macOS Now Playing sends (Control Center, the media keys, other Now Playing apps;
+/// MPRemoteCommandCenter), as an LMS command for the Player in the slot.
 public enum RemoteCommand: Equatable, Sendable {
 	case play, pause, togglePlayPause, next, previous
 	case seek(Double)
 
 	/// nil: nothing to send. A seek on a live stream or a track LMS cannot seek is refused (`canSeek` is
-	/// false for every live stream): the notch sends one (to 0 s) even with seeking disabled
-	/// (prototype, 2026-11-21), and a radio would restart.
+	/// false for every live stream): a third-party Now Playing app was seen sending one (to 0 s) even
+	/// with seeking disabled, and a radio would restart.
 	public func lms(for info: NowPlayingInfo) -> [String]? {
 		switch self {
 		// playcontrolCommand (Commands.pm, LMS 9.1): `pause` toggles, `pause 0` plays, `pause 1` pauses

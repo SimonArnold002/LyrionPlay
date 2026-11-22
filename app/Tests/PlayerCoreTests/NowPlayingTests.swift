@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import PlayerCore
 
-/// macOS Now Playing (themmm/LyrionPlay#1): which Player's Current track fills the one system-wide
+/// macOS Now Playing: which Player's Current track fills the one system-wide
 /// slot, as a shared setting (Settings > Shared)
 @Suite struct NowPlayingSetting {
 	/// settings carry over from 0.4.0 on: a file without the key takes the default
@@ -13,7 +13,7 @@ import Testing
 	}
 
 	/// a removed Player's choice is not kept: the same device switched on again later would have taken
-	/// the slot back without being chosen (spec review, finding 4)
+	/// the slot back without being chosen
 	@Test func removingAChosenPlayerChoosesTheDefault() {
 		var settings = Settings()
 		settings.players[fiio.uid] = player(fiio, volume: .software)
@@ -80,7 +80,7 @@ let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
 		#expect(info?.elapsed(at: t0.addingTimeInterval(2)) == 14.5)
 	}
 
-	/// decision 8: paused stays, shown as paused, its time standing
+	/// paused stays, shown as paused, its time standing
 	@Test func aPausedPlayerKeepsTheSlotShownPaused() {
 		var np = NowPlaying(server: nowPlayingServer, players: players((PlayerKey.follow, followMAC, true)), choice: .mostRecent)
 		np.status(localTrack(time: 38), of: followMAC, at: t0.addingTimeInterval(-2))
@@ -91,7 +91,7 @@ let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
 		#expect(info?.elapsed(at: t0.addingTimeInterval(30)) == 40)
 	}
 
-	/// decision 8: stop, the Player switched off, or the Player disconnected from LMS free it at once
+	/// stop, the Player switched off, or the Player disconnected from LMS free it at once
 	@Test func stopSwitchOffAndDisconnectFreeTheSlotAtOnce() {
 		var np = NowPlaying(server: nowPlayingServer, players: players((PlayerKey.follow, followMAC, true)), choice: .mostRecent)
 		np.status(localTrack(), of: followMAC, at: t0)
@@ -128,7 +128,7 @@ func listing(_ macs: String..., connected: Int = 1) -> LMSServerStatus {
 }
 
 
-/// decision 7's default: the Player that most recently started playing wins; when it stops, another
+/// the default: the Player that most recently started playing wins; when it stops, another
 /// one still playing takes over
 @Suite struct NowPlayingMostRecent {
 	let both = players((PlayerKey.follow, followMAC, true), (fiio.uid, dacMAC, true))
@@ -175,7 +175,7 @@ func listing(_ macs: String..., connected: Int = 1) -> LMSServerStatus {
 	}
 }
 
-/// decision 7: Off, or one Player chosen by name
+/// Off, or one Player chosen by name
 @Suite struct NowPlayingChosen {
 	let both = players((PlayerKey.follow, followMAC, true), (fiio.uid, dacMAC, true))
 	func at(_ s: Double) -> Date { t0.addingTimeInterval(s) }
@@ -206,7 +206,7 @@ func listing(_ macs: String..., connected: Int = 1) -> LMSServerStatus {
 	}
 
 	/// a chosen Player that never ran is not in LMS, so it neither plays nor is paused: the slot is
-	/// free, it does not fall back (spec review, finding 3)
+	/// free, it does not fall back
 	@Test func aChosenPlayerThatNeverRanFreesTheSlot() {
 		let list = both + [NowPlayingPlayer(key: dragonfly.uid, mac: nil, on: true)]
 		var np = NowPlaying(server: nowPlayingServer, players: list, choice: .player(dragonfly.uid))
@@ -223,7 +223,7 @@ func listing(_ macs: String..., connected: Int = 1) -> LMSServerStatus {
 	}
 }
 
-/// decision 5: a radio stream shows what LMS reports (station, current song, artwork), with no
+/// a radio stream shows what LMS reports (station, current song, artwork), with no
 /// duration, progress or seek. A remote track with a length (a streaming service) is a track.
 @Suite struct NowPlayingStreams {
 	let follow = players((PlayerKey.follow, followMAC, true))
@@ -277,7 +277,7 @@ func listing(_ macs: String..., connected: Int = 1) -> LMSServerStatus {
 	}
 }
 
-/// decision 2: artwork from LMS. A library track by its cover ID, resized by LMS (Web/Graphics.pm
+/// artwork from LMS. A library track by its cover ID, resized by LMS (Web/Graphics.pm
 /// `WxH` spec); a remote image through LMS's image proxy (Web/ImageProxy.pm proxiedImage); a path
 /// on the server under the server
 @Suite struct NowPlayingArtwork {
@@ -318,7 +318,7 @@ func listing(_ macs: String..., connected: Int = 1) -> LMSServerStatus {
 	}
 }
 
-/// decision 8: a lost subscription keeps the last state while it reconnects, and frees the slot if it
+/// a lost subscription keeps the last state while it reconnects, and frees the slot if it
 /// has not reconnected within 5 s
 @Suite struct NowPlayingGrace {
 	func at(_ s: Double) -> Date { t0.addingTimeInterval(s) }
@@ -362,7 +362,7 @@ func listing(_ macs: String..., connected: Int = 1) -> LMSServerStatus {
 	}
 }
 
-/// decisions 3 and 4: what the notch, Control Center and the media keys send, as LMS commands for
+/// what Now Playing apps, Control Center and the media keys send, as LMS commands for
 /// the Player in the slot (Commands.pm playcontrolCommand, timeCommand; Buttons/Common.pm `jump`)
 @Suite struct NowPlayingCommands {
 	func shown(_ status: LMSPlayerStatus) -> NowPlayingInfo {
@@ -383,8 +383,8 @@ func listing(_ macs: String..., connected: Int = 1) -> LMSServerStatus {
 		#expect(RemoteCommand.seek(-1).lms(for: track) == ["time", "0.000"])
 	}
 
-	/// the notch sends a seek to 0 s on a live stream although seeking is disabled (prototype,
-	/// 2026-11-21): refused here, or the radio would restart
+	/// a third-party Now Playing app was seen sending a seek to 0 s on a live stream although seeking
+	/// is disabled: refused here, or the radio would restart
 	@Test func noSeekOnAStreamOrATrackLMSCannotSeek() {
 		let radio = shown(lmsStatus("""
 			{"player_connected":1,"mode":"play","time":30,"remote":1,"can_seek":1,
@@ -475,8 +475,8 @@ func serverListing(_ macs: String...) -> String {
 
 let statusRequest = "status - 1 tags:acdKlNx subscribe:30"
 
-/// decision 6: the menu app subscribes to LMS itself over cometd, as Material does; a lost or hung
-/// subscription is reported, for the 5 s grace (decision 8)
+/// the menu app subscribes to LMS itself over cometd, as Material does; a lost or hung
+/// subscription is reported, for the 5 s grace
 @Suite struct NowPlayingFeedOverCometd {
 	@Test func itSubscribesToTheServerThenToEachOfItsPlayersLMSLists() async throws {
 		let lms = ScriptedCometd()
@@ -524,8 +524,8 @@ let statusRequest = "status - 1 tags:acdKlNx subscribe:30"
 		let back = await feed.poll()
 		#expect(back.first == .restored)
 		// everything is subscribed again, so LMS sends the current state at once: NowPlaying drops a
-		// state older than the grace, and LMS keeps quiet about a track that plays on unchanged
-		// (spec review, finding 1). A repeat replaces LMS's earlier subscription (Request.pm
+		// state older than the grace, and LMS keeps quiet about a track that plays on unchanged.
+		// A repeat replaces LMS's earlier subscription (Request.pm
 		// registerAutoExecute, keyed by client ID, command and player): nothing comes twice
 		#expect(await lms.lastSubscribes() == [" serverstatus 0 100 subscribe:60", "\(followMAC) \(statusRequest)"])
 		#expect(back.contains { if case .status(followMAC, _) = $0 { true } else { false } })
@@ -587,8 +587,8 @@ let statusRequest = "status - 1 tags:acdKlNx subscribe:30"
 		settings.players[dragonfly.uid] = player(dragonfly, volume: .device)
 		let macs = [PlayerKey.follow: followMAC, fiio.uid: dacMAC]
 		let list = NowPlaying.players(in: settings) { macs[$0] }
-		// the DragonFly never ran: no MAC, so LMS cannot know it, but it is a Player (spec review,
-		// finding 3). Follow first, then by name
+		// the DragonFly never ran: no MAC, so LMS cannot know it, but it is a Player. Follow
+		// first, then by name
 		#expect(list == [NowPlayingPlayer(key: PlayerKey.follow, mac: followMAC, on: true),
 						 NowPlayingPlayer(key: dragonfly.uid, mac: nil, on: true),
 						 NowPlayingPlayer(key: fiio.uid, mac: dacMAC, on: false)])

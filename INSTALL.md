@@ -110,7 +110,7 @@ network by itself; enter its name or IP address if it is on another network. The
 writes more to the logs.
 
 **Now Playing** chooses the player whose track macOS shows in Control Center, on the media keys and
-in apps such as boring.notch, which can then play, pause, skip, go back and seek on it in LMS:
+in other Now Playing apps, which can then play, pause, skip, go back and seek on it in LMS:
 
 - *Most recently started player* (the default): the player that last started playing. When it
   stops, another player that is still playing takes its place.

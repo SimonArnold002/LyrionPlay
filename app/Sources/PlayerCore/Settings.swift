@@ -208,7 +208,7 @@ public struct Settings: Codable, Equatable, Sendable {
 	/// Without a device's player: its settings go, so it is off, and a device still connected is listed
 	/// again with the defaults, as a new one. *Follow the macOS output* is never removed. Now Playing
 	/// chosen for it goes back to the default: kept, the device switched on again would take the slot
-	/// back unchosen (spec review of themmm/LyrionPlay#1, finding 4).
+	/// back unchosen.
 	public func removing(_ key: String) -> Settings {
 		guard key != PlayerKey.follow else { return self }
 		var settings = self
