@@ -8,10 +8,14 @@
 #                       frame the device gets checked (silence format, rate, order, delay, switches)
 #   engine name         slimproto.c's player name: the answer to LMS's name query, the name and
 #                       its server stored, and a model of LMS's side (no loop with a held rename)
+#   engine pcm header   pcm.c's WAV/AIFF header reader (-W): a header's depth, rate and byte order
+#                       over LMS's announce, from what SqueezeDSP, FFmpeg and macOS write
 #   swift               PlayerCore: probe parsing, arguments, settings, menu lock, volume curve and
 #                       pushes, following the macOS output, App Transport Security, the server
 #                       choice and agent.log's LMS lines
 #   install.sh          the installer in a sandbox with shimmed system tools
+#   scratch guard       the planted-bug runners' scratch dir guard (scripts/tests/scratch_guard.sh)
+#                       on hostile paths in a fake repo: never the repo, never a folder it did not make
 # Each suite is judged by its summary line AND its exit code; a suite that dies before its summary
 # fails. Exits 0 only if every suite passed. scripts/build.sh runs it, and stops on a failure.
 set -u
@@ -42,12 +46,13 @@ FAIL  $name (exit $status, ${summary:-no summary line: it died first})"
 	fi
 }
 
-make -C "$ROOT/engine" -f Makefile.coreaudio tests/test_conversion tests/test_output_coreaudio tests/test_slimproto_name > "$LOGS/make.log" 2>&1 ||
+make -C "$ROOT/engine" -f Makefile.coreaudio tests/test_conversion tests/test_output_coreaudio tests/test_slimproto_name tests/test_pcm_header > "$LOGS/make.log" 2>&1 ||
 	{ cat "$LOGS/make.log"; echo "FAIL: the engine tests did not build"; exit 1; }
 
 suite "engine conversion" '^result: PASS$' "$ROOT/engine/tests/test_conversion"
 suite "engine output" '^result: PASS$' "$ROOT/engine/tests/test_output_coreaudio"
 suite "engine name" '^result: PASS$' "$ROOT/engine/tests/test_slimproto_name"
+suite "engine pcm header" '^result: PASS$' "$ROOT/engine/tests/test_pcm_header"
 # Command Line Tools 27.0 (Swift 6.4): found by search, the Swift Testing macro plugin fails to load
 # in about half the compiles ("plugin for module 'TestingMacros' not found"), even for a package
 # with one test; named directly, 12 of 12 loaded (measured 2026-10-10). Xcode keeps it elsewhere.
@@ -56,6 +61,7 @@ set --
 [ -f "$TESTING_MACROS" ] && set -- -Xswiftc -load-plugin-library -Xswiftc "$TESTING_MACROS"
 suite "swift" 'Test run with [0-9]+ tests? in [0-9]+ suites? passed' swift test --package-path "$ROOT/app" "$@"
 suite "install.sh" '^result: PASS$' sh "$ROOT/scripts/tests/test_install.sh"
+suite "scratch guard" '^result: PASS$' sh "$ROOT/scripts/tests/test_scratch_guard.sh"
 
 echo "$results"
 [ $bad -eq 0 ] && echo "regression suite: PASS" || echo "regression suite: FAIL"

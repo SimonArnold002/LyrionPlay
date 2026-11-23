@@ -7,34 +7,17 @@
 # (anti-runs); the rest break the new rules. Prints one line per mutant, the test lines that caught
 # it, and exits 0 only if every mutant was caught.
 #   sh scripts/tests/mutants_now_playing.sh [scratch dir]
-# The copy goes in an `app` folder made afresh in the scratch dir, so a scratch dir in the repo (the
-# repo itself included) is refused: it would delete the repo's own app/. With no scratch dir a new
+# The copy goes in `app` and `orig` folders made afresh in the scratch dir. With no scratch dir a new
 # temporary folder is used and removed at the end, the copy and its Swift build with it; a scratch
-# dir given is kept.
+# dir given is kept (its copy is made afresh each run). The guard is scripts/tests/scratch_guard.sh, shared with
+# mutants_default_name.sh and tested in the regression suite: a scratch dir in the repo is refused,
+# and only folders a runner made are deleted (/code-review 2026-11-23 finding 7, 2026-11-23 (2)
+# finding 1).
 set -u
 ROOT=$(cd "$(dirname "$0")/../.." && pwd -P)
-if [ $# -ge 1 ]; then
-	made=false
-	[ -d "$1" ] || made=true
-	mkdir -p "$1" && WORK=$(cd "$1" && pwd -P) || exit 1
-	# the scratch dir or any folder above it IS the repo: compared as folders (-ef), not as text, since
-	# pwd -P keeps the case the path was typed in and the disk ignores it (".../LYRIONPLAY")
-	d=$WORK
-	while :; do
-		if [ "$d" -ef "$ROOT" ]; then
-			$made && rmdir "$1"
-			echo "refused: $1 is in the repo ($ROOT); give a scratch dir outside it, or none" >&2
-			exit 2
-		fi
-		[ "$d" = / ] && break
-		d=$(dirname "$d")
-	done
-else
-	WORK=$(mktemp -d) || exit 1
-	trap 'rm -rf "$WORK"' EXIT
-fi
-rm -rf "$WORK/app" "$WORK/orig"
-mkdir "$WORK/app" "$WORK/orig"
+. "$ROOT/scripts/tests/scratch_guard.sh"
+if [ $# -ge 1 ]; then scratch_dir "$ROOT" "$1"; else scratch_dir "$ROOT"; fi
+remake app orig
 cp -R "$ROOT/app/Package.swift" "$ROOT/app/Sources" "$ROOT/app/Tests" "$WORK/app/"
 CORE="$WORK/app/Sources/PlayerCore"
 cp "$CORE/NowPlaying.swift" "$CORE/LMSFeed.swift" "$WORK/orig/"

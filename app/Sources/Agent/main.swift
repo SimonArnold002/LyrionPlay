@@ -306,10 +306,11 @@ final class Supervisor {
 		writeStatus()
 	}
 
-	/// a player's name in LMS, for the log and the menu (LMS OWNS THE PLAYER NAME): settings.json's
-	/// until LMS has named it
+	/// a player's name in LMS, for the log and the menu (LMS OWNS THE PLAYER NAME): until LMS has
+	/// named it, the name it offers LMS (`-n`: settings.json's through `defaultName`)
 	private func playerName(_ key: String) -> String {
-		PlayerIdentity.name(at: Paths.playerName(key)) ?? settings.player(key, device: devices.first { $0.uid == key }).name
+		PlayerIdentity.name(at: Paths.playerName(key))
+			?? PlayerSettings.defaultName(settings.player(key, device: devices.first { $0.uid == key }).name)
 	}
 
 	/// a player's identity in LMS, made once and kept (PlayerIdentity), and its name (playerName)

@@ -105,13 +105,13 @@ public struct PlayerSettings: Codable, Equatable, Sendable {
 	/// *Follow the macOS output*: on, named after the Mac, shared (macOS's outputs), its own volume
 	/// where the output has one
 	public static var followDefaults: PlayerSettings {
-		PlayerSettings(enabled: true, name: fitName(macName), exclusive: false, dop: false, volume: .device)
+		PlayerSettings(enabled: true, name: defaultName(macName), exclusive: false, dop: false, volume: .device)
 	}
 
 	/// a device's own player: off until switched on, named after the Mac then the device (Simon,
 	/// 2026-10-12), exclusive on external DACs, its own volume where it has one; DoP off
 	public static func defaults(for device: DeviceCaps) -> PlayerSettings {
-		PlayerSettings(enabled: false, name: fitName("\(macName) \(device.name)"), exclusive: device.isExternal, dop: false,
+		PlayerSettings(enabled: false, name: defaultName("\(macName) \(device.name)"), exclusive: device.isExternal, dop: false,
 					   volume: device.volume != nil ? .device : .software)
 	}
 
@@ -130,6 +130,57 @@ public struct PlayerSettings: Codable, Equatable, Sendable {
 			fitted.append(character)
 		}
 		return fitted.trimmingCharacters(in: .whitespaces)
+	}
+
+	/// A name LyrionPlay gives (the defaults, and the `-n` a new player offers), fitted, with no
+	/// character above U+00FF. LMS 9.1 and 9.2 send a player's name back unencoded after the engine's
+	/// empty answer, so such a character failed in LMS at every connect (`Wide character in syswrite`,
+	/// GitHub issue #1; `AN EMPTY NAME ANSWER GETS LMS'S NAME BACK`), and macOS puts them in its own
+	/// default names ("Jonathan’s Mac mini", "山田のMacBook Pro"). macOS's apostrophes become `'`; any
+	/// other run of characters above U+00FF is transliterated (`Any-Latin; Latin-ASCII`: "Paweł" ->
+	/// "Pawel", "山田の" -> "shan tian no"), a run of another script's letters set apart from the
+	/// letters beside it by a space, and what has no Latin form (an emoji) is dropped. Latin-1 is kept:
+	/// é and ü come back from LMS in Latin-1, which the engine reads (`utf8_name`). "Mac" if nothing is
+	/// left. A name renamed in LMS is LMS's own and never passes through here. The name is composed
+	/// first (NFC), so an accent stored as a separate mark ("e" + U+0301) is the Latin-1 é, and the
+	/// modifier-letter apostrophe ʼ (U+02BC) is a `'` like macOS's own (/code-review 2026-11-22 (2)).
+	public static func defaultName(_ name: String) -> String {
+		var quoted = name.precomposedStringWithCanonicalMapping
+		for apostrophe in ["\u{2019}", "\u{2018}", "\u{02BC}"] {
+			quoted = quoted.replacingOccurrences(of: apostrophe, with: "'")
+		}
+		var pieces: [(text: String, apart: Bool)] = []
+		var run = ""
+		func endRun() {
+			guard !run.isEmpty else { return }
+			let latin = run.applyingTransform(StringTransform("Any-Latin; Latin-ASCII"), reverse: false) ?? ""
+			let kept = String(String.UnicodeScalarView(latin.unicodeScalars.filter { $0.value <= 0xFF }))
+			// letters of another script (Han, kana, Hangul, Cyrillic) read as words of their own; a
+			// Latin letter outside Latin-1 (ł, ő, ễ), or one carrying a mark with no composed form, is
+			// part of the word around it
+			let apart = run.range(of: "[\\p{L}--\\p{Script=Latin}]", options: .regularExpression) != nil
+			pieces.append((kept, apart))
+			run = ""
+		}
+		for character in quoted {
+			if character.unicodeScalars.allSatisfy({ $0.value <= 0xFF }) {
+				endRun()
+				pieces.append((String(character), false))
+			} else {
+				run.append(character)
+			}
+		}
+		endRun()
+		var out = ""
+		for (index, piece) in pieces.enumerated() {
+			let before = out.last.map { $0.isLetter || $0.isNumber } ?? false
+			let after = index + 1 < pieces.count && (pieces[index + 1].text.first.map { $0.isLetter || $0.isNumber } ?? false)
+			if piece.apart && before { out += " " }
+			out += piece.text
+			if piece.apart && after { out += " " }
+		}
+		let fitted = fitName(out.split(separator: " ").joined(separator: " "))
+		return fitted.isEmpty ? "Mac" : fitted
 	}
 }
 

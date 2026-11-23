@@ -269,10 +269,11 @@ final class PlayerModel {
 	}
 
 	/// A player's name as LMS has it (its name file), shown and never edited here (LMS OWNS THE
-	/// PLAYER NAME); settings.json's, the name it offers LMS, until LMS has named it. Never put in
-	/// the draft: saved, it would change the engine's -n and restart it.
+	/// PLAYER NAME); until LMS has named it, the name it offers LMS (`-n`: settings.json's through
+	/// `defaultName`, so a name saved before 0.5.1 shows as offered). Never put in the draft: saved,
+	/// it would change the engine's -n and restart it.
 	func lmsName(_ row: PlayerRow) -> String {
-		lmsNames[row.key] ?? draft.player(row.key, device: row.device).name
+		lmsNames[row.key] ?? PlayerSettings.defaultName(draft.player(row.key, device: row.device).name)
 	}
 
 	func loadDevices() {
@@ -571,7 +572,9 @@ struct SettingsView: View {
 					Text("Off").tag(NowPlayingChoice.off)
 					Text("Most recently started player").tag(NowPlayingChoice.mostRecent)
 					ForEach(NowPlaying.playerKeys(in: model.draft), id: \.self) { key in
-						Text(key == PlayerKey.follow ? "Follow the macOS output" : model.lmsNames[key] ?? model.draft.players[key]?.name ?? key)
+						// LMS's name, else the one offered (`defaultName`), as `lmsName` shows it (/code-review 2026-11-23, 4)
+						Text(key == PlayerKey.follow ? "Follow the macOS output"
+							 : model.lmsNames[key] ?? model.draft.players[key].map { PlayerSettings.defaultName($0.name) } ?? key)
 							.tag(NowPlayingChoice.player(key))
 					}
 				}

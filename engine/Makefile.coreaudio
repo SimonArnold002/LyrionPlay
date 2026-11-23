@@ -3,8 +3,10 @@
 # and the static codec libraries built by ../deps/build-deps.sh. No dylibs are linked, so the
 # binary runs under the hardened runtime with no exceptions.
 #   make -f Makefile.coreaudio            build ./squeezelite
-#   make -f Makefile.coreaudio test       exhaustive sample-conversion test, then the CoreAudio
-#                                         output's regression suite (fake HAL, no device touched)
+#   make -f Makefile.coreaudio test       the engine's four suites: exhaustive sample conversion,
+#                                         the CoreAudio output (fake HAL, no device touched), the
+#                                         player name (slimproto.c against a model of LMS) and the
+#                                         WAV/AIFF header reader (pcm.c)
 
 DEPS_OUT  ?= $(abspath ../deps/out)
 SDK       ?= $(shell xcrun --show-sdk-path)
@@ -29,10 +31,11 @@ alac_wrapper.o: alac_wrapper.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) $(ARCH) -O2 -Wall $(CPPFLAGS) $(OPTS) -Wno-multichar $< -c -o $@
 
 .PHONY: test
-test: tests/test_conversion tests/test_output_coreaudio tests/test_slimproto_name
+test: tests/test_conversion tests/test_output_coreaudio tests/test_slimproto_name tests/test_pcm_header
 	./tests/test_conversion
 	./tests/test_output_coreaudio
 	./tests/test_slimproto_name
+	./tests/test_pcm_header
 
 tests/test_conversion: tests/test_conversion.c output_coreaudio_conv.h
 	$(CC) $(ARCH) -O2 -Wall -o $@ tests/test_conversion.c
@@ -48,3 +51,8 @@ tests/test_output_coreaudio: tests/test_output_coreaudio.c output_coreaudio.c ou
 tests/test_slimproto_name: tests/test_slimproto_name.c slimproto.c slimproto.h squeezelite.h utils.c
 	$(CC) $(ARCH) -O1 -Wall -std=gnu99 -D_FORTIFY_SOURCE=0 $(OPTS) -I. \
 		-o $@ tests/test_slimproto_name.c utils.c
+
+# the WAV/AIFF header reader (-W): the suite #includes pcm.c and links upstream's buffer.c and dop.c
+tests/test_pcm_header: tests/test_pcm_header.c pcm.c squeezelite.h buffer.c dop.c
+	$(CC) $(ARCH) -O1 -Wall -std=gnu99 -D_FORTIFY_SOURCE=0 $(OPTS) -I. \
+		-o $@ tests/test_pcm_header.c buffer.c dop.c

@@ -92,6 +92,18 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(a.last == "-D")
 	}
 
+	@Test func everyPlayerReadsWavHeaders() {
+		// -W lists `wav` to LMS, which SqueezeDSP needs before it offers its PCM output (a WAV whose
+		// header carries the rate LMS does not announce); on every device and volume mode
+		var settings = Settings()
+		settings.players[fiio.uid] = player(fiio, dop: true, volume: .fixed)
+		settings.players[dragonfly.uid] = player(dragonfly, volume: .fixed, held: 17)
+		for a in [args(Settings(), speakers), args(settings, fiio), args(settings, dragonfly), args(Settings(), hdmi)] {
+			#expect(a.filter { $0 == "-W" }.count == 1)
+		}
+		#expect(args(settings, fiio).last == "-D") // control: -D still last
+	}
+
 	@Test func maxSampleRateIsCappedAt384k() {
 		var big = fiio
 		big.rates = [768_000, 705_600] + big.rates
@@ -556,15 +568,79 @@ func value(_ option: String, in a: [String]) -> String? {
 		#expect(rows.last?.device == nil)
 	}
 
+	/// a default name carries no ’ (macOS's own default names do): LMS 9.1-9.2 cannot send a name
+	/// with a character above U+00FF back to the player (GitHub issue #1)
+	@Test func aDefaultNameLMSCanSendBack() {
+		func latin1(_ s: String) -> Bool { s.unicodeScalars.allSatisfy { $0.value <= 0xFF } }
+		#expect(PlayerSettings.defaultName("Jonathan\u{2019}s Mac mini") == "Jonathan's Mac mini")
+		#expect(PlayerSettings.defaultName("\u{2018}Den\u{2019} Mac") == "'Den' Mac")
+		// /code-review 2026-11-22 finding 3: every other character above U+00FF, not only ’
+		#expect(PlayerSettings.defaultName("Pawe\u{142}\u{2019}s MacBook") == "Pawel's MacBook")
+		#expect(PlayerSettings.defaultName("\u{418}\u{432}\u{430}\u{43d}\u{2019}s Mac mini") == "Ivan's Mac mini")
+		for (name, tail) in [("\u{5c71}\u{7530}\u{306e}MacBook Pro", " MacBook Pro"),   // 山田のMacBook Pro
+							 ("\u{738b}\u{4f1f}\u{7684}MacBook Air", " MacBook Air"),   // 王伟的MacBook Air
+							 ("\u{ae40}\u{bbfc}\u{c218}\u{c758} MacBook Pro", " MacBook Pro")] { // 김민수의 MacBook Pro
+			let fitted = PlayerSettings.defaultName(name)
+			#expect(latin1(fitted), "\(fitted)")
+			#expect(fitted.hasSuffix(tail) && fitted.count > tail.count, "\(fitted)")
+		}
+		#expect(PlayerSettings.defaultName("Zo\u{eb}\u{2019}s AirPods \u{1f3a7}") == "Zo\u{eb}'s AirPods")   // the emoji dropped
+		#expect(PlayerSettings.defaultName("\u{1f3a7}\u{1f3a7}") == "Mac")
+		// /code-review 2026-11-22 (2) finding 1: an accent stored as its own mark, and ʼ, stay in the word
+		#expect(PlayerSettings.defaultName("Cafe\u{301} Mac") == "Caf\u{e9} Mac")
+		#expect(PlayerSettings.defaultName("Zoe\u{308}\u{2019}s AirPods") == "Zo\u{eb}'s AirPods")
+		#expect(PlayerSettings.defaultName("Nguye\u{302}\u{303}n Mac") == "Nguyen Mac")
+		#expect(PlayerSettings.defaultName("Mix\u{301} Mac") == "Mix Mac")   // no composed form
+		#expect(PlayerSettings.defaultName("Jonathan\u{2bc}s Mac") == "Jonathan's Mac")
+		// control: another script's letters right beside Latin ones are still set apart
+		#expect(PlayerSettings.defaultName("Ivan\u{418}\u{432}\u{430}\u{43d}Mac") == "Ivan Ivan Mac")
+		// a device's default: none above U+00FF, fitted, whatever this Mac is called (a long Mac name cuts it)
+		var airpods = fiio
+		airpods.name = "Jonathan\u{2019}s AirPods Pro \u{1f3a7}"
+		let name = PlayerSettings.defaults(for: airpods).name
+		#expect(latin1(name))
+		#expect(name.utf8.count <= PlayerSettings.nameBytes)
+		#expect(name == PlayerSettings.defaultName("\(PlayerSettings.macName) Jonathan\u{2019}s AirPods Pro \u{1f3a7}"))
+		// control: Latin-1 is kept, and the name is still fitted
+		#expect(PlayerSettings.defaultName("Caf\u{e9} K\u{fc}che") == "Caf\u{e9} K\u{fc}che")
+		#expect(PlayerSettings.defaultName("  Study\nDesk  ") == "Study Desk")
+		// control: fitName alone keeps it (a name LMS owns is never changed)
+		#expect(PlayerSettings.fitName("Jonathan\u{2019}s") == "Jonathan\u{2019}s")
+	}
+
+	/// /code-review 2026-11-22 finding 4: the -n a new player offers passes through `defaultName`, so a
+	/// name saved before 0.5.1 with macOS's ’ is not offered to LMS as it is
+	@Test func theOfferedNameIsOneLMSCanSendBack() {
+		var settings = Settings()
+		var saved = player(fiio, volume: .software)
+		saved.name = "Jonathan\u{2019}s Mac mini FiiO M11 Plus"
+		settings.players[fiio.uid] = saved
+		#expect(value("-n", in: args(settings, fiio)) == "Jonathan's Mac mini FiiO M11 Plus")
+		// control: a plain saved name is offered exactly as it is (/code-review 2026-11-22 (2) finding 6:
+		// a literal, not defaultName's own answer)
+		var desk = player(dragonfly, volume: .device)
+		desk.name = "Desk"
+		settings.players[dragonfly.uid] = desk
+		#expect(value("-n", in: args(settings, dragonfly)) == "Desk")
+	}
+
 	/// only the follow player is on to begin with; it is named after the Mac, a device's player after
 	/// the Mac then the device
 	@Test func defaults() {
 		let settings = Settings()
 		#expect(settings.isOn(PlayerKey.follow))
 		#expect(!settings.isOn(dragonfly.uid))
-		#expect(settings.player(PlayerKey.follow, device: speakers).name == PlayerSettings.macName)
+		#expect(settings.player(PlayerKey.follow, device: speakers).name == PlayerSettings.defaultName(PlayerSettings.macName))
 		#expect(settings.player(dragonfly.uid, device: dragonfly).name
-				== "\(PlayerSettings.macName) AudioQuest DragonFly Black v1.5")
+				== PlayerSettings.defaultName("\(PlayerSettings.macName) AudioQuest DragonFly Black v1.5"))
+		// and checked without defaultName (/code-review 2026-11-22 (2) finding 6), on this Mac's name
+		// when it is ASCII once macOS's ’ is a ' ("Jonathan’s Mac mini"): the name as it is, fitted
+		let mac = PlayerSettings.macName.replacingOccurrences(of: "\u{2019}", with: "'")
+		if mac.allSatisfy(\.isASCII) && !mac.contains("  ") {
+			#expect(settings.player(PlayerKey.follow, device: speakers).name == PlayerSettings.fitName(mac))
+			#expect(settings.player(dragonfly.uid, device: dragonfly).name
+					== PlayerSettings.fitName("\(mac) AudioQuest DragonFly Black v1.5"))
+		}
 		#expect(settings.player(dragonfly.uid, device: dragonfly).exclusive)   // an external DAC
 		#expect(!settings.player(PlayerKey.follow, device: speakers).exclusive)
 	}

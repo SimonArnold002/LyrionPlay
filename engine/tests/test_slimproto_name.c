@@ -794,6 +794,94 @@ static void test_name_file_read_to_a_whole_character(void) {
 	CHECK(answer && !strcmp(answer, want), "offered \"%s\", not cut before the ü", answer ? answer : "nothing");
 }
 
+static void test_latin1_name_is_stored_as_utf8(void) {
+	// issue #1: after the empty answer LMS 9.1-9.2 send their name unencoded, so "Küche" came as Latin-1
+	// (measured: perl pack('CZ*') of U+00FC is the one byte fc). It is stored as UTF-8, which the app reads
+	write_file(name_path, "K\xc3\xbc" "che");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_A);
+	const char *answer = query();
+	CHECK(answer && !answer[0], "control: the server that named it gets the empty answer, got %s", answer ? answer : "nothing");
+	to_engine("K\xfc" "che");
+	answer = engine_sent();
+	CHECK(answer && !strcmp(answer, "K\xfc" "che"), "confirmed back as LMS sent it, got %s", answer ? answer : "nothing");
+	CHECK(!strcmp(player_name, "K\xc3\xbc" "che"), "held as UTF-8, got \"%s\"", player_name);
+	CHECK(!strcmp(read_file(name_path), "K\xc3\xbc" "che"), "the file holds UTF-8, got \"%s\"", read_file(name_path));
+}
+
+static void test_latin1_name_keeps_its_last_letter(void) {
+	// issue #1: a Latin-1 é last was taken for a cut 3-byte character and dropped ("Café" -> "Caf")
+	write_file(name_path, "Desk");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_A);
+	to_engine("Caf\xe9");
+	engine_sent();
+	CHECK(!strcmp(read_file(name_path), "Caf\xc3\xa9"), "stored \"%s\", not Caf", read_file(name_path));
+	// another server is offered it as UTF-8
+	name_server_count = 0;
+	engine_start("x", SERVER_B);
+	const char *answer = query();
+	CHECK(answer && !strcmp(answer, "Caf\xc3\xa9"), "offered \"%s\"", answer ? answer : "nothing");
+}
+
+static void test_long_latin1_name_fits(void) {
+	// a Latin-1 name grows as UTF-8 (ü: 1 byte -> 2): cut to 63 bytes of whole characters
+	char name[128], want[128];
+	memset(name, 0xfc, 40);                  // 40 ü: 80 bytes as UTF-8
+	name[40] = '\0';
+	want[0] = '\0';
+	for (int i = 0; i < 31; i++) strcat(want, "\xc3\xbc");   // 31 whole ü = 62 bytes
+	write_file(name_path, "Desk");
+	write_file(stamp_path, SERVER_A "\n");
+	engine_start("x", SERVER_A);
+	to_engine(name);
+	engine_sent();
+	CHECK(!strcmp(read_file(name_path), want), "stored %zu bytes, not 31 whole ü", strlen(read_file(name_path)));
+}
+
+static void test_utf8_name_is_taken_as_it_is(void) {
+	// control: a name LMS sends encoded (a rename: the setChange hook) is not read again as Latin-1,
+	// whatever its characters: é (2 bytes), ’ (3), a 4-byte one
+	static const char *names[] = { "Caf\xc3\xa9", "Jonathan\xe2\x80\x99s Mac", "\xf0\x9f\x8e\xb5 Den", "Desk" };
+	for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		// each row a fresh start, as a real one: no stamp line or naming carried from the row before
+		// (/code-review 2026-11-22 finding 7)
+		name_server_count = 0;
+		name_from_lms = false;
+		write_file(name_path, "Old");
+		write_file(stamp_path, SERVER_A "\n");
+		engine_start("x", SERVER_A);
+		to_engine(names[i]);
+		engine_sent();
+		CHECK(!strcmp(read_file(name_path), names[i]), "row %u: stored \"%s\"", i, read_file(name_path));
+	}
+}
+
+static void test_utf8_whole(void) {
+	static const struct { const char *s; bool want; } rows[] = {
+		{ "", true }, { "Desk", true }, { "K\xc3\xbc" "che", true }, { "\xe2\x80\x99", true },
+		{ "\xf0\x9f\x8e\xb5", true },
+		{ "K\xfc" "che", false },          // Latin-1 ü
+		{ "Caf\xe9", false },              // Latin-1 é last: a lead byte with nothing after it
+		{ "\xc3", false },                 // a cut character
+		{ "\xe2\x80", false },
+		{ "\xc0\xaf", false },             // an overlong form
+		{ "\xf5\x80\x80\x80", false },     // past U+10FFFF
+		{ "\xc3\x28", false },             // a lead byte, then no continuation
+		// /code-review 2026-11-22 finding 5: the second byte's range by lead byte
+		{ "\xe0\x80\xaf", false },         // a 3-byte overlong form
+		{ "\xe0\xa0\x80", true },          // control: U+0800, the first 3-byte character
+		{ "\xed\xa0\x80", false },         // a UTF-16 surrogate (U+D800)
+		{ "\xed\x9f\xbf", true },          // control: U+D7FF, just below
+		{ "\xf0\x80\x80\xaf", false },     // a 4-byte overlong form
+		{ "\xf0\x90\x80\x80", true },      // control: U+10000
+		{ "\xf4\x90\x80\x80", false },     // U+110000, past the end
+		{ "\xf4\x8f\xbf\xbf", true },      // control: U+10FFFF
+	};
+	for (unsigned i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
+		CHECK(utf8_whole(rows[i].s, strlen(rows[i].s)) == rows[i].want, "row %u", i);
+}
+
 static ino_t inode(const char *path) {
 	struct stat st;
 	return stat(path, &st) == 0 ? st.st_ino : 0;
@@ -980,6 +1068,11 @@ static const struct test tests[] = {
 	{ "a long name LMS sends is stored to its last whole character", test_long_name_is_stored_whole },
 	{ "a name file cut inside a character is mended", test_cut_name_file_is_mended },
 	{ "a name file is read to its last whole character", test_name_file_read_to_a_whole_character },
+	{ "a name LMS sends in Latin-1 is stored as UTF-8", test_latin1_name_is_stored_as_utf8 },
+	{ "a Latin-1 name keeps its last letter", test_latin1_name_keeps_its_last_letter },
+	{ "a long Latin-1 name fits to whole characters", test_long_latin1_name_fits },
+	{ "a UTF-8 name LMS sends is taken as it is", test_utf8_name_is_taken_as_it_is },
+	{ "UTF-8 is told from Latin-1", test_utf8_whole },
 	{ "a name and stamp already held are not written again", test_unchanged_name_is_not_written },
 	{ "a name written reaches the disk itself", test_name_reaches_the_disk },
 	{ "the stamp keeps the last NAME_SERVERS servers", test_stamp_is_bounded },

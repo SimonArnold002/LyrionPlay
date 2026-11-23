@@ -80,6 +80,7 @@ static void _check_header(void) {
 	u8_t *ptr = streambuf->readp;
 	unsigned bytes = min(_buf_used(streambuf), _buf_cont_read(streambuf));
 	header_format format = UNKNOWN;
+	bool aifc = false;
 
 	// simple parsing of wav and aiff headers and get to samples
 
@@ -90,6 +91,7 @@ static void _check_header(void) {
 		} else if (!memcmp(ptr, "FORM", 4) && (!memcmp(ptr+8, "AIFF", 4) || !memcmp(ptr+8, "AIFC", 4))) {
 			LOG_INFO("AIFF");
 			format = AIFF;
+			aifc = !memcmp(ptr+8, "AIFC", 4);
 		}
 	}
 
@@ -157,6 +159,11 @@ static void _check_header(void) {
 				channels    = *(ptr+8) << 8 | *(ptr+9);
 				sample_size = (*(ptr+14) << 8 | *(ptr+15)) / 8;
 				bigendian   = 1;
+				// an AIFC names its encoding after the rate: 'sowt' is little-endian PCM (FFmpeg's 16-bit
+				// little-endian AIFF), as LMS reads it when it strips the header itself (Slim/Formats/AIFF.pm)
+				if (aifc && len >= 22 && bytes >= 30 && !memcmp(ptr+26, "sowt", 4)) {
+					bigendian = 0;
+				}
 				// sample rate is encoded as IEEE 80 bit extended format
 				// make some assumptions to simplify processing - only use first 32 bits of mantissa
 				exponent = ((*(ptr+16) & 0x7f) << 8 | *(ptr+17)) - 16383 - 31;
@@ -166,9 +173,14 @@ static void _check_header(void) {
 				LOG_INFO("pcm size: %u rate: %u chan: %u bigendian: %u", sample_size, sample_rate, channels, bigendian);
 			}
 
-			if (bytes >= len + 8) {
-				ptr   += len + 8;
-				bytes -= (len + 8);
+			// a chunk of odd length is followed by a pad byte, in RIFF and IFF alike, as LMS's own reader
+			// skips it (Audio::Scan src/wav.c, _parse_wav and _parse_aiff); upstream read the pad as the next
+			// chunk's first byte, so the header played as audio (/code-review 2026-11-22 finding 2). Counted
+			// in 64 bits, so a garbage length cannot wrap round to a small step.
+			u64_t skip = (u64_t)len + 8 + (len & 1);
+			if (bytes >= skip) {
+				ptr   += skip;
+				bytes -= (unsigned)skip;
 			} else {
 				LOG_WARN("run out of data");
 				return;

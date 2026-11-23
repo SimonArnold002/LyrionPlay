@@ -24,7 +24,9 @@ public enum EngineArguments {
 			"-o", device.uid,
 			"-M", modelName,
 			"-m", mac,
-			"-n", options.name,
+			// the name a NEW player offers (no name file yet); a settings.json saved before 0.5.1 can hold
+			// macOS's ’, which LMS cannot send back (`defaultName`)
+			"-n", PlayerSettings.defaultName(options.name),
 			"-N", nameFile,
 			"-Z", String(min(device.maxRate, lmsPCMRateCap)),
 			// E: resample only when the device lacks the track's rate
@@ -32,6 +34,9 @@ public enum EngineArguments {
 			"-a", deviceParams(options, device),
 			"-d", "all=\(settings.logLevel)",
 			"-f", logFile,
+			// a WAV or AIFF header's format wins over LMS's announce, and the player lists `wav`, so
+			// SqueezeDSP's PCM output, a WAV at its own rate, plays right (engine/pcm.c, `pcm_check_header`)
+			"-W",
 		]
 		if !settings.server.isEmpty {
 			args += ["-s", settings.server]

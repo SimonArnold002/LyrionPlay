@@ -22,11 +22,12 @@ New files (ours): `output_coreaudio.c`, `output_coreaudio_conv.h`, `Makefile.cor
 `tests/test_conversion.c`, `tests/test_output_coreaudio.c` (built with upstream's `output.c`,
 `buffer.c`, `output_pack.c` and `dop.c`, which it links as they are), `tests/test_slimproto_name.c`
 (which `#include`s `slimproto.c` with our changes, so a merge that changes the player name's code
-there, such as `process_setd` or `load_player_name`, must update it too).
+there, such as `process_setd` or `load_player_name`, must update it too), `tests/test_pcm_header.c`
+(which `#include`s `pcm.c` and links upstream's `buffer.c` and `dop.c`).
 
 Changes to upstream files, all inside `#if COREAUDIO` except the Makefile lines, the
-`load_player_name` split in `slimproto.c`, and `send_packet`/`sendSETDName` returning whether they
-wrote everything:
+`load_player_name` split in `slimproto.c`, `send_packet`/`sendSETDName` returning whether they
+wrote everything, and the AIFC byte order and the chunk pad byte in `pcm.c`:
 
 - `squeezelite.h`
   - On `__APPLE__`, `PORTAUDIO` is defined only `#if !defined(COREAUDIO)`.
@@ -56,6 +57,9 @@ wrote everything:
     back to `-n`.
   - A name LMS sends, and the `-N` file read at start, are cut to 63 bytes at a whole UTF-8 character
     (`fit_name`; upstream keeps 64 bytes and reads back 63, either cut inside a character).
+  - A name LMS sends that is not UTF-8 is read as Latin-1 (`utf8_name`, `utf8_whole`): LMS 9.1-9.2
+    send the name unencoded after the empty answer and at a stop with a rename held, so é or ü came
+    in Latin-1 (upstream stores it as sent). The name is still confirmed back as LMS sent it.
   - The servers that have named the player, kept beside the `-N` file as `<file>.server` (one line
     each, oldest first: its IPv4 address, then a space and its LMS `server_uuid` when it answered;
     at most 8; `add_name_server` at each name LMS sends and at each offer of the player's name
@@ -78,6 +82,14 @@ wrote everything:
     `parse_server_uuid` reads the `E` TLV answer.
   - Upstream's `-n` / `-N` reading moved, unchanged but for the lines above, out of `slimproto()`
     into `load_player_name()`, so `tests/test_slimproto_name.c` can call it.
+- `pcm.c`
+  - `_check_header`: an AIFC whose COMM names the compression type `sowt` (little-endian PCM, as
+    FFmpeg writes 16-bit little-endian AIFF) is read as little-endian (`aifc`); upstream reads every
+    AIFF and AIFC as big-endian. LyrionPlay runs `-W`, so the header decides over LMS's announce, and
+    LMS itself reads `sowt` as little-endian (`Slim/Formats/AIFF.pm`).
+  - `_check_header`: a chunk of odd length is skipped with its pad byte (RIFF and IFF both), as
+    Audio::Scan does (`src/wav.c`); upstream read the pad as the next chunk's first byte, and the
+    header then played as audio. The step is counted in 64 bits.
 - `Makefile`
   - `OPT_COREAUDIO`.
   - `output_coreaudio.c` added to `SOURCES`.

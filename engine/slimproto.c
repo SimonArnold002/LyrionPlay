@@ -689,6 +689,58 @@ static void fit_name(char *name) {
 	name[len] = '\0';
 }
 
+// whether the n bytes are UTF-8 throughout, every character whole, as strict as the app's reader
+// (no overlong form, no UTF-16 surrogate, nothing past U+10FFFF: the second byte's range by lead
+// byte, Unicode table 3-7; /code-review 2026-11-22 finding 5)
+static bool utf8_whole(const char *s, size_t n) {
+	size_t i = 0;
+	while (i < n) {
+		u8_t c = (u8_t)s[i], lo = 0x80, hi = 0xBF;
+		size_t more = c < 0x80 ? 0 : c >= 0xC2 && c <= 0xDF ? 1 : c >= 0xE0 && c <= 0xEF ? 2 : c >= 0xF0 && c <= 0xF4 ? 3 : 9;
+		if (more == 9 || n - i <= more) return false;   // not a lead byte, or the character runs past the end
+		if (c == 0xE0) lo = 0xA0;
+		else if (c == 0xED) hi = 0x9F;
+		else if (c == 0xF0) lo = 0x90;
+		else if (c == 0xF4) hi = 0x8F;
+		if (more && ((u8_t)s[i + 1] < lo || (u8_t)s[i + 1] > hi)) return false;
+		for (size_t k = 1; k <= more; k++) if (((u8_t)s[i + k] & 0xC0) != 0x80) return false;
+		i += more + 1;
+	}
+	return true;
+}
+
+// LMS's name as UTF-8 in name (PLAYER_NAME_LEN + 1 bytes), from the len bytes of its setd. LMS 9.1 and
+// 9.2 send the name they hold UNENCODED after the empty answer (playerSettingsFrame) and at a stop with
+// a rename held: pack('Z*') of the decoded pref, so é or ü came in Latin-1 (and a character above
+// U+00FF failed in LMS: GitHub issue #1, AN EMPTY NAME ANSWER GETS LMS'S NAME BACK). Stored as sent, the
+// app read that file as no name, and fit_name took a last é for a cut character ("Café" -> "Caf"). A
+// name that is not UTF-8 is read as Latin-1, each byte its own character; one that is is taken as it is.
+// Cut to PLAYER_NAME_LEN bytes here; fit_name cuts it to whole characters after.
+// RESIDUAL, accepted (/code-review 2026-11-22 (2), ledger `A LATIN-1 NAME THAT READS AS UTF-8`): LMS's
+// rename hook sends UTF-8 and these two paths Latin-1, with nothing to tell them apart, so a Latin-1 name
+// whose bytes are also valid UTF-8 is read as UTF-8: an uppercase accented letter or ß (C2-DF) right
+// before a symbol in A0-BF (NBSP ° ² · º « »), "SALÓ·" (D3 B7) -> "SALӷ" (U+04F7). No such name seen.
+static void utf8_name(char *name, const char *data, size_t len) {
+	size_t n = strnlen(data, len), out = 0;
+	if (utf8_whole(data, n)) {
+		if (n > PLAYER_NAME_LEN) n = PLAYER_NAME_LEN;
+		memcpy(name, data, n);
+		name[n] = '\0';
+		return;
+	}
+	for (size_t i = 0; i < n; i++) {
+		u8_t c = (u8_t)data[i];
+		if (out + (c < 0x80 ? 1 : 2) > PLAYER_NAME_LEN) break;
+		if (c < 0x80) {
+			name[out++] = (char)c;
+		} else {
+			name[out++] = (char)(0xC0 | (c >> 6));
+			name[out++] = (char)(0x80 | (c & 0x3F));
+		}
+	}
+	name[out] = '\0';
+}
+
 // The player's name offered to LMS and written in full: LMS's pref is that name now, whether or not it
 // answers (an offer equal to it gets no answer: Prefs::Base::set), so this server has the player's name
 // and can hold a rename from now on: stamped, as for a name LMS sends. A new player's -n offer names it
@@ -734,12 +786,16 @@ static void process_setd(u8_t *pkt, int len) {
 			name_from_lms = true;
 			add_name_server();
 #endif
+#if COREAUDIO
+			utf8_name(player_name, setd->data, (size_t)len - 5);
+			fit_name(player_name);
+			// the name as held and stored (UTF-8), not LMS's bytes, which can be Latin-1
+			LOG_INFO("set name: %s", player_name);
+#else
 			strncpy(player_name, setd->data, PLAYER_NAME_LEN);
 			player_name[PLAYER_NAME_LEN] = '\0';
-#if COREAUDIO
-			fit_name(player_name);
-#endif
 			LOG_INFO("set name: %s", setd->data);
+#endif
 			// confirm change to server
 			sendSETDName(setd->data);
 			// write name to name_file if -N option set
