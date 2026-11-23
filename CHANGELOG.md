@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.3 — 2026-11-23
+
+WAV and AIFF with their headers, so SqueezeDSP's PCM output plays on LyrionPlay, and player names
+LMS can always send back.
+
+### Improvements
+
+- **WAV and AIFF headers.** Every player tells LMS it reads WAV and AIFF with their headers, so
+  SqueezeDSP can send it its PCM output (a WAV at the rate it upsampled to), and the player takes
+  each stream's format from its header.
+
+### Fixes
+
+- **Player names with ’ (#1).** A new player's default name, made from the Mac's name, uses ' for
+  macOS's curly apostrophe and plain Latin letters for any letter LMS can't send back: before, LMS
+  failed at every connect to such a player. A player already named with ’ keeps its name: rename it
+  in LMS.
+- **Accented names.** A name with accented letters (é, ü) set in LMS is stored whole: "Café" was
+  cut to "Caf".
+- **AIFC files** in little-endian byte order (`sowt`) no longer play byte-swapped.
+- **Now Playing** in Settings shows a player LMS hasn't named yet by its default name.
+
 ## 0.4.15 — 2026-11-22
 
 ### New
