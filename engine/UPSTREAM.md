@@ -14,9 +14,10 @@ the changes listed under "Our changes":
 
 ## Our changes
 
-Modified by CrystalGipsy for LyrionPlay, from 2026-10-09 (the dates of each change are in the git
-history and the repo's `CLAUDE.md`). This list is the notice GPLv3 section 5(a) asks for. Every change
-to an upstream file is listed here, so a later upstream update can be merged by hand.
+Modified by CrystalGipsy for LyrionPlay, from 2026-10-09. The git history dates each change from
+2026-10-11 on; its first commit, `7faf2f8`, holds the work of 2026-10-09 to 2026-10-11. This list is
+the notice GPLv3 section 5(a) asks for. Every change to an upstream file is listed here, so a later
+upstream update can be merged by hand.
 
 New files (ours): `output_coreaudio.c`, `output_coreaudio_conv.h`, `Makefile.coreaudio`,
 `tests/test_conversion.c`, `tests/test_output_coreaudio.c` (built with upstream's `output.c`,

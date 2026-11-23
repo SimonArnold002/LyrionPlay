@@ -39,7 +39,7 @@ DEPS_LOG="$ROOT/build/build-deps.log"
 tail -15 "$DEPS_LOG"
 
 # --release: the codec libraries' source goes out with the app (A RELEASE CARRIES ITS SOURCE in the
-# repo's CLAUDE.md). Each archive build-deps.sh fetches, with the SHA-256 on the line after its fetch,
+# repo ledger). Each archive build-deps.sh fetches, with the SHA-256 on the line after its fetch,
 # read from it so a version change there cannot go stale here: "<sha256>  <archive>" lines.
 codec_pins() {
 	alac=$(sed -n 's/^ALAC_COMMIT=//p' "$ROOT/deps/build-deps.sh")
