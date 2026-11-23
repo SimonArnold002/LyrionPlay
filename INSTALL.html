@@ -128,7 +128,7 @@
   <h1>Installing LyrionPlay</h1>
   <p class="tagline">LyrionPlay plays music from your Lyrion Music Server (LMS) on your Mac. LMS sees it as an ordinary squeezelite player.</p>
   <div class="badges">
-    <span class="badge accent">v0.4.14</span>
+    <span class="badge accent">v0.4.15</span>
     <span class="badge">Apple Silicon</span>
     <span class="badge">macOS 14+</span>
     <span class="badge">Bit-perfect</span>
@@ -283,7 +283,7 @@
 <p>Two things it can't remove:</p>
 <ul>
 <li><strong>LMS keeps listing the player</strong> until it forgets it.</li>
-<li><strong>System Settings → Privacy &amp; Security → Local Network may still list</strong> <code>lyrionplay-agent</code> and <code>squeezelite</code>. The entries do nothing once the app is gone.</li>
+<li><strong>System Settings → Privacy &amp; Security → Local Network may still list</strong> <em>LyrionPlay</em> and <code>lyrionplay-agent</code>. The entries do nothing once the app is gone.</li>
 </ul>
 </section>
 <section id="installing-by-hand-without-the-script">
@@ -318,7 +318,7 @@ codesign --force --options runtime -s "LyrionPlay Signing" /Applications/LyrionP
 <ul>
 <li><p><strong>The player doesn't appear in LMS.</strong></p>
 <ul>
-<li>Check System Settings → Privacy &amp; Security → Local Network: <code>lyrionplay-agent</code> and <code>squeezelite</code> must both be switched on.</li>
+<li>Check System Settings → Privacy &amp; Security → Local Network: <em>LyrionPlay</em> and <code>lyrionplay-agent</code> must both be switched on.</li>
 <li>If your server is on a different network, enter its address in Settings → Server.</li>
 </ul></li>
 <li><strong>Nothing plays on a DAC another app is using</strong> (Audirvana, Roon or similar, in exclusive mode). The player's engine log says "device is held exclusively by another process". LyrionPlay keeps trying, and plays within about 5 seconds of the other app letting go.</li>

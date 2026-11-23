@@ -227,8 +227,8 @@ keeps your certificate, in case you reinstall. To delete the certificate too, ad
 
 Two things it can't remove:
 - **LMS keeps listing the player** until it forgets it.
-- **System Settings → Privacy & Security → Local Network may still list** `lyrionplay-agent` and
-  `squeezelite`. The entries do nothing once the app is gone.
+- **System Settings → Privacy & Security → Local Network may still list** *LyrionPlay* and
+  `lyrionplay-agent`. The entries do nothing once the app is gone.
 
 ## Installing by hand, without the script
 
@@ -268,8 +268,8 @@ Allow on the Local Network prompts again, after each update.
 ## If something goes wrong
 
 - **The player doesn't appear in LMS.**
-  - Check System Settings → Privacy & Security → Local Network: `lyrionplay-agent` and
-    `squeezelite` must both be switched on.
+  - Check System Settings → Privacy & Security → Local Network: *LyrionPlay* and
+    `lyrionplay-agent` must both be switched on.
   - If your server is on a different network, enter its address in Settings → Server.
 - **Nothing plays on a DAC another app is using** (Audirvana, Roon or similar, in exclusive mode).
   The player's engine log says "device is held exclusively by another process". LyrionPlay keeps trying, and

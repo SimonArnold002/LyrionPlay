@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.15 — 2026-11-22
+
+### New
+
+- **Now Playing.** The track of one LyrionPlay player shows in Control Center, on the media keys
+  and in other Now Playing apps, which can play, pause, skip, go back and seek on it in LMS. Choose
+  the player in Settings: the one that most recently started playing (the default), one player by
+  name, or Off. Contributed by themmm (#3).
+
+### Docs
+
+- INSTALL.md names the Local Network entries macOS lists: *LyrionPlay* and `lyrionplay-agent`.
+
 ## 0.4.14 — 2026-10-16
 
 The first release of LyrionPlay: a bit-perfect Lyrion Music Server player for Apple Silicon Macs,

@@ -128,7 +128,7 @@
   <h1>LyrionPlay</h1>
   <p class="tagline"><strong>A bit-perfect Lyrion Music Server player for Apple Silicon Macs, built on squeezelite.</strong></p>
   <div class="badges">
-    <span class="badge accent">v0.4.14</span>
+    <span class="badge accent">v0.4.15</span>
     <span class="badge">Apple Silicon</span>
     <span class="badge">macOS 14+</span>
     <span class="badge">Bit-perfect</span>
@@ -153,6 +153,7 @@
 <div class="card"><h4>LMS replay gain</h4><p>Applied by the player, exactly as LMS sends it.</p></div>
 <div class="card"><h4>Volume, your choice per player</h4><p><em>Device's own volume</em>: the LMS slider moves your Mac's volume or your DAC's hardware volume, and a change made on the Mac moves the LMS slider (the volume keys when the output is the Mac's built-in speakers or Follow the macOS output, with Exclusive mode off). <em>Software</em>, where the Mac can't set the device's volume: the player scales the samples. <em>Fixed</em>, on a DAC: LyrionPlay sets LMS's fixed output level for you; a DAC whose volume the Mac sets holds the level LMS had, and on any other you use the DAC's or amplifier's own volume.</p></div>
 <div class="card"><h4>One player, or one per device</h4><p>Use <em>Follow the macOS output</em> as a single player that plays wherever your Mac's sound goes, or switch a DAC or other output on as a player of its own, or both. Each is its own player in LMS, with its own name, volume and settings.</p></div>
+<div class="card"><h4>Now Playing</h4><p>The track of the player you choose (by default the one that last started playing) shows in Control Center and on the media keys, which play, pause, skip and seek on it in LMS.</p></div>
 <div class="card"><h4>Menu bar app</h4><p>Switch LyrionPlay on and off, see what each player is doing (the server, the device and the rate it plays at, the DSD rate for DoP), and set each player's options.</p></div>
 <div class="card"><h4>Signed by you</h4><p>Every user signs their own copy with a certificate made on their own Mac, so no Apple developer account is involved.</p></div>
 </div>
@@ -165,6 +166,7 @@
 <li><strong>A player for each device.</strong> Switch a DAC, or any other output, on in Settings and it becomes a player of its own in LMS. It always plays to that device, with its own name, volume and options. Play different music on two outputs at once, or sync them in LMS.</li>
 <li><strong>Both.</strong> <em>Follow the macOS output</em> carries on beside the device players. When the Mac's output is a device that has its own player on, <em>Follow the macOS output</em> plays to the Mac's built-in output instead, so two players never share one device.</li>
 </ul>
+<p>LyrionPlay has one player for the Mac's own output, <em>Follow the macOS output</em>. Every other player is an attached device, each with a name of its own. Giving two players the same name in LMS is not supported.</p>
 </section>
 <section id="what-it-looks-like">
 <h2>What it looks like</h2>
@@ -196,7 +198,7 @@
 <tbody>
 <tr><td><code>engine/</code></td><td>squeezelite with a native CoreAudio output added (<code>output_coreaudio.c</code>): exclusive mode, per-track rate and format switching, DoP, the device's volume in both directions, and a report of what it plays for the menu.</td></tr>
 <tr><td><code>app/Sources/Agent</code></td><td>A background launch agent. It reads the devices' abilities from the engine, runs one engine for each player that is on and keeps it running, passes volume changes made on the Mac to LMS, and keeps LMS's fixed-volume setting in step with each device's choice.</td></tr>
-<tr><td><code>app/Sources/App</code></td><td>The menu bar app: On/Off, status, settings.</td></tr>
+<tr><td><code>app/Sources/App</code></td><td>The menu bar app: On/Off, status, settings, and macOS Now Playing.</td></tr>
 <tr><td><code>scripts/</code></td><td><code>build.sh</code> builds the app and the release. <code>test.sh</code> is the regression suite. <code>install.sh</code> and <code>uninstall.sh</code> are what users run.</td></tr>
 </tbody></table>
 </section>
