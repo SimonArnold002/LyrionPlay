@@ -182,8 +182,9 @@ final class PlayerModel {
 		status = AgentStatus.load()
 		if agentReportsDevices, let status, !status.devices.isEmpty { devices = status.devices }
 		// the saved settings, at the server the agent last used, only while the player is on: off, no
-		// engine runs, so nothing can show, and no server stops the subscription and frees the slot
-		nowPlaying.update(server: isOn ? lastServer : nil, settings: settings)
+		// engine runs, so nothing can show, and the subscription stops and frees the slot. While on, a
+		// moment with no server in status.json (a failed check, an agent start) keeps the subscription
+		nowPlaying.update(on: isOn, server: lastServer, settings: settings)
 		guard settingsOpen else { return }
 		let keys = Set(draft.players.keys).union(devices.map(\.uid)).union([PlayerKey.follow])
 		var names: [String: String] = [:]

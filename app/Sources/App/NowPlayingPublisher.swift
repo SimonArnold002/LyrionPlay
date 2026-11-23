@@ -30,12 +30,14 @@ final class NowPlayingPublisher {
 		}
 	}
 
-	/// At each PlayerModel refresh: the server the agent last used (status.json) and the saved
-	/// settings. A new server starts a new subscription; Off runs none.
-	func update(server: LMSServer?, settings: PlayerCore.Settings) {
+	/// At each PlayerModel refresh: whether LyrionPlay is on, the server the agent last used
+	/// (status.json, nil while it has none) and the saved settings. A new server starts a new
+	/// subscription; none runs while there is nothing it could show (`NowPlaying.feedServer`), and a
+	/// moment with no server reported keeps the one running.
+	func update(on: Bool, server: LMSServer?, settings: PlayerCore.Settings) {
 		let players = NowPlaying.players(in: settings) { PlayerIdentity.mac(at: Paths.mac($0)) }
 		let choice = settings.nowPlaying
-		let wanted = choice == .off ? nil : server
+		let wanted = NowPlaying.feedServer(on: on, choice: choice, players: players, reported: server, running: state?.server)
 		if wanted.map(Self.address) != state.map({ Self.address($0.server) }) {
 			stopFeed()
 			if let wanted {
@@ -60,20 +62,24 @@ final class NowPlayingPublisher {
 		self.feed = feed
 		feedTask = Task {
 			await feed.run { [weak self] events in
-				await self?.apply(events)
+				await self?.apply(events, from: feed)
 			}
 		}
 	}
 
+	/// the subscription ends, and LMS is told so, not left to drop the client after 3 minutes
 	private func stopFeed() {
 		feedTask?.cancel()
+		if let feed { Task { await feed.disconnect() } }
 		feedTask = nil
 		feed = nil
 		state = nil
 	}
 
-	private func apply(_ events: [LMSFeed.Event]) {
-		guard var current = state else { return }
+	/// only the running feed's events: one stopped may still answer (its last poll, a loss at the
+	/// cancel), and its state is gone
+	private func apply(_ events: [LMSFeed.Event], from sender: LMSFeed) {
+		guard sender === feed, var current = state else { return }
 		let now = Date()
 		for event in events {
 			switch event {
@@ -129,7 +135,8 @@ final class NowPlayingPublisher {
 		MPRemoteCommandCenter.shared().changePlaybackPositionCommand.isEnabled = info.canSeek
 	}
 
-	/// the image LMS serves for the track; shown once it is here, if the track is still the same
+	/// the image LMS serves for the track; kept and shown once it is here, only if the track is still
+	/// the one shown: a slower download for an earlier track would take the shown track's image's place
 	private func loadArtwork(_ url: URL) {
 		guard artworkLoading != url else { return }
 		artworkLoading = url
@@ -137,9 +144,9 @@ final class NowPlayingPublisher {
 			let data = try? await URLSession.shared.data(from: url).0
 			guard let self else { return }
 			if self.artworkLoading == url { self.artworkLoading = nil }
-			guard let data, let image = NSImage(data: data) else { return }
+			guard let data, let image = NSImage(data: data), self.published?.artwork == url else { return }
 			self.artwork = (url, MPMediaItemArtwork(boundsSize: image.size) { _ in image })
-			if self.published?.artwork == url { self.publish(force: true) }
+			self.publish(force: true)
 		}
 	}
 

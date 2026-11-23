@@ -261,6 +261,19 @@ func listing(_ macs: String..., connected: Int = 1) -> LMSServerStatus {
 		#expect(np.shown(at: t0)?.album == nil)
 	}
 
+	/// as LMS sends a station with no song (Queries.pm _songData, LMS 9.1): the track's title is the
+	/// station's own name, no `remote_title` (tag N comes only with a song), `current_title` the same
+	/// name. Shown once, as the title, as LMS's own display does (`remote_title ne $title`)
+	@Test func aStationSentAsItsTitleIsNotAlsoTheAlbum() {
+		var np = NowPlaying(server: nowPlayingServer, players: follow, choice: .mostRecent)
+		np.status(lmsStatus("""
+			{"player_connected":1,"mode":"play","time":3,"remote":1,"current_title":"BBC Radio 3",
+			 "playlist_loop":[{"title":"BBC Radio 3","remote":1}]}
+			"""), of: followMAC, at: t0)
+		#expect(np.shown(at: t0)?.title == "BBC Radio 3")
+		#expect(np.shown(at: t0)?.album == nil)
+	}
+
 	@Test func aRemoteTrackWithALengthIsATrack() {
 		var np = NowPlaying(server: nowPlayingServer, players: follow, choice: .mostRecent)
 		np.status(lmsStatus("""
@@ -467,6 +480,44 @@ actor ScriptedCometd: CometdTransport {
 		}
 	}
 	func last() -> (messages: [[String: Any]], timeout: TimeInterval)? { requests.last }
+	func postCount() -> Int { requests.count }
+}
+
+/// a transport that answers through `inner` until its `holdAt`-th post, which then waits, whatever
+/// cancellation says, until `release`: the answer of a poll read as it was cancelled (or, failing, the
+/// error the cancel gave it)
+actor HeldCometd: CometdTransport {
+	let inner: ScriptedCometd
+	let holdAt: Int
+	var posts = 0
+	var waiting: CheckedContinuation<Void, Never>?
+	var failWith: Error?
+
+	init(inner: ScriptedCometd, holdAt: Int) {
+		self.inner = inner
+		self.holdAt = holdAt
+	}
+
+	func post(_ body: Data, timeout: TimeInterval) async throws -> Data {
+		posts += 1
+		if posts == holdAt {
+			await withCheckedContinuation { waiting = $0 }
+			if let failWith { throw failWith }
+		}
+		return try await inner.post(body, timeout: timeout)
+	}
+
+	func isHolding() -> Bool { waiting != nil }
+	func release(failing error: Error?) {
+		failWith = error
+		waiting?.resume()
+		waiting = nil
+	}
+}
+
+actor Received {
+	var events: [LMSFeed.Event] = []
+	func add(_ more: [LMSFeed.Event]) { events += more }
 }
 
 func serverListing(_ macs: String...) -> String {
@@ -576,6 +627,95 @@ let statusRequest = "status - 1 tags:acdKlNx subscribe:30"
 		await feed.setPlayers([followMAC, dacMAC])
 		_ = await feed.poll()
 		#expect(await lms.lastSubscribes() == ["\(dacMAC) \(statusRequest)"])
+	}
+
+	/// a feed that was stopped while a poll was out hands on nothing more: neither the answer read as
+	/// it was cancelled nor the loss the cancel made. Its owner has a new feed by then, whose state
+	/// those would land on (/code-review 2026-11-22 (4), finding 3)
+	@Test(arguments: [false, true]) func aCancelledFeedHandsNothingMoreOn(cancelFails: Bool) async throws {
+		let lms = ScriptedCometd()
+		await lms.setServerStatus(serverListing(followMAC))
+		await lms.setStatus(#"{"player_connected":1,"mode":"play","time":5,"playlist_loop":[{"title":"Hold On"}]}"#, of: followMAC)
+		// posts 1-2: handshake and the first poll; 3: the poll that subscribes Follow; 4: held
+		let held = HeldCometd(inner: lms, holdAt: 4)
+		let feed = LMSFeed(transport: held, players: [followMAC])
+		let received = Received()
+		let task = Task { await feed.run { events in await received.add(events) } }
+		var tries = 0
+		while !(await held.isHolding()), tries < 400 {
+			tries += 1
+			try await Task.sleep(for: .milliseconds(5))
+		}
+		#expect(await held.isHolding())
+		let before = await received.events
+		#expect(before.first == .restored)
+		#expect(before.contains { if case .status(followMAC, _) = $0 { true } else { false } })
+
+		await lms.queue("playerstatus/\(followMAC)", #"{"player_connected":1,"mode":"pause","time":9}"#)
+		task.cancel()
+		await held.release(failing: cancelFails ? URLError(.cancelled) : nil)
+		await task.value
+		#expect(await received.events == before)
+	}
+
+	/// stopping a feed ends its client at LMS at once (Cometd.pm /meta/disconnect -> disconnectClient),
+	/// not 3 minutes later (LONG_POLLING_AUTOKILL); once, and only for a client LMS gave an ID
+	/// (/code-review 2026-11-22 (4), finding 4)
+	@Test func aDisconnectEndsTheClientAtLMS() async throws {
+		let lms = ScriptedCometd()
+		let never = LMSFeed(transport: lms, players: [followMAC])
+		await never.disconnect()
+		#expect(await lms.postCount() == 0)
+
+		let feed = LMSFeed(transport: lms, players: [followMAC])
+		_ = await feed.poll()
+		let sent = await lms.postCount()
+		await feed.disconnect()
+		let last = try #require(await lms.last())
+		#expect(last.messages.count == 1)
+		#expect(last.messages.first?["channel"] as? String == "/meta/disconnect")
+		#expect(last.messages.first?["clientId"] as? String == "1a2b3c4d")
+		#expect(last.timeout == LMSFeed.disconnectWait)
+		#expect(await lms.postCount() == sent + 1)
+		await feed.disconnect()
+		#expect(await lms.postCount() == sent + 1)
+	}
+}
+
+/// whether the menu app's subscription runs, and on which server (NowPlaying.feedServer)
+@Suite struct NowPlayingFeedServer {
+	let other = LMSServer(host: "192.168.1.119", webPort: 9000, name: nil)
+	let both = players((PlayerKey.follow, followMAC, true), ("dac", dacMAC, true))
+
+	@Test func noneWhileOffOrNowPlayingOff() {
+		#expect(NowPlaying.feedServer(on: false, choice: .mostRecent, players: both, reported: nowPlayingServer, running: nil) == nil)
+		#expect(NowPlaying.feedServer(on: false, choice: .mostRecent, players: both, reported: nil, running: nowPlayingServer) == nil)
+		#expect(NowPlaying.feedServer(on: true, choice: .off, players: both, reported: nowPlayingServer, running: nowPlayingServer) == nil)
+	}
+
+	/// status.json has no server for a while after a failed agent check or an agent start: the
+	/// subscription runs on, its own 5 s grace covering an outage; a different server replaces it
+	/// (/code-review 2026-11-22 (4), finding 1)
+	@Test func aMomentWithNoServerReportedKeepsTheRunningOne() {
+		#expect(NowPlaying.feedServer(on: true, choice: .mostRecent, players: both, reported: nil, running: nowPlayingServer) == nowPlayingServer)
+		#expect(NowPlaying.feedServer(on: true, choice: .mostRecent, players: both, reported: nowPlayingServer, running: nil) == nowPlayingServer)
+		#expect(NowPlaying.feedServer(on: true, choice: .mostRecent, players: both, reported: other, running: nowPlayingServer) == other)
+		#expect(NowPlaying.feedServer(on: true, choice: .mostRecent, players: both, reported: nil, running: nil) == nil)
+	}
+
+	/// none while no Player that could fill the slot is on with an identity: every one switched off or
+	/// never run, or the chosen one off; a removed choice is the default
+	/// (/code-review 2026-11-22 (4), finding 7)
+	@Test func noneWhileNoPlayerCouldFillTheSlot() {
+		let off = players((PlayerKey.follow, followMAC, false), ("dac", dacMAC, false))
+		#expect(NowPlaying.feedServer(on: true, choice: .mostRecent, players: off, reported: nowPlayingServer, running: nil) == nil)
+		let neverRan = [NowPlayingPlayer(key: PlayerKey.follow, mac: nil, on: true)]
+		#expect(NowPlaying.feedServer(on: true, choice: .mostRecent, players: neverRan, reported: nowPlayingServer, running: nil) == nil)
+		let dacOff = players((PlayerKey.follow, followMAC, true), ("dac", dacMAC, false))
+		#expect(NowPlaying.feedServer(on: true, choice: .player("dac"), players: dacOff, reported: nowPlayingServer, running: nil) == nil)
+		#expect(NowPlaying.feedServer(on: true, choice: .player(PlayerKey.follow), players: dacOff, reported: nowPlayingServer, running: nil) == nowPlayingServer)
+		#expect(NowPlaying.feedServer(on: true, choice: .player("removed"), players: dacOff, reported: nowPlayingServer, running: nil) == nowPlayingServer)
+		#expect(NowPlaying.feedServer(on: true, choice: .mostRecent, players: dacOff, reported: nowPlayingServer, running: nil) == nowPlayingServer)
 	}
 }
 

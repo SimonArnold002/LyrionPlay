@@ -154,7 +154,10 @@ public struct NowPlayingInfo: Equatable, Sendable {
 	public var elapsedAt: Date
 
 	/// a Player's status as Now Playing shows it. A radio stream: the song as title and artist, the
-	/// station as album (as the title when no song is sent), no duration, time or seek
+	/// station as album (as the title when no song is sent), no duration, time or seek. With no song,
+	/// LMS sends the station's own name as the title (Queries.pm _songData: `title` is the remote
+	/// title, else the track's), so the station is the album only when it differs, as LMS's own
+	/// display does (`remote_title ne $title`, _addJiveSong)
 	init(player: String, mac: String, status: LMSPlayerStatus, at time: Date, server: LMSServer) {
 		self.player = player
 		artwork = status.artwork(on: server)
@@ -165,7 +168,7 @@ public struct NowPlayingInfo: Equatable, Sendable {
 		isLiveStream = status.isLiveStream
 		if isLiveStream {
 			title = status.title ?? status.station ?? ""
-			album = status.album ?? (status.title == nil ? nil : status.station)
+			album = status.album ?? (status.title == nil || status.title == status.station ? nil : status.station)
 			duration = nil
 			elapsed = nil
 			canSeek = false
@@ -222,6 +225,22 @@ public struct NowPlaying: Sendable {
 	/// choice of it frees the slot; only a removed one falls back to the default.
 	public static func players(in settings: Settings, mac: (String) -> String?) -> [NowPlayingPlayer] {
 		playerKeys(in: settings).map { NowPlayingPlayer(key: $0, mac: mac($0), on: settings.isOn($0)) }
+	}
+
+	/// The server the subscription should run on, nil for none: none while LyrionPlay is off, Now
+	/// Playing is Off, or no Player that can fill the slot is on with an identity (the chosen one, or
+	/// any for the default; a removed choice is the default). The server the agent reports, else the
+	/// one `running`: status.json has no server for a while after a check that failed or an agent
+	/// start, and the subscription's own grace covers an outage, so that is never a reason to stop it.
+	public static func feedServer(on: Bool, choice: NowPlayingChoice, players: [NowPlayingPlayer],
+								  reported: LMSServer?, running: LMSServer?) -> LMSServer? {
+		guard on, choice != .off else { return nil }
+		var candidates = players.filter { $0.on && $0.mac != nil }
+		if case .player(let key) = choice, players.contains(where: { $0.key == key }) {
+			candidates = candidates.filter { $0.key == key }
+		}
+		guard !candidates.isEmpty else { return nil }
+		return reported ?? running
 	}
 
 	/// the Players (from settings.json and their identities) or the shared setting changed

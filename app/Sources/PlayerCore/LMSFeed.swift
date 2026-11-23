@@ -93,11 +93,13 @@ public actor LMSFeed {
 	}
 
 	/// polls until cancelled, handing each poll's events on; after a failure it waits 1, 2, 4, then 5 s
-	/// between tries, so it tries twice within the 5 s grace
+	/// between tries, so it tries twice within the 5 s grace. A poll the cancel ended (a loss) or one
+	/// whose answer came as it was cancelled is not handed on: the feed's owner has moved on
 	public func run(deliver: @Sendable ([Event]) async -> Void) async {
 		var failures = 0
 		while !Task.isCancelled {
 			let events = await poll()
+			guard !Task.isCancelled else { return }
 			await deliver(events)
 			if healthy {
 				failures = 0
@@ -106,6 +108,19 @@ public actor LMSFeed {
 				try? await Task.sleep(for: .seconds(min(5, 1 << min(failures - 1, 3))))
 			}
 		}
+	}
+
+	/// how long a disconnect may take: it is sent once and not waited for
+	public static let disconnectWait: TimeInterval = 2
+
+	/// Ends this client at LMS (`/meta/disconnect`, Cometd.pm disconnectClient: its subscriptions and
+	/// the client go at once). Without it LMS keeps a client that stopped polling, and runs its
+	/// subscriptions, for 3 minutes (LONG_POLLING_AUTOKILL). Once, failures ignored; a client never
+	/// handshaken sends nothing.
+	public func disconnect() async {
+		guard let clientID else { return }
+		self.clientID = nil
+		_ = try? await send([["channel": "/meta/disconnect", "clientId": clientID]], timeout: Self.disconnectWait)
 	}
 
 	private struct Failure: Error {}
