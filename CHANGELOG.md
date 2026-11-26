@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.4 — 2026-11-26
+
+LyrionPlay tells you when a new version is out.
+
+### New
+
+- **Update notice.** The menu shows when a newer LyrionPlay is out, beside its own version, as a
+  link to the download page. It asks GitHub once a day; nothing is downloaded or installed for you.
+
 ## 0.5.3 — 2026-11-23
 
 WAV and AIFF with their headers, so SqueezeDSP's PCM output plays on LyrionPlay, and player names
