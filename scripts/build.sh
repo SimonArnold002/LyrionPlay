@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds build/LyrionPlay.app: codec libraries (skipped when built) -> engine -> Swift agent and
-# menu bar app -> icon -> bundle -> ad-hoc signature, then checks the result.
+# Builds LyrionPlay.app in the build folder (below): codec libraries (skipped when built) -> engine ->
+# Swift agent and menu bar app -> icon -> bundle -> ad-hoc signature, then checks the result.
 #   scripts/build.sh            build and check
 #   scripts/build.sh --install  then install it with scripts/install.sh, signed with your own
 #                               certificate, exactly as a user installs a release
@@ -16,7 +16,15 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 NAME=LyrionPlay
 VERSION=$(cat "$ROOT/VERSION") # the one place the version is set; the docs pages read it too
 BUILD=$(date +%Y%m%d%H%M) # bumped every build
-APP="$ROOT/build/$NAME.app"
+# What the build makes goes OUTSIDE the repo. In a repo inside iCloud Drive (Desktop & Documents), the
+# File Provider stamps com.apple.FinderInfo on every new folder within seconds, and codesign refuses a
+# bundle that carries it ("resource fork, Finder information, or similar detritus not allowed": the app
+# bundle and the Swift test bundle, measured 2026-11-26). LYRIONPLAY_BUILD_DIR picks another folder;
+# scripts/test.sh builds the Swift tests in the same one.
+OUT="${LYRIONPLAY_BUILD_DIR:-$HOME/Library/Caches/LyrionPlay-build}"
+export LYRIONPLAY_BUILD_DIR="$OUT"
+SWIFT_BUILD="$OUT/swift"
+APP="$OUT/$NAME.app"
 BUNDLE_ID=com.crystalgipsy.lyrionplay
 JOBS=$(sysctl -n hw.ncpu)
 DEPS="$ROOT/deps/src"
@@ -29,8 +37,8 @@ echo "== codec libraries"
 # archive changed, a download or a compile failed) carried on and linked what an earlier build left
 # in deps/out (/code-review 2026-10-12 (5), finding 1). Not `pipefail`: dash, which /bin/sh can be,
 # lacks it.
-mkdir -p "$ROOT/build"
-DEPS_LOG="$ROOT/build/build-deps.log"
+mkdir -p "$OUT"
+DEPS_LOG="$OUT/build-deps.log"
 "$ROOT/deps/build-deps.sh" > "$DEPS_LOG" || {
 	tail -15 "$DEPS_LOG"
 	echo "FAIL: deps/build-deps.sh stopped (its output: $DEPS_LOG)" >&2
@@ -76,8 +84,8 @@ echo "== engine"
 make -C "$ROOT/engine" -f Makefile.coreaudio -j"$JOBS" >/dev/null
 
 echo "== agent and app"
-swift build --package-path "$ROOT/app" -c release --arch arm64
-BIN=$(swift build --package-path "$ROOT/app" -c release --arch arm64 --show-bin-path)
+swift build --package-path "$ROOT/app" --scratch-path "$SWIFT_BUILD" -c release --arch arm64
+BIN=$(swift build --package-path "$ROOT/app" --scratch-path "$SWIFT_BUILD" -c release --arch arm64 --show-bin-path)
 
 echo "== regression suite"
 # stops the build on any failure (it used to print swift test's result and carry on)
@@ -85,8 +93,8 @@ sh "$ROOT/scripts/test.sh"
 
 echo "== icon"
 # one source, app/Resources/LyrionPlay.svg: the menu bar draws it, and the app icon is rendered from it
-mkdir -p "$ROOT/build/tools"
-MAKE_ICON="$ROOT/build/tools/make-icon"
+mkdir -p "$OUT/tools"
+MAKE_ICON="$OUT/tools/make-icon"
 if [ ! -x "$MAKE_ICON" ] || [ "$ROOT/tools/icon/make-icon.swift" -nt "$MAKE_ICON" ]; then
 	# swiftc's own status: through `| grep … || true`, a failed compile went on with an older make-icon
 	swiftc -O "$ROOT/tools/icon/make-icon.swift" -o "$MAKE_ICON" > "$MAKE_ICON.log" 2>&1 || {
@@ -97,7 +105,7 @@ if [ ! -x "$MAKE_ICON" ] || [ "$ROOT/tools/icon/make-icon.swift" -nt "$MAKE_ICON
 	}
 	grep -v 'search path' "$MAKE_ICON.log" || true
 fi
-"$MAKE_ICON" "$ROOT/app/Resources/$NAME.svg" "$ROOT/build/AppIcon.iconset"
+"$MAKE_ICON" "$ROOT/app/Resources/$NAME.svg" "$OUT/AppIcon.iconset"
 
 echo "== bundle $VERSION ($BUILD)"
 rm -rf "$APP"
@@ -106,7 +114,7 @@ sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" "$ROOT/app/Resources/I
 cp "$BIN/App" "$APP/Contents/MacOS/$NAME"
 cp "$BIN/Agent" "$APP/Contents/MacOS/lyrionplay-agent"
 cp "$ROOT/engine/squeezelite" "$APP/Contents/MacOS/squeezelite"
-iconutil -c icns "$ROOT/build/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
+iconutil -c icns "$OUT/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/app/Resources/$NAME.svg" "$APP/Contents/Resources/"
 # NOTICES.txt names this version's source tag and codec-sources zip
 sed "s/<version>/$VERSION/g" "$ROOT/app/Resources/NOTICES.txt" > "$APP/Contents/Resources/NOTICES.txt"

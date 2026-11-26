@@ -14,7 +14,8 @@
 #                       pushes, following the macOS output, App Transport Security, the server
 #                       choice, agent.log's LMS lines, Now Playing (the setting, which player holds
 #                       the slot, streams, artwork, commands, the cometd feed) and the update notice
-#                       (versions, when a check is due, what a check shows)
+#                       (versions, when a check is due, what a check shows); built outside the repo,
+#                       in the folder scripts/build.sh uses
 #   install.sh          the installer in a sandbox with shimmed system tools
 #   scratch guard       the planted-bug runners' scratch dir guard (scripts/tests/scratch_guard.sh)
 #                       on hostile paths in a fake repo: never the repo, never a folder it did not make
@@ -61,7 +62,11 @@ suite "engine pcm header" '^result: PASS$' "$ROOT/engine/tests/test_pcm_header"
 TESTING_MACROS=/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib
 set --
 [ -f "$TESTING_MACROS" ] && set -- -Xswiftc -load-plugin-library -Xswiftc "$TESTING_MACROS"
-suite "swift" 'Test run with [0-9]+ tests? in [0-9]+ suites? passed' swift test --package-path "$ROOT/app" "$@"
+# Outside the repo, in scripts/build.sh's folder (it sets LYRIONPLAY_BUILD_DIR; the same default here): in
+# an iCloud Drive folder the File Provider stamps com.apple.FinderInfo on the new test bundle, and codesign
+# refuses it ("detritus not allowed", measured 2026-11-26)
+SWIFT_BUILD="${LYRIONPLAY_BUILD_DIR:-$HOME/Library/Caches/LyrionPlay-build}/swift"
+suite "swift" 'Test run with [0-9]+ tests? in [0-9]+ suites? passed' swift test --package-path "$ROOT/app" --scratch-path "$SWIFT_BUILD" "$@"
 suite "install.sh" '^result: PASS$' sh "$ROOT/scripts/tests/test_install.sh"
 suite "scratch guard" '^result: PASS$' sh "$ROOT/scripts/tests/test_scratch_guard.sh"
 
