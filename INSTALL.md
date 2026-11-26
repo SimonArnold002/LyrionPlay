@@ -208,6 +208,9 @@ track gets clipped, add a little silence here.
 
 ## Updating
 
+When a new version is out, LyrionPlay's menu shows it beside its own version, as a link to the
+download page.
+
 Download the new zip and run its `install.sh` the same way. It:
 - finds your existing certificate;
 - signs the new version with it;

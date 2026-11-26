@@ -17,7 +17,7 @@ ordinary squeezelite player. It lives in your menu bar, and its player runs in t
 | **Volume, your choice per player** | *Device's own volume*: the LMS slider moves your Mac's volume or your DAC's hardware volume, and a change made on the Mac moves the LMS slider (the volume keys when the output is the Mac's built-in speakers or Follow the macOS output, with Exclusive mode off). *Software*, where the Mac can't set the device's volume: the player scales the samples. *Fixed*, on a DAC: LyrionPlay sets LMS's fixed output level for you; a DAC whose volume the Mac sets holds the level LMS had, and on any other you use the DAC's or amplifier's own volume. |
 | **One player, or one per device** | Use *Follow the macOS output* as a single player that plays wherever your Mac's sound goes, or switch a DAC or other output on as a player of its own, or both. Each is its own player in LMS, with its own name, volume and settings. |
 | **Now Playing** | The track of the player you choose (by default the one that last started playing) shows in Control Center and on the media keys, which play, pause, skip and seek on it in LMS. |
-| **Menu bar app** | Switch LyrionPlay on and off, see what each player is doing (the server, the device and the rate it plays at, the DSD rate for DoP), and set each player's options. |
+| **Menu bar app** | Switch LyrionPlay on and off, see what each player is doing (the server, the device and the rate it plays at, the DSD rate for DoP), and set each player's options. It shows when a new version is out, with a link to it. |
 | **Signed by you** | Every user signs their own copy with a certificate made on their own Mac, so no Apple developer account is involved. |
 
 ## One player, or one per device

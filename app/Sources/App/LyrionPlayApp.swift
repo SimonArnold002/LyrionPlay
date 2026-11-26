@@ -62,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		} catch {
 			menuLog("could not start the player: \(error.localizedDescription)")
 		}
+		UpdateNotice.shared.start()
 	}
 
 	func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -484,10 +485,17 @@ struct MenuView: View {
 			Text("Quit stops the player too. Both start again at login, or when you open LyrionPlay.")
 				.font(.caption2)
 				.foregroundStyle(.secondary)
-			Text("Version \(AppVersion.version)")
-				.help("Build \(AppVersion.build)")
-				.font(.caption2)
-				.foregroundStyle(.secondary)
+			HStack(spacing: 4) {
+				Text("Version \(AppVersion.version)")
+					.help("Build \(AppVersion.build)")
+					.foregroundStyle(.secondary)
+				// a newer release on GitHub (UPDATE NOTICE): a link to its page, nothing installed
+				if let newer = UpdateNotice.shared.available {
+					Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+					Link("\(newer) available", destination: UpdateCheck.releasePage)
+				}
+			}
+			.font(.caption2)
 		}
 		.padding(14)
 		.frame(width: 330)

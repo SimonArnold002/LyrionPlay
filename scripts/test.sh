@@ -12,7 +12,9 @@
 #                       over LMS's announce, from what SqueezeDSP, FFmpeg and macOS write
 #   swift               PlayerCore: probe parsing, arguments, settings, menu lock, volume curve and
 #                       pushes, following the macOS output, App Transport Security, the server
-#                       choice and agent.log's LMS lines
+#                       choice, agent.log's LMS lines, Now Playing (the setting, which player holds
+#                       the slot, streams, artwork, commands, the cometd feed) and the update notice
+#                       (versions, when a check is due, what a check shows)
 #   install.sh          the installer in a sandbox with shimmed system tools
 #   scratch guard       the planted-bug runners' scratch dir guard (scripts/tests/scratch_guard.sh)
 #                       on hostile paths in a fake repo: never the repo, never a folder it did not make
